@@ -1,0 +1,7 @@
+# Redot 4+ specific ignores
+.godot/
+/android/
+
+# Editor/agent runtime data
+.redot/
+.opencode/package-lock.json

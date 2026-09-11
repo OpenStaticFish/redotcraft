@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "redot": {
+      "type": "local",
+      "command": [
+        "/home/micqdf/Code/redot-engine/redot-mcp.sh",
+        "/home/micqdf/game-dev/redot-minecraft/redot-minecraft"
+      ],
+      "enabled": true
+    }
+  }
+}
