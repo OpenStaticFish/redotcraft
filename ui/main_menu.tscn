@@ -1,0 +1,152 @@
+[gd_scene load_steps=6 format=3 uid="uid://b1mkq3v7wm2xa"]
+
+[ext_resource type="Script" path="res://ui/main_menu.gd" id="1_menu"]
+[ext_resource type="PackedScene" path="res://ui/settings_panel.tscn" id="2_settings"]
+[ext_resource type="PackedScene" path="res://ui/world_gen_panel.tscn" id="3_worldgen"]
+
+[sub_resource type="Gradient" id="Gradient_bg"]
+offsets = PackedFloat32Array(0, 0.35, 0.58, 0.74, 1)
+colors = PackedColorArray(0.08, 0.2, 0.55, 1, 0.29, 0.53, 1, 1, 0.6, 0.78, 1, 1, 0.83, 0.87, 0.8, 1, 0.36, 0.52, 0.3, 1)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_bg"]
+gradient = SubResource("Gradient_bg")
+fill_from = Vector2(0, 0)
+fill_to = Vector2(0, 1)
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_menu")
+
+[node name="Background" type="TextureRect" parent="."]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = SubResource("GradientTexture2D_bg")
+expand_mode = 1
+
+[node name="Cloud1" type="ColorRect" parent="."]
+layout_mode = 1
+offset_left = 60.0
+offset_top = 70.0
+offset_right = 180.0
+offset_bottom = 96.0
+mouse_filter = 2
+color = Color(1, 1, 1, 0.85)
+
+[node name="Cloud2" type="ColorRect" parent="."]
+layout_mode = 1
+offset_left = 250.0
+offset_top = 128.0
+offset_right = 416.0
+offset_bottom = 154.0
+mouse_filter = 2
+color = Color(1, 1, 1, 0.85)
+
+[node name="Cloud3" type="ColorRect" parent="."]
+layout_mode = 1
+offset_left = 440.0
+offset_top = 186.0
+offset_right = 652.0
+offset_bottom = 212.0
+mouse_filter = 2
+color = Color(1, 1, 1, 0.85)
+
+[node name="Cloud4" type="ColorRect" parent="."]
+layout_mode = 1
+offset_left = 630.0
+offset_top = 70.0
+offset_right = 888.0
+offset_bottom = 96.0
+mouse_filter = 2
+color = Color(1, 1, 1, 0.85)
+
+[node name="Cloud5" type="ColorRect" parent="."]
+layout_mode = 1
+offset_left = 820.0
+offset_top = 128.0
+offset_right = 1124.0
+offset_bottom = 154.0
+mouse_filter = 2
+color = Color(1, 1, 1, 0.85)
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Column" type="VBoxContainer" parent="Center"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 0)
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="Title" type="Label" parent="Center/Column"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_shadow_color = Color(0.02, 0.06, 0.12, 0.75)
+theme_override_constants/shadow_offset_x = 3
+theme_override_constants/shadow_offset_y = 4
+theme_override_font_sizes/font_size = 64
+text = "REDOTCRAFT"
+horizontal_alignment = 1
+
+[node name="Subtitle" type="Label" parent="Center/Column"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.96, 1, 0.92)
+theme_override_font_sizes/font_size = 15
+text = "A VOXEL SANDBOX FOR REDOT"
+horizontal_alignment = 1
+
+[node name="Spacer" type="Control" parent="Center/Column"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 30)
+
+[node name="PlayButton" type="Button" parent="Center/Column"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 48)
+text = "Play"
+
+[node name="WorldGenButton" type="Button" parent="Center/Column"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 48)
+text = "World Gen"
+
+[node name="SettingsButton" type="Button" parent="Center/Column"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 48)
+text = "Settings"
+
+[node name="QuitButton" type="Button" parent="Center/Column"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 48)
+text = "Quit"
+
+[node name="Footer" type="Label" parent="."]
+layout_mode = 1
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 0
+offset_top = -44.0
+offset_bottom = -18.0
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.722, 0.78, 0.757, 1)
+theme_override_font_sizes/font_size = 14
+text = "Double-tap SPACE to fly in game  ·  ESC pauses"
+horizontal_alignment = 1
+
+[node name="SettingsPanel" parent="." instance=ExtResource("2_settings")]
+visible = false
+
+[node name="WorldGenPanel" parent="." instance=ExtResource("3_worldgen")]
+visible = false

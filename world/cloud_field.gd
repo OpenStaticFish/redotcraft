@@ -1,3 +1,4 @@
+class_name CloudField
 extends Node3D
 
 const CELL_SIZE := 12.0
@@ -10,19 +11,6 @@ const DRIFT_SPEED := 1.4
 const WIND_DIR := Vector2(1.0, 0.35)
 const BUILD_BUDGET := 2
 
-const FACE_NORMALS := [
-	Vector3(0.0, 1.0, 0.0), Vector3(0.0, -1.0, 0.0),
-	Vector3(0.0, 0.0, 1.0), Vector3(0.0, 0.0, -1.0),
-	Vector3(1.0, 0.0, 0.0), Vector3(-1.0, 0.0, 0.0),
-]
-const FACE_VERTS := [
-	[Vector3i(0, 1, 1), Vector3i(1, 1, 1), Vector3i(1, 1, 0), Vector3i(0, 1, 0)],
-	[Vector3i(0, 0, 0), Vector3i(1, 0, 0), Vector3i(1, 0, 1), Vector3i(0, 0, 1)],
-	[Vector3i(0, 0, 1), Vector3i(1, 0, 1), Vector3i(1, 1, 1), Vector3i(0, 1, 1)],
-	[Vector3i(1, 0, 0), Vector3i(0, 0, 0), Vector3i(0, 1, 0), Vector3i(1, 1, 0)],
-	[Vector3i(1, 0, 1), Vector3i(1, 0, 0), Vector3i(1, 1, 0), Vector3i(1, 1, 1)],
-	[Vector3i(0, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 1, 1), Vector3i(0, 1, 0)],
-]
 const FACE_COLORS := [
 	Color(1.0, 1.0, 1.0),
 	Color(0.7, 0.76, 0.85),
@@ -100,17 +88,17 @@ func _build_region(key: Vector2i) -> void:
 			if not _cell_filled(cx, cz):
 				continue
 			for face in 6:
-				var normal: Vector3 = FACE_NORMALS[face]
-				if normal.y == 0.0 and _cell_filled(cx + int(normal.x), cz + int(normal.z)):
+				var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
+				if normal.y == 0 and _cell_filled(cx + normal.x, cz + normal.z):
 					continue
 				var base := verts.size()
 				for corner in 4:
-					var offset: Vector3i = FACE_VERTS[face][corner]
+					var offset: Vector3i = VoxelDefs.FACE_VERTS[face][corner]
 					verts.append(Vector3(
 						(cx - base_cx) * CELL_SIZE + offset.x * CELL_SIZE,
 						CLOUD_HEIGHT + offset.y * CLOUD_THICKNESS,
 						(cz - base_cz) * CELL_SIZE + offset.z * CELL_SIZE))
-					normals.append(normal)
+					normals.append(Vector3(normal))
 					colors.append(FACE_COLORS[face])
 				indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
 	if verts.is_empty():

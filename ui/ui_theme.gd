@@ -8,6 +8,8 @@ const PANEL_LIGHT := Color(0.08, 0.14, 0.16, 0.94)
 const BORDER := Color(0.45, 0.75, 0.7, 0.35)
 const FOCUS := Color(0.55, 0.83, 0.78, 0.9)
 
+static var _cached_theme: Theme
+
 
 static func panel_style(color: Color, border_color: Color = BORDER, border_width: int = 1, radius: int = 8) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -23,6 +25,8 @@ static func panel_style(color: Color, border_color: Color = BORDER, border_width
 
 
 static func build() -> Theme:
+	if _cached_theme != null:
+		return _cached_theme
 	var theme := Theme.new()
 	theme.default_font_size = 17
 
@@ -98,6 +102,7 @@ static func build() -> Theme:
 	theme.set_color("font_hover_color", "CheckBox", Color.WHITE)
 	theme.set_font_size("font_size", "CheckBox", 17)
 
+	_cached_theme = theme
 	return theme
 
 
@@ -116,3 +121,41 @@ static func muted_label(text: String, size: int = 15) -> Label:
 	label.add_theme_font_size_override("font_size", size)
 	label.add_theme_color_override("font_color", MUTED)
 	return label
+
+
+static func slider_row(box: VBoxContainer, label_text: String, minimum: float, maximum: float, step: float, value: float, format: String, display_scale: float = 1.0) -> HSlider:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
+
+	var name_label := Label.new()
+	name_label.text = label_text
+	name_label.custom_minimum_size = Vector2(200.0, 0.0)
+	row.add_child(name_label)
+
+	var slider := HSlider.new()
+	slider.min_value = minimum
+	slider.max_value = maximum
+	slider.step = step
+	slider.value = value
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.custom_minimum_size = Vector2(220.0, 0.0)
+	row.add_child(slider)
+
+	var value_label := Label.new()
+	value_label.custom_minimum_size = Vector2(110.0, 0.0)
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value_label.add_theme_color_override("font_color", TEAL)
+	value_label.text = format_value(format, value, display_scale)
+	row.add_child(value_label)
+
+	slider.value_changed.connect(func(new_value: float) -> void:
+		value_label.text = UITheme.format_value(format, new_value, display_scale)
+	)
+	return slider
+
+
+static func format_value(format: String, value: float, display_scale: float = 1.0) -> String:
+	if format.contains("%d"):
+		return format % roundi(value * display_scale)
+	return format % (value * display_scale)

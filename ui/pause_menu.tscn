@@ -1,0 +1,68 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://ui/pause_menu.gd" id="1_pause"]
+[ext_resource type="PackedScene" path="res://ui/settings_panel.tscn" id="2_settings"]
+
+[node name="PauseMenu" type="CanvasLayer"]
+layer = 20
+process_mode = 3
+visible = false
+script = ExtResource("1_pause")
+
+[node name="Dim" type="ColorRect" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0.02, 0.03, 0.6)
+
+[node name="Center" type="CenterContainer" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="Center"]
+layout_mode = 2
+custom_minimum_size = Vector2(420, 0)
+
+[node name="Box" type="VBoxContainer" parent="Center/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Heading" type="Label" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.545, 0.827, 0.78, 1)
+theme_override_font_sizes/font_size = 32
+text = "PAUSED"
+horizontal_alignment = 1
+
+[node name="ResumeButton" type="Button" parent="Center/Panel/Box"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 44)
+text = "Resume"
+
+[node name="SettingsButton" type="Button" parent="Center/Panel/Box"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 44)
+text = "Settings"
+
+[node name="NewWorldButton" type="Button" parent="Center/Panel/Box"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 44)
+text = "New World"
+
+[node name="QuitGameButton" type="Button" parent="Center/Panel/Box"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 44)
+text = "Quit Game"
+
+[node name="Hint" type="Label" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.722, 0.78, 0.757, 1)
+theme_override_font_sizes/font_size = 13
+text = "WASD move   SPACE jump   double-tap SPACE to fly\nSHIFT sprint / descend   LMB mine   RMB place\n1-9 / 0 or wheel select block"
+horizontal_alignment = 1
+
+[node name="SettingsPanel" parent="." instance=ExtResource("2_settings")]
+visible = false

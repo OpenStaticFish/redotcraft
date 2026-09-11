@@ -1,0 +1,97 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://ui/world_gen_panel.gd" id="1_worldgen"]
+
+[node name="WorldGenPanel" type="Control"]
+layout_mode = 3
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+visible = false
+script = ExtResource("1_worldgen")
+
+[node name="Dim" type="ColorRect" parent="."]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0.02, 0.03, 0.62)
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="Center"]
+layout_mode = 2
+custom_minimum_size = Vector2(580, 0)
+
+[node name="Box" type="VBoxContainer" parent="Center/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Heading" type="Label" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.545, 0.827, 0.78, 1)
+theme_override_font_sizes/font_size = 30
+text = "WORLD GEN"
+horizontal_alignment = 1
+
+[node name="Hint" type="Label" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.722, 0.78, 0.757, 1)
+theme_override_font_sizes/font_size = 15
+text = "Create a new world. Nothing is saved yet."
+
+[node name="SeedRow" type="HBoxContainer" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="SeedLabel" type="Label" parent="Center/Panel/Box/SeedRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(200, 0)
+text = "Seed"
+
+[node name="SeedField" type="LineEdit" parent="Center/Panel/Box/SeedRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RandomSeedButton" type="Button" parent="Center/Panel/Box/SeedRow"]
+layout_mode = 2
+text = "Random"
+
+[node name="TypeRow" type="HBoxContainer" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="TypeLabel" type="Label" parent="Center/Panel/Box/TypeRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(200, 0)
+text = "World Type"
+
+[node name="TypeOption" type="OptionButton" parent="Center/Panel/Box/TypeRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RowsBox" type="VBoxContainer" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Footer" type="HBoxContainer" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 2
+
+[node name="BackButton" type="Button" parent="Center/Panel/Box/Footer"]
+layout_mode = 2
+custom_minimum_size = Vector2(140, 0)
+text = "Back"
+
+[node name="CreateButton" type="Button" parent="Center/Panel/Box/Footer"]
+layout_mode = 2
+custom_minimum_size = Vector2(210, 0)
+text = "Create World"
