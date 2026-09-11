@@ -28,12 +28,14 @@ const BLOCK_BIRCH_LOG := 23
 const BLOCK_BIRCH_LEAVES := 24
 const BLOCK_TERRACOTTA := 25
 const BLOCK_MYCELIUM := 26
+const BLOCK_TORCH := 27
 
 const FLAG_OPAQUE := 1
 const FLAG_CUTOUT := 2
 const FLAG_UNBREAKABLE := 4
 const FLAG_LEAVES := 8
 const FLAG_EMISSIVE := 16
+const FLAG_CROSS := 32
 
 const BLOCK_DEFS := [
 	[0, "AIR", "", "", "", 0],
@@ -63,6 +65,7 @@ const BLOCK_DEFS := [
 	[24, "BIRCH LEAVES", "birch_leaves.png", "birch_leaves.png", "birch_leaves.png", FLAG_CUTOUT | FLAG_LEAVES],
 	[25, "TERRACOTTA", "terracotta.png", "terracotta.png", "terracotta.png", FLAG_OPAQUE],
 	[26, "MYCELIUM", "mycelium_top.png", "mycelium_side.png", "dirt.png", FLAG_OPAQUE],
+	[27, "TORCH", "torch.png", "torch.png", "torch.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE],
 ]
 
 const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
@@ -75,6 +78,7 @@ const UV_INSET := 2.0
 const MAX_LIGHT_LEVEL := 15
 const EMISSIVE_COLORS := {
 	BLOCK_GLOWSTONE: Color(1.0, 0.78, 0.52),
+	BLOCK_TORCH: Color(0.93, 0.68, 0.44),
 }
 const ATTENUATION_LEAVES := 3
 const ATTENUATION_WATER := 2

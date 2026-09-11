@@ -21,7 +21,7 @@ Tick items as they land. Property names are included so each item is easy to fin
 ## Lighting
 - [x] Block-light propagation — mesh-time BFS over a 3x3 chunk light volume in `ChunkMesher` (sky column pass + lateral flood, plus RGB block light seeded from emissive blocks); per-vertex light joined with AO and packed into `ARRAY_CUSTOM0`, baked by `world/block.gdshader` (sky occlusion in albedo, warm block light as emission). Runs on chunk worker threads; supersedes the old pooled `OmniLight3D` glowstone lights (removed)
 - [ ] Sky-light pass optimization — the column walk costs ~8-9 ms/chunk; feed generator heightmaps into the light volume to skip it. Streaming at render distance 16 takes roughly 2x longer than before lighting
-- [ ] Torches and more emissive blocks — add a `BlockRegistry.EMISSIVE_COLORS` entry + hotbar slot; propagation is generic
+- [x] Torches — `world/block_registry.gd` `BLOCK_TORCH` (27) with `FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE` and a warm entry in `EMISSIVE_COLORS`; `ChunkMesher` renders cross blocks as two intersecting inset quads (cell light, no AO, no collision), and the BFS seeds non-opaque emitters directly. Hotbar slot appended (scroll only); other emissive blocks only need a color entry
 - [x] SDFGI — intentionally off in every preset: no update throttling, re-bakes every frame with a moving sun
 
 ## Sky / atmosphere

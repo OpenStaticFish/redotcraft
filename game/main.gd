@@ -3,8 +3,8 @@ extends Node3D
 
 const PauseMenuScene := preload("res://ui/pause_menu.tscn")
 
-const HOTBAR: Array[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32}
+const HOTBAR: Array[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 27]
+const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32, 27: 32}
 const STATS_INTERVAL := 0.25
 const SLOT_WIDTH := 92.0
 const SLOT_HEIGHT := 64.0
@@ -251,7 +251,11 @@ func consume_selected_block() -> void:
 func _update_inventory_display() -> void:
 	for index in slot_labels.size():
 		var block_id: int = HOTBAR[index]
-		var key_label := str(index + 1) if index < 9 else "0"
+		var key_label := str(index + 1)
+		if index == 9:
+			key_label = "0"
+		elif index > 9:
+			key_label = ""
 		slot_labels[index].text = "%s  %s\n   x%d" % [key_label, world.get_block_name(block_id), inventory.get(block_id, 0)]
 
 

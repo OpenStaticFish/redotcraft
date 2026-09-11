@@ -3,6 +3,11 @@ extends RefCounted
 
 const LIGHT_PAD := 16
 const MAX_LEVEL := BlockRegistry.MAX_LIGHT_LEVEL
+const CROSS_PLANES := [
+	[Vector3(0.1, 0.0, 0.1), Vector3(0.9, 0.0, 0.9), Vector3(0.9, 1.0, 0.9), Vector3(0.1, 1.0, 0.1)],
+	[Vector3(0.9, 0.0, 0.1), Vector3(0.1, 0.0, 0.9), Vector3(0.1, 1.0, 0.9), Vector3(0.9, 1.0, 0.1)],
+]
+const CROSS_UVS := [Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vector2(0.0, 0.0)]
 
 var _blocks: BlockRegistry
 var _face_ao_offsets: Array = []
@@ -116,6 +121,18 @@ func build(data: PackedByteArray, data_max_y: int, neighbors: NeighborSet) -> Me
 				if id == BlockRegistry.BLOCK_WATER:
 					_append_water_block(padded, pad_index, local_x, y, local_z, result)
 					continue
+				if _blocks.has_flag(id, BlockRegistry.FLAG_CROSS):
+					var volume: LightVolume = result.light_volume
+					var light_index := (y * volume.d + local_z + LIGHT_PAD) * volume.w + local_x + LIGHT_PAD
+					var sky_light := float(volume.sky[light_index]) / float(MAX_LEVEL)
+					var block_light := Color.BLACK
+					if not volume.block_r.is_empty():
+						block_light = Color(
+							float(volume.block_r[light_index]) / float(MAX_LEVEL),
+							float(volume.block_g[light_index]) / float(MAX_LEVEL),
+							float(volume.block_b[light_index]) / float(MAX_LEVEL))
+					_append_cross_block(Vector3(local_x, y, local_z), id, block_light, sky_light, result)
+					continue
 				var is_opaque := _blocks.is_opaque(id)
 				for face in 6:
 					var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
@@ -133,6 +150,10 @@ func build(data: PackedByteArray, data_max_y: int, neighbors: NeighborSet) -> Me
 func make_block_mesh(block_id: int) -> ArrayMesh:
 	if not _blocks.is_valid_id(block_id):
 		block_id = BlockRegistry.BLOCK_GRASS
+	if _blocks.has_flag(block_id, BlockRegistry.FLAG_CROSS):
+		var cross := MeshResult.new()
+		_append_cross_block(Vector3(-0.5, -0.5, -0.5), block_id, Color.BLACK, 1.0, cross)
+		return arrays_to_mesh(cross.verts, cross.normals, cross.uvs, cross.colors, cross.indices, _blocks.material, cross.light)
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var uvs := PackedVector2Array()
@@ -341,8 +362,12 @@ func _compute_sky_light(volume: LightVolume) -> void:
 
 func _compute_block_light(volume: LightVolume) -> void:
 	var blocks := volume.blocks
-	var emitter := blocks.find(BlockRegistry.BLOCK_GLOWSTONE)
-	if emitter == -1:
+	var found_emitter := false
+	for block_id in BlockRegistry.EMISSIVE_COLORS:
+		if blocks.find(block_id) != -1:
+			found_emitter = true
+			break
+	if not found_emitter:
 		return
 	var size := blocks.size()
 	var area := volume.w * volume.d
@@ -359,54 +384,69 @@ func _compute_block_light(volume: LightVolume) -> void:
 	var volume_z := 0
 	var y := 0
 	var vx := 0
-	while emitter != -1:
-		var id := blocks[emitter]
-		var seed_r := maxi(_emission_r[id] - 1, 0)
-		var seed_g := maxi(_emission_g[id] - 1, 0)
-		var seed_b := maxi(_emission_b[id] - 1, 0)
-		if seed_r > 0 or seed_g > 0 or seed_b > 0:
+	for block_id in BlockRegistry.EMISSIVE_COLORS:
+		var emitter := blocks.find(block_id)
+		var seed_r := _emission_r[block_id]
+		var seed_g := _emission_g[block_id]
+		var seed_b := _emission_b[block_id]
+		if seed_r <= 0 and seed_g <= 0 and seed_b <= 0:
+			continue
+		var emitter_opaque := _opacity[block_id] >= MAX_LEVEL
+		while emitter != -1:
 			var remainder := int(emitter / volume.w)
 			vx = emitter % volume.w
 			volume_z = remainder % volume.d
 			y = int(remainder / volume.d)
-			for direction in 6:
-				var ni := emitter
-				match direction:
-					0:
-						if vx == 0:
-							continue
-						ni -= 1
-					1:
-						if vx == volume.w - 1:
-							continue
-						ni += 1
-					2:
-						if volume_z == 0:
-							continue
-						ni -= volume.w
-					3:
-						if volume_z == volume.d - 1:
-							continue
-						ni += volume.w
-					4:
-						if y == 0:
-							continue
-						ni -= area
-					_:
-						if y == volume.h - 1:
-							continue
-						ni += area
-				if _opacity[blocks[ni]] >= MAX_LEVEL:
-					continue
-				if red[ni] >= seed_r and green[ni] >= seed_g and blue[ni] >= seed_b:
-					continue
-				red[ni] = maxi(red[ni], seed_r)
-				green[ni] = maxi(green[ni], seed_g)
-				blue[ni] = maxi(blue[ni], seed_b)
-				if tail < queue.size():
-					queue[tail] = ni
-					tail += 1
-		emitter = blocks.find(BlockRegistry.BLOCK_GLOWSTONE, emitter + 1)
+			if not emitter_opaque:
+				if red[emitter] < seed_r or green[emitter] < seed_g or blue[emitter] < seed_b:
+					red[emitter] = maxi(red[emitter], seed_r)
+					green[emitter] = maxi(green[emitter], seed_g)
+					blue[emitter] = maxi(blue[emitter], seed_b)
+					if tail < queue.size():
+						queue[tail] = emitter
+						tail += 1
+			elif seed_r > 1 or seed_g > 1 or seed_b > 1:
+				var neighbor_r := maxi(seed_r - 1, 0)
+				var neighbor_g := maxi(seed_g - 1, 0)
+				var neighbor_b := maxi(seed_b - 1, 0)
+				for direction in 6:
+					var ni := emitter
+					match direction:
+						0:
+							if vx == 0:
+								continue
+							ni -= 1
+						1:
+							if vx == volume.w - 1:
+								continue
+							ni += 1
+						2:
+							if volume_z == 0:
+								continue
+							ni -= volume.w
+						3:
+							if volume_z == volume.d - 1:
+								continue
+							ni += volume.w
+						4:
+							if y == 0:
+								continue
+							ni -= area
+						_:
+							if y == volume.h - 1:
+								continue
+							ni += area
+					if _opacity[blocks[ni]] >= MAX_LEVEL:
+						continue
+					if red[ni] >= neighbor_r and green[ni] >= neighbor_g and blue[ni] >= neighbor_b:
+						continue
+					red[ni] = maxi(red[ni], neighbor_r)
+					green[ni] = maxi(green[ni], neighbor_g)
+					blue[ni] = maxi(blue[ni], neighbor_b)
+					if tail < queue.size():
+						queue[tail] = ni
+						tail += 1
+			emitter = blocks.find(block_id, emitter + 1)
 	while head < tail:
 		var index := queue[head]
 		head += 1
@@ -547,6 +587,46 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 	var p3: Vector3 = result.verts[base + 3]
 	result.indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
 	result.collision.append_array(PackedVector3Array([p0, p2, p1, p0, p3, p2]))
+
+
+func _append_cross_block(origin: Vector3, block_id: int, block_light: Color, sky_light: float, result: MeshResult) -> void:
+	var tile := _blocks.tile_for(block_id, 2)
+	var uv_origin := _blocks.tile_uv_origin(tile)
+	var tile_size := _blocks.tile_uv_size
+	var shade := 0.96
+	for plane in CROSS_PLANES:
+		var base := result.verts.size()
+		for corner in 4:
+			var offset: Vector3 = plane[corner]
+			result.verts.append(origin + offset)
+			result.normals.append(Vector3.UP)
+			var uv: Vector2 = CROSS_UVS[corner]
+			result.uvs.append(uv_origin + Vector2(uv.x * tile_size.x, uv.y * tile_size.y))
+			result.colors.append(Color(shade, shade, shade, 1.0))
+			result.light.push_back(block_light.r)
+			result.light.push_back(block_light.g)
+			result.light.push_back(block_light.b)
+			result.light.push_back(sky_light)
+		result.indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
+		result.indices.append_array(PackedInt32Array([base, base + 1, base + 2, base, base + 2, base + 3]))
+	_append_cross_collision(origin, result)
+
+
+func _append_cross_collision(origin: Vector3, result: MeshResult) -> void:
+	var min := origin + Vector3(0.3, 0.0, 0.3)
+	var max := origin + Vector3(0.7, 0.7, 0.7)
+	var corners := PackedVector3Array([
+		Vector3(min.x, min.y, min.z), Vector3(max.x, min.y, min.z), Vector3(max.x, min.y, max.z), Vector3(min.x, min.y, max.z),
+		Vector3(min.x, max.y, min.z), Vector3(max.x, max.y, min.z), Vector3(max.x, max.y, max.z), Vector3(min.x, max.y, max.z),
+	])
+	result.collision.append_array(PackedVector3Array([
+		corners[0], corners[1], corners[2], corners[0], corners[2], corners[3],
+		corners[4], corners[6], corners[5], corners[4], corners[7], corners[6],
+		corners[0], corners[4], corners[5], corners[0], corners[5], corners[1],
+		corners[3], corners[2], corners[6], corners[3], corners[6], corners[7],
+		corners[0], corners[3], corners[7], corners[0], corners[7], corners[4],
+		corners[1], corners[5], corners[6], corners[1], corners[6], corners[2],
+	]))
 
 
 func _append_water_block(padded: PackedByteArray, pad_index: int, local_x: int, y: int, local_z: int, result: MeshResult) -> void:

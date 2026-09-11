@@ -26,6 +26,7 @@ RedotCraft: a Minecraft-like voxel sandbox built with **Redot Engine** (Godot 4 
 - `block_registry.gd`: block table `BLOCK_DEFS` rows `[id, name, top, side, bottom, flags]`, packed into a runtime texture atlas (8 columns, 64px tiles, 2px UV inset).
   - To add a block: append a row using an existing texture filename from `assets/placeholders/zigcraft/default/`, then add it to `Main.HOTBAR` / `INITIAL_INVENTORY` if it should be placeable. A missing texture logs a warning and renders magenta.
   - Emissive blocks: add the id to `EMISSIVE_COLORS` (and `FLAG_EMISSIVE` on the def row). The mesher BFS seeds colored light from it; the existing light volume makes new sources work with no other changes.
+  - Cross blocks (torches, plants): `FLAG_CROSS` meshes two intersecting inset quads instead of a cube, samples the cell's light without AO, and adds no collision. Torches combine `FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE`.
   - IDs are stored in `PackedByteArray`, so stay under 256. `TEXTURE_TINTS` applies per-texture tinting (grass, leaves, sand, ...).
 - Water: non-opaque, non-breakable, no collision; meshed as its own surface. `VoxelWorld.is_water_at()` drives the HUD underwater overlay.
 
