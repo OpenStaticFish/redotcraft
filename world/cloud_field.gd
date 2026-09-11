@@ -35,6 +35,12 @@ func _ready() -> void:
 	_material.cull_mode = BaseMaterial3D.CULL_BACK
 
 
+## Tints every cloud region, used by the day/night cycle.
+func set_sky_tint(tint: Color) -> void:
+	if _material:
+		_material.albedo_color = tint
+
+
 func _process(delta: float) -> void:
 	_origin += WIND_DIR.normalized() * DRIFT_SPEED * delta
 	global_position = Vector3(_origin.x, 0.0, _origin.y)

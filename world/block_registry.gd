@@ -33,6 +33,7 @@ const FLAG_OPAQUE := 1
 const FLAG_CUTOUT := 2
 const FLAG_UNBREAKABLE := 4
 const FLAG_LEAVES := 8
+const FLAG_EMISSIVE := 16
 
 const BLOCK_DEFS := [
 	[0, "AIR", "", "", "", 0],
@@ -44,7 +45,7 @@ const BLOCK_DEFS := [
 	[6, "OAK LEAVES", "leaves.png", "leaves.png", "leaves.png", FLAG_CUTOUT | FLAG_LEAVES],
 	[7, "SAND", "sand.png", "sand.png", "sand.png", FLAG_OPAQUE],
 	[8, "GLASS", "glass.png", "glass.png", "glass.png", FLAG_CUTOUT],
-	[9, "GLOWSTONE", "glowstone.png", "glowstone.png", "glowstone.png", FLAG_OPAQUE],
+	[9, "GLOWSTONE", "glowstone.png", "glowstone.png", "glowstone.png", FLAG_OPAQUE | FLAG_EMISSIVE],
 	[10, "SNOW", "snow_block.png", "snow_block.png", "snow_block.png", FLAG_OPAQUE],
 	[11, "BEDROCK", "bedrock.png", "bedrock.png", "bedrock.png", FLAG_OPAQUE | FLAG_UNBREAKABLE],
 	[12, "GRAVEL", "gravel.png", "gravel.png", "gravel.png", FLAG_OPAQUE],
@@ -67,9 +68,16 @@ const BLOCK_DEFS := [
 const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
 const WATER_TEXTURE_PATH := TEXTURE_ROOT + "water.png"
 const WATER_SHADER_PATH := "res://assets/placeholders/zigcraft/water.gdshader"
+const BLOCK_SHADER_PATH := "res://world/block.gdshader"
 const TILE_PX := 64
 const ATLAS_COLUMNS := 8
 const UV_INSET := 2.0
+const MAX_LIGHT_LEVEL := 15
+const EMISSIVE_COLORS := {
+	BLOCK_GLOWSTONE: Color(1.0, 0.78, 0.52),
+}
+const ATTENUATION_LEAVES := 3
+const ATTENUATION_WATER := 2
 const TEXTURE_TINTS := {
 	"grass_top.png": Color(0.44, 0.84, 0.34),
 	"leaves.png": Color(0.62, 1.15, 0.5),
@@ -80,7 +88,7 @@ const TEXTURE_TINTS := {
 	"red_sand.png": Color(1.0, 0.84, 0.72),
 }
 
-var material: StandardMaterial3D
+var material: Material
 var water_material: Material
 var tile_uv_size := Vector2.ZERO
 
@@ -125,6 +133,24 @@ func is_breakable(block_id: int) -> bool:
 	return not has_flag(block_id, FLAG_UNBREAKABLE)
 
 
+func light_attenuation(block_id: int) -> int:
+	if is_opaque(block_id):
+		return MAX_LIGHT_LEVEL
+	if block_id == BLOCK_WATER:
+		return ATTENUATION_WATER
+	if has_flag(block_id, FLAG_LEAVES):
+		return ATTENUATION_LEAVES
+	return 0
+
+
+func emission_color(block_id: int) -> Color:
+	return EMISSIVE_COLORS.get(block_id, Color.BLACK)
+
+
+func is_emissive(block_id: int) -> bool:
+	return (has_flag(block_id, FLAG_EMISSIVE) or EMISSIVE_COLORS.has(block_id)) and is_valid_id(block_id)
+
+
 func tile_for(block_id: int, face: int) -> int:
 	if face == 0:
 		return _tile_top[block_id]
@@ -160,6 +186,7 @@ func _build_atlas() -> Dictionary:
 	atlas.fix_alpha_edges()
 	atlas.generate_mipmaps()
 	var atlas_texture := ImageTexture.create_from_image(atlas)
+	_build_material(atlas_texture)
 	var total_tiles := texture_names.size()
 	_tile_uv_origin.resize(total_tiles)
 	tile_uv_size = Vector2(
@@ -173,6 +200,17 @@ func _build_atlas() -> Dictionary:
 			(float(column * TILE_PX) + UV_INSET) / float(atlas.get_width()),
 			(float(row * TILE_PX) + UV_INSET) / float(atlas.get_height())
 		)
+	return tile_lookup
+
+
+func _build_material(atlas_texture: Texture2D) -> void:
+	var shader := load(BLOCK_SHADER_PATH) as Shader
+	if shader:
+		var shader_material := ShaderMaterial.new()
+		shader_material.shader = shader
+		shader_material.set_shader_parameter("albedo_texture", atlas_texture)
+		material = shader_material
+		return
 	material = StandardMaterial3D.new()
 	material.albedo_texture = atlas_texture
 	material.albedo_color = Color.WHITE
@@ -183,7 +221,6 @@ func _build_atlas() -> Dictionary:
 	material.roughness = 1.0
 	material.metallic = 0.0
 	material.metallic_specular = 0.05
-	return tile_lookup
 
 
 func _load_image(path: String) -> Image:

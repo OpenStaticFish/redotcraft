@@ -1,0 +1,74 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://ui/inventory_overlay.gd" id="1_inventory"]
+
+[node name="InventoryOverlay" type="CanvasLayer"]
+layer = 15
+process_mode = 3
+visible = false
+script = ExtResource("1_inventory")
+
+[node name="Dim" type="ColorRect" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0.02, 0.03, 0.6)
+
+[node name="Center" type="CenterContainer" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="Center"]
+custom_minimum_size = Vector2(720, 0)
+
+[node name="Box" type="VBoxContainer" parent="Center/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Heading" type="Label" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.545, 0.827, 0.78, 1)
+theme_override_font_sizes/font_size = 30
+text = "INVENTORY"
+horizontal_alignment = 1
+
+[node name="TimeRow" type="HBoxContainer" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="MorningButton" type="Button" parent="Center/Panel/Box/TimeRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(130, 36)
+text = "Morning"
+
+[node name="DayButton" type="Button" parent="Center/Panel/Box/TimeRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(130, 36)
+text = "Day"
+
+[node name="EveningButton" type="Button" parent="Center/Panel/Box/TimeRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(130, 36)
+text = "Evening"
+
+[node name="NightButton" type="Button" parent="Center/Panel/Box/TimeRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(130, 36)
+text = "Night"
+
+[node name="Grid" type="GridContainer" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_constants/h_separation = 10
+theme_override_constants/v_separation = 10
+columns = 5
+
+[node name="Hint" type="Label" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.722, 0.78, 0.757, 1)
+theme_override_font_sizes/font_size = 13
+text = "Press I or ESC to close"
+horizontal_alignment = 1

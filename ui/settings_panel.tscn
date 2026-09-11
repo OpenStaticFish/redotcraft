@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://ui/settings_panel.gd" id="1_settings"]
+[ext_resource type="PackedScene" path="res://ui/graphics_panel.tscn" id="2_graphics"]
 
 [node name="SettingsPanel" type="Control"]
 layout_mode = 3
@@ -50,7 +51,15 @@ layout_mode = 2
 theme_override_constants/separation = 10
 alignment = 2
 
+[node name="AdvancedButton" type="Button" parent="Center/Panel/Box/Footer"]
+layout_mode = 2
+custom_minimum_size = Vector2(230, 0)
+text = "Advanced Graphics..."
+
 [node name="DoneButton" type="Button" parent="Center/Panel/Box/Footer"]
 layout_mode = 2
 custom_minimum_size = Vector2(150, 0)
 text = "Done"
+
+[node name="GraphicsPanel" parent="." instance=ExtResource("2_graphics")]
+visible = false

@@ -13,12 +13,15 @@ const SLOT_GAP := 6.0
 @onready var world: VoxelWorld = $World
 @onready var player: Player = $Player
 @onready var _environment: Environment = $WorldEnvironment.environment
+@onready var _sun: DirectionalLight3D = $Sun
 @onready var _hud_root: Control = $HUD/HudRoot
 @onready var _underwater_overlay: ColorRect = $HUD/HudRoot/UnderwaterOverlay
 @onready var _coords_label: Label = $HUD/HudRoot/CoordsPanel/CoordsLabel
 @onready var _stats_label: Label = $HUD/HudRoot/StatsPanel/StatsLabel
 @onready var _status_label: Label = $HUD/HudRoot/StatusLabel
 @onready var _hotbar: Panel = $HUD/HudRoot/Hotbar
+@onready var _day_night: DayNightCycle = $DayNight
+@onready var _inventory_overlay: InventoryOverlay = $InventoryOverlay
 
 var slot_panels: Array[PanelContainer] = []
 var slot_labels: Array[Label] = []
@@ -35,6 +38,9 @@ func _ready() -> void:
 	_build_hotbar()
 	_build_pause_menu()
 	_connect_player()
+	_inventory_overlay.opened.connect(_on_inventory_opened)
+	_inventory_overlay.closed.connect(_on_inventory_closed)
+	_inventory_overlay.time_selected.connect(_on_inventory_time_selected)
 	var spawn := world.get_spawn_position()
 	player.global_position = spawn
 	player.spawn_position = spawn
@@ -64,10 +70,34 @@ func _process(delta: float) -> void:
 func _apply_config() -> void:
 	var render_distance := GameConfig.get_render_distance()
 	world.configure(GameConfig.world, render_distance)
-	_environment.ssao_enabled = GameConfig.get_ambient_occlusion()
-	_environment.ssil_enabled = GameConfig.get_ambient_occlusion()
-	_environment.sdfgi_enabled = GameConfig.get_global_illumination()
+	_apply_graphics()
 	_update_camera_far(render_distance)
+
+
+func _apply_graphics() -> void:
+	var graphics := GameConfig.get_graphics()
+	_environment.ssao_enabled = bool(graphics["ssao_ssil"])
+	_environment.ssil_enabled = bool(graphics["ssao_ssil"])
+	_environment.sdfgi_enabled = bool(graphics["sdfgi"])
+	_environment.ssr_enabled = bool(graphics["ssr"])
+	_environment.volumetric_fog_enabled = bool(graphics["volumetric_fog"])
+	_environment.volumetric_fog_density = float(graphics["volumetric_fog_density"])
+	_environment.volumetric_fog_length = float(graphics["volumetric_fog_length"])
+	_environment.volumetric_fog_anisotropy = float(graphics["volumetric_fog_anisotropy"])
+	_environment.fog_density = float(graphics["fog_density"])
+	_environment.glow_intensity = float(graphics["glow_intensity"])
+	_environment.tonemap_mode = int(graphics["tonemap"])
+	_environment.tonemap_exposure = float(graphics["tonemap_exposure"])
+	_environment.adjustment_enabled = true
+	_environment.adjustment_saturation = float(graphics["saturation"])
+	_environment.adjustment_contrast = float(graphics["contrast"])
+	_sun.directional_shadow_max_distance = float(graphics["shadow_max_distance"])
+	_sun.shadow_opacity = float(graphics["shadow_opacity"])
+	_sun.shadow_blur = float(graphics["shadow_blur"])
+	var viewport := get_viewport()
+	if viewport:
+		viewport.scaling_3d_scale = float(graphics["fsr_scale"])
+		viewport.msaa_3d = int(graphics["msaa"])
 
 
 func _connect_player() -> void:
@@ -141,6 +171,22 @@ func activate_pause() -> void:
 		_pause_menu.open_menu()
 
 
+func _on_inventory_opened() -> void:
+	_inventory_overlay.show_inventory(inventory, world)
+	get_tree().paused = true
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+
+
+func _on_inventory_closed() -> void:
+	get_tree().paused = false
+	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+
+func _on_inventory_time_selected(hours: float) -> void:
+	_day_night.set_time(hours)
+	set_status("Time set to %s" % _day_night.get_clock_text())
+
+
 func _on_setting_changed(key: String, value: Variant) -> void:
 	match key:
 		"render_distance":
@@ -149,11 +195,10 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 			_update_camera_far(render_distance)
 		"fov":
 			player.set_fov(float(value))
-		"ambient_occlusion":
-			_environment.ssao_enabled = bool(value)
-			_environment.ssil_enabled = bool(value)
-		"global_illumination":
-			_environment.sdfgi_enabled = bool(value)
+		"graphics_preset":
+			_apply_graphics()
+		"graphics":
+			_apply_graphics()
 
 
 func _on_new_world() -> void:
@@ -228,7 +273,8 @@ func _update_stats() -> void:
 		coords.x, coords.y, coords.z,
 		world.get_biome_name(player.global_position),
 	]
-	_stats_label.text = "%d FPS\n%d chunks" % [
+	_stats_label.text = "%d FPS\n%d chunks\n%s" % [
 		Engine.get_frames_per_second(),
 		world.get_loaded_chunk_count(),
+		_day_night.get_clock_text(),
 	]

@@ -1,22 +1,24 @@
-[gd_scene load_steps=9 format=3 uid="uid://k2ykx7l8idph"]
+[gd_scene load_steps=12 format=3 uid="uid://k2ykx7l8idph"]
 
 [ext_resource type="Script" uid="uid://w6frx566rv44" path="res://game/main.gd" id="1_main"]
 [ext_resource type="Script" uid="uid://b2yh436fntttp" path="res://world/voxel_world.gd" id="2_world"]
 [ext_resource type="Script" uid="uid://b4o04b60le6fp" path="res://player/player.gd" id="3_player"]
 [ext_resource type="Script" path="res://world/cloud_field.gd" id="4_clouds"]
+[ext_resource type="Script" path="res://world/day_night_cycle.gd" id="5_daynight"]
+[ext_resource type="PackedScene" path="res://ui/inventory_overlay.tscn" id="6_inventory"]
+[ext_resource type="Shader" path="res://world/sky.gdshader" id="7_sky"]
 
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
-sky_top_color = Color(0.29, 0.53, 1, 1)
-sky_horizon_color = Color(0.6, 0.78, 1, 1)
-sky_curve = 0.1
-ground_bottom_color = Color(0.35, 0.52, 0.82, 1)
-ground_horizon_color = Color(0.55, 0.72, 0.95, 1)
-ground_curve = 0.05
-sun_angle_max = 2.5
-sun_curve = 0.02
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
+shader = ExtResource("7_sky")
+shader_parameter/sky_top_color = Color(0.29, 0.53, 1, 1)
+shader_parameter/sky_horizon_color = Color(0.6, 0.78, 1, 1)
+shader_parameter/ground_horizon_color = Color(0.55, 0.72, 0.95, 1)
+shader_parameter/ground_bottom_color = Color(0.35, 0.52, 0.82, 1)
+shader_parameter/star_intensity = 0.0
+shader_parameter/moon_phase = 0.5
 
 [sub_resource type="Sky" id="Sky_env"]
-sky_material = SubResource("ProceduralSkyMaterial_sky")
+sky_material = SubResource("ShaderMaterial_sky")
 
 [sub_resource type="Environment" id="Environment_main"]
 background_mode = 2
@@ -25,6 +27,7 @@ ambient_light_source = 2
 ambient_light_color = Color(0.72, 0.85, 0.97, 1)
 ambient_light_energy = 0.4
 reflected_light_source = 2
+ssr_enabled = true
 tonemap_mode = 3
 tonemap_exposure = 0.95
 tonemap_white = 4.0
@@ -35,6 +38,11 @@ fog_density = 0.0009
 fog_aerial_perspective = 1.0
 fog_sky_affect = 0.25
 fog_height = 44.0
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.006
+volumetric_fog_albedo = Color(0.85, 0.9, 1, 1)
+volumetric_fog_anisotropy = 0.2
+volumetric_fog_length = 128.0
 ssao_enabled = true
 ssao_radius = 0.9
 ssao_intensity = 0.9
@@ -85,9 +93,15 @@ shadow_opacity = 0.9
 shadow_blur = 1.0
 
 [node name="SkyFill" type="DirectionalLight3D" parent="."]
+sky_mode = 1
 rotation_degrees = Vector3(42, 145, 0)
 light_color = Color(0.62, 0.76, 1, 1)
 light_energy = 0.12
+
+[node name="Moon" type="DirectionalLight3D" parent="."]
+sky_mode = 1
+light_color = Color(0.72, 0.81, 1, 1)
+light_energy = 0.0
 
 [node name="Player" type="CharacterBody3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 10, 9)
@@ -168,7 +182,7 @@ grow_horizontal = 0
 offset_left = -252.0
 offset_top = 16.0
 offset_right = -16.0
-offset_bottom = 78.0
+offset_bottom = 96.0
 mouse_filter = 2
 
 [node name="StatsLabel" type="Label" parent="HUD/HudRoot/StatsPanel"]
@@ -210,3 +224,8 @@ offset_bottom = -22.0
 grow_horizontal = 2
 grow_vertical = 0
 mouse_filter = 2
+
+[node name="DayNight" type="Node" parent="."]
+script = ExtResource("5_daynight")
+
+[node name="InventoryOverlay" parent="." instance=ExtResource("6_inventory")]

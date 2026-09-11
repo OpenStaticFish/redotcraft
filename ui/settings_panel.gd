@@ -12,6 +12,8 @@ const SLIDERS := [
 
 @onready var _rows_box: VBoxContainer = $Center/Panel/Box/RowsBox
 @onready var _done_button: Button = $Center/Panel/Box/Footer/DoneButton
+@onready var _advanced_button: Button = $Center/Panel/Box/Footer/AdvancedButton
+@onready var _graphics_panel: GraphicsPanel = $GraphicsPanel
 
 
 func _ready() -> void:
@@ -20,9 +22,10 @@ func _ready() -> void:
 		_add_slider(entry)
 	_add_check("Fullscreen", "fullscreen", true)
 	_rows_box.add_child(UITheme.muted_label("GRAPHICS", 14))
-	_add_check("Ambient Occlusion", "ambient_occlusion", false)
-	_add_check("Global Illumination (SDFGI)", "global_illumination", false)
+	_add_option("Graphics Preset", "graphics_preset", GameConfig.PRESET_NAMES)
 	_done_button.pressed.connect(close_panel)
+	_advanced_button.pressed.connect(func() -> void: _graphics_panel.open_panel())
+	_graphics_panel.graphics_changed.connect(func() -> void: setting_changed.emit("graphics", null))
 
 
 func open_panel() -> void:
@@ -63,3 +66,23 @@ func _add_check(label_text: String, key: String, applies_window_mode: bool) -> v
 		setting_changed.emit(key, pressed)
 	)
 	_rows_box.add_child(check)
+
+
+func _add_option(label_text: String, key: String, options: Array) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	_rows_box.add_child(row)
+	var name_label := Label.new()
+	name_label.text = label_text
+	name_label.custom_minimum_size = Vector2(200.0, 0.0)
+	row.add_child(name_label)
+	var option := OptionButton.new()
+	for text in options:
+		option.add_item(text)
+	option.selected = clampi(int(GameConfig.get_setting(key)), 0, options.size() - 1)
+	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(option)
+	option.item_selected.connect(func(index: int) -> void:
+		GameConfig.set_setting(key, index)
+		setting_changed.emit(key, index)
+	)
