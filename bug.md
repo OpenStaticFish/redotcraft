@@ -2,13 +2,15 @@
 
 ## Status
 
-**User confirms roughly 95% improvement; small residual edge aliasing remains open.**
+**Close-up filter user-confirmed fixed; distance-only mitigation applied, confirmation pending.**
 The large crawling ridges were reproduced from the user's F9 seed/camera/time
 capture. A 6 m first cascade plus an 8192 directional shadow atlas reduced the
 measured fitted-edge fluctuation from 7.846 px to 0.343 px in that replay.
-The user initially thought it was fixed, but can still see tiny moving ridges
-on the shadow boundary opposite the light while other sides look straight.
-Keep the resolution fix; do not mark this issue completely resolved.
+The resolution-only fix left tiny ridges; the subsequently applied narrow PCF
+filter was confirmed to fix the close-up appearance. The user then reported
+faint pulsation at a distance. A new captured-view test supports a 16384 atlas
+with compensated filter width (see the final section). Keep this issue open
+until the distance-only result is confirmed in-game.
 The earlier local-Z light-roll mitigation failed and was reverted.
 The mip-filtering/cutout-AA attempt failed and was reverted; the user confirmed
 sharpness returned. Their recording and clarification establish that shadow-edge
@@ -391,10 +393,89 @@ This is the prior reproducible camera, not a reconstruction of the new image.
 | High PCF, shadow blur 2/3 | 0.638 px | 1.007 px |
 
 The narrowest filter gave only a small improvement on one edge while worsening
-the other; wider filters worsened both measurements. No filter change was
-applied to the project. These trials ran on the installed engine without
+the other; wider filters worsened both measurements. The filter was initially
+held out of the project, then applied at the user's request after checkpoint
+commit `ae305fe` (see below). These trials ran on the installed engine without
 reported errors and left the existing shadow/texture settings intact.
 Residual aliasing is angle-dependent and visible on close inspection; further
 mitigation must improve the affected edge without degrading the already-clean
 edges or texture sharpness. Existing measurements do not establish a zero-cost,
 fully artifact-free replacement for the current fix.
+
+### Narrow filter applied after the checkpoint
+
+At the user's request, `Main._apply_graphics()` now uses Medium directional
+PCF when Soft Shadows is off and halves the configured shadow blur width.
+With the current Shadow Blur value of 1.0, this applies the tested 0.5-width
+filter with angular distance 0.0. The Soft Shadows-on path retains its existing
+contact-hardening behavior. Positional filtering, block texture filtering,
+the 8192 atlas and the 6 m first cascade are unchanged.
+
+A fresh installed-engine replay used the actual gameplay code, with no harness
+filter overrides. It confirmed effective blur 0.5 and angular distance 0.0,
+reported no errors, and matched the tested narrow filter's measurements:
+upper-edge fluctuation 0.372 px, outer-edge fluctuation 0.657 px. Applied for
+in-game evaluation; no claim that the remaining artifact is fully resolved.
+
+## Distance-only pulsation after the close-up fix
+
+The user confirmed that the narrow filter makes the close-up shadow look fully
+fixed, but reported faint pulsation when flying above or walking away from it.
+New capture: `user://shadow_captures/1789231853_18086/`, seed 301186440, camera
+origin `(6.399765, 57.21767, 13.85128)`, FOV 85°. The camera is stationary,
+sun time advances from 8.274040 to 8.323363 h, TAA/MSAA/soft shadows are off,
+effective shadow blur is 0.5, and AO/SSIL and SSR are on.
+
+The actual scene replay's centre ray hits `(-7.282904, 34, 17.23152)` at camera
+depth **27.16 m**, in the third cascade (ending at 57.6 m). The visible tree
+shadow contains fine leaf-cutout detail. The camera stays within one cascade
+configuration, so the captured pulsation does not require crossing a cascade
+boundary. Freezing the sun makes this replay stationary.
+
+### Distant-scene comparisons
+
+Used the same seed/camera/sun-time replay method as before, at 2378×1338 with
+4-chunk render distance. Crop `(880,460,500,260)` contains the tree shadow on
+sand. Measure per-pixel temporal mean absolute difference in crop region
+`x=5..274, y=40..179`. Also measure patch darkness relative to an unshadowed
+sand region (`x=370..479, y=190..249`) and remove a linear trend against sun
+time before computing RMS. These are localized stability measures, not a
+whole-scene image-quality score or proof of zero residual motion.
+
+| Variant | Pixel temporal MAD (0–255) | Detrended patch-darkness RMS (percentage points) |
+|---|---:|---:|
+| 8192 atlas + applied narrow filter | 1.26151 | 0.01223 |
+| Frozen sun | 0.00000 | 0.00000 |
+| 32-bit shadow depth | 1.26151 | 0.01223 |
+| Third cascade shortened to 36 m | 0.99372 | 0.00998 |
+| High PCF, same filter footprint | 1.26135 | 0.01229 |
+| Ultra PCF, wider footprint | 1.24648 | 0.01240 |
+| 16384 atlas, compensated filter width | 0.67216 | 0.00772 |
+| Fresh launch using production changes | 0.67216 | 0.00772 |
+
+Selected the larger atlas: roughly **47% less pixel change** and **37% less
+patch-darkness fluctuation**. Tightening the third split would bring the drop
+to the last cascade closer, so that candidate was not applied. Extra filter
+samples and 32-bit depth did not materially help.
+
+### Applied distance improvement and close-up regression check
+
+- `project.godot`: increase directional atlas from 8192 to **16384**.
+- `Main._apply_graphics()`: scale the narrow PCF blur by atlas resolution
+  relative to 8192, preserving its intended world-space footprint. At 16384,
+  the previous effective width 0.5 becomes 1.0 for the same slider setting.
+- Preserve all cascade splits, shadow range, texture filtering and AA settings.
+- A 16-bit 16384 atlas is approximately 512 MiB versus 128 MiB at 8192, an
+  increase of roughly **384 MiB**; GPU time was not benchmarked.
+
+Fresh installed-engine runs used actual production settings without filter or
+atlas overrides and reported no errors. The distant result matched the tested
+candidate. Replaying the original close-up capture also improved both fitted
+edge fluctuation measurements: **0.372 → 0.228 px** and **0.657 → 0.367 px**.
+This supports retaining the close-up improvement, but the new distant view
+still needs user confirmation. Restart is required for the atlas change.
+
+Artifacts: `/tmp/opencode/replay-distant_*.png` (including baseline and final
+frame sequences); metrics are in
+`/tmp/opencode/measure_distant_shadow.py`. The replay harness accepts
+`SHADOW_REPLAY_CAPTURE` and `SHADOW_REPLAY_NAME` to select either user capture.

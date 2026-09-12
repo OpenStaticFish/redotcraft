@@ -148,10 +148,15 @@ func _apply_graphics() -> void:
 	_sun.directional_shadow_split_2 = maxf(near_split * 2.0, 0.1)
 	_sun.directional_shadow_split_3 = maxf(_sun.directional_shadow_split_2 * 2.0, 0.3)
 	_sun.shadow_opacity = float(graphics["shadow_opacity"])
-	_sun.shadow_blur = float(graphics["shadow_blur"])
 	var soft_shadows := bool(graphics["soft_shadows"])
+	# Keep a narrow spatial filter on hard sun shadows to smooth texel steps.
+	# Preserve its world-space width as atlas resolution changes: the tested
+	# half-width filter at 8192 needs width 1.0 at 16384. PCSS uses its own scale.
+	var atlas_scale := float(ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/size")) / 8192.0
+	_sun.shadow_blur = float(graphics["shadow_blur"]) * (1.0 if soft_shadows else 0.5 * atlas_scale)
 	var shadow_quality: int = RenderingServer.SHADOW_QUALITY_SOFT_LOW if soft_shadows else RenderingServer.SHADOW_QUALITY_HARD
-	RenderingServer.directional_soft_shadow_filter_set_quality(shadow_quality)
+	var directional_quality: int = RenderingServer.SHADOW_QUALITY_SOFT_LOW if soft_shadows else RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM
+	RenderingServer.directional_soft_shadow_filter_set_quality(directional_quality)
 	RenderingServer.positional_soft_shadow_filter_set_quality(shadow_quality)
 	_sun.light_angular_distance = 0.3 if soft_shadows else 0.0
 	var viewport := get_viewport()
