@@ -29,6 +29,7 @@ var _player: Node3D
 
 class Chunk:
 	var data := PackedByteArray()
+	var heights := PackedByteArray()
 	var max_y := 0
 	var mask := 0
 	var mesh: MeshInstance3D
@@ -194,7 +195,7 @@ func _collect_jobs() -> void:
 ## are in flight (generator noise set, mesher tables, block registry).
 func _run_chunk_job(chunk_pos: Vector2i, edits: Dictionary, neighbors: ChunkMesher.NeighborSet, slot: Dictionary) -> void:
 	var generated := _generator.generate_data(chunk_pos, edits)
-	slot["result"] = _mesher.build(generated.data, generated.max_y, neighbors)
+	slot["result"] = _mesher.build(generated.data, generated.max_y, generated.heights, neighbors)
 
 
 func _gather_neighbors(pos: Vector2i) -> ChunkMesher.NeighborSet:
@@ -204,7 +205,7 @@ func _gather_neighbors(pos: Vector2i) -> ChunkMesher.NeighborSet:
 		var chunk: Chunk = _chunks.get(pos + direction)
 		if chunk == null:
 			continue
-		out.samples[direction] = ChunkMesher.NeighborSample.new(chunk.data.duplicate(), chunk.max_y)
+		out.samples[direction] = ChunkMesher.NeighborSample.new(chunk.data.duplicate(), chunk.max_y, chunk.heights.duplicate())
 		if index < 4:
 			out.mask |= (1 << index)
 	return out
@@ -216,6 +217,7 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult) -> void:
 		chunk = _create_chunk_nodes(pos)
 		_chunks[pos] = chunk
 	chunk.data = res.data
+	chunk.heights = res.heights
 	chunk.max_y = res.max_y
 	chunk.mask = res.mask
 	chunk.mesh.mesh = ChunkMesher.arrays_to_mesh(res.verts, res.normals, res.uvs, res.colors, res.indices, _blocks.material, res.light)

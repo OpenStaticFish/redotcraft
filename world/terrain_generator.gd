@@ -25,10 +25,12 @@ var _noises: Array = []
 class GenResult:
 	var data: PackedByteArray
 	var max_y: int
+	var heights: PackedByteArray
 
-	func _init(p_data: PackedByteArray, p_max_y: int) -> void:
+	func _init(p_data: PackedByteArray, p_max_y: int, p_heights: PackedByteArray) -> void:
 		data = p_data
 		max_y = p_max_y
+		heights = p_heights
 
 
 func configure(config: Dictionary) -> void:
@@ -111,7 +113,22 @@ func generate_data(chunk_pos: Vector2i, edits: Dictionary) -> GenResult:
 		data[local_x + local_z * VoxelDefs.DATA_STRIDE_Z + block_position.y * VoxelDefs.DATA_STRIDE_Y] = id
 		if id != BlockRegistry.BLOCK_AIR:
 			max_y = maxi(max_y, block_position.y)
-	return GenResult.new(data, max_y)
+	return GenResult.new(data, max_y, _build_heights(data, max_y))
+
+
+## Topmost non-air block per column, used by the mesher to start sky-light
+## propagation without scanning from the top of the world.
+func _build_heights(data: PackedByteArray, max_y: int) -> PackedByteArray:
+	var heights := PackedByteArray()
+	heights.resize(VoxelDefs.CHUNK_AREA)
+	for local_z in VoxelDefs.CHUNK_SIZE:
+		for local_x in VoxelDefs.CHUNK_SIZE:
+			var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
+			for y in range(max_y, -1, -1):
+				if data[column + y * VoxelDefs.DATA_STRIDE_Y] != BlockRegistry.BLOCK_AIR:
+					heights[column] = y
+					break
+	return heights
 
 
 func biome_name(world_position: Vector3) -> String:

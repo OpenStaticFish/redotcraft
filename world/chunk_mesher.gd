@@ -19,6 +19,7 @@ var _emission_b: PackedByteArray = PackedByteArray()
 
 class MeshResult:
 	var data := PackedByteArray()
+	var heights := PackedByteArray()
 	var max_y := 0
 	var mask := 0
 	var verts := PackedVector3Array()
@@ -41,6 +42,7 @@ class LightVolume:
 	var d := 0
 	var h := 0
 	var blocks := PackedByteArray()
+	var heights := PackedByteArray()
 	var sky := PackedByteArray()
 	var block_r := PackedByteArray()
 	var block_g := PackedByteArray()
@@ -50,10 +52,12 @@ class LightVolume:
 class NeighborSample:
 	var data := PackedByteArray()
 	var max_y := 0
+	var heights := PackedByteArray()
 
-	func _init(p_data: PackedByteArray, p_max_y: int) -> void:
+	func _init(p_data: PackedByteArray, p_max_y: int, p_heights: PackedByteArray) -> void:
 		data = p_data
 		max_y = p_max_y
+		heights = p_heights
 
 
 class NeighborSet:
@@ -71,13 +75,14 @@ func _init(blocks: BlockRegistry) -> void:
 
 
 ## Thread-safe: only reads immutable block tables once constructed.
-func build(data: PackedByteArray, data_max_y: int, neighbors: NeighborSet) -> MeshResult:
+func build(data: PackedByteArray, data_max_y: int, heights: PackedByteArray, neighbors: NeighborSet) -> MeshResult:
 	var result := MeshResult.new()
 	result.data = data
+	result.heights = heights
 	result.mask = neighbors.mask
 	var max_y := clampi(data_max_y + 1, 1, VoxelDefs.WORLD_HEIGHT - 2)
 	result.max_y = max_y
-	var light_volume := _assemble_light_volume(data, data_max_y, neighbors)
+	var light_volume := _assemble_light_volume(data, data_max_y, heights, neighbors)
 	_compute_sky_light(light_volume)
 	_compute_block_light(light_volume)
 	result.light_volume = light_volume
@@ -217,12 +222,14 @@ func _build_light_tables() -> void:
 
 ## Assembles a 3x3 chunk footprint of block IDs so light from emitters and sky
 ## openings up to 15 blocks outside the chunk is accounted for.
-func _assemble_light_volume(data: PackedByteArray, data_max_y: int, neighbors: NeighborSet) -> LightVolume:
+func _assemble_light_volume(data: PackedByteArray, data_max_y: int, data_heights: PackedByteArray, neighbors: NeighborSet) -> LightVolume:
 	var volume := LightVolume.new()
 	volume.w = VoxelDefs.CHUNK_SIZE * 3
 	volume.d = VoxelDefs.CHUNK_SIZE * 3
 	var tiles: Array[PackedByteArray] = []
 	tiles.resize(9)
+	var tile_heights: Array[PackedByteArray] = []
+	tile_heights.resize(9)
 	var tile_max := PackedInt32Array()
 	tile_max.resize(9)
 	var max_y := data_max_y
@@ -232,14 +239,29 @@ func _assemble_light_volume(data: PackedByteArray, data_max_y: int, neighbors: N
 			var direction := Vector2i(tile_x - 1, tile_z - 1)
 			if direction == Vector2i.ZERO:
 				tiles[index] = data
+				tile_heights[index] = data_heights
 				tile_max[index] = data_max_y
 			else:
 				var sample := neighbors.get_sample(direction)
 				if sample != null:
 					tiles[index] = sample.data
+					tile_heights[index] = sample.heights
 					tile_max[index] = sample.max_y
 					max_y = maxi(max_y, sample.max_y)
 	volume.h = mini(max_y + 3, VoxelDefs.WORLD_HEIGHT)
+	volume.heights.resize(volume.w * volume.d)
+	volume.heights.fill(volume.h - 1)
+	for tile_z in 3:
+		for tile_x in 3:
+			var index := tile_z * 3 + tile_x
+			var heights := tile_heights[index]
+			if heights.is_empty():
+				continue
+			for local_z in VoxelDefs.CHUNK_SIZE:
+				var destination := (tile_z * VoxelDefs.CHUNK_SIZE + local_z) * volume.w + tile_x * VoxelDefs.CHUNK_SIZE
+				var source := local_z * VoxelDefs.CHUNK_SIZE
+				for local_x in VoxelDefs.CHUNK_SIZE:
+					volume.heights[destination + local_x] = heights[source + local_x]
 	for y in volume.h:
 		for volume_z in volume.d:
 			var local_z := volume_z % VoxelDefs.CHUNK_SIZE
@@ -261,16 +283,21 @@ func _compute_sky_light(volume: LightVolume) -> void:
 	var area := volume.w * volume.d
 	var blocks := volume.blocks
 	var sky := volume.sky
+	var heights := volume.heights
 	var queue := PackedInt32Array()
 	queue.resize(blocks.size() * 2)
 	var head := 0
 	var tail := 0
 	for volume_z in volume.d:
 		for vx in w:
+			var column := volume_z * w + vx
+			var top := mini(int(heights[column]), volume.h - 1)
+			for fill_y in range(top + 1, volume.h):
+				sky[fill_y * area + column] = MAX_LEVEL
 			var level := MAX_LEVEL
-			var y := volume.h - 1
+			var y := top
 			while y >= 0:
-				var index := y * area + volume_z * w + vx
+				var index := y * area + column
 				var attenuation := _opacity[blocks[index]]
 				if attenuation >= MAX_LEVEL:
 					break
@@ -306,6 +333,36 @@ func _compute_sky_light(volume: LightVolume) -> void:
 							queue[tail] = ni
 							tail += 1
 				y -= 1
+			if top + 1 < volume.h:
+				for direction in 4:
+					var nx := vx
+					var nz := volume_z
+					match direction:
+						0:
+							nx -= 1
+						1:
+							nx += 1
+						2:
+							nz -= 1
+						_:
+							nz += 1
+					if nx < 0 or nx >= w or nz < 0 or nz >= volume.d:
+						continue
+					var neighbor_top := mini(int(heights[nz * w + nx]), volume.h)
+					if neighbor_top <= top + 1:
+						continue
+					var seed_level := MAX_LEVEL - 1
+					var neighbor_y := top + 1
+					while neighbor_y < neighbor_top:
+						var ni := neighbor_y * area + nz * w + nx
+						if _opacity[blocks[ni]] >= MAX_LEVEL:
+							break
+						if sky[ni] < seed_level:
+							sky[ni] = seed_level
+							if tail < queue.size():
+								queue[tail] = ni
+								tail += 1
+						neighbor_y += 1
 	while head < tail:
 		var index := queue[head]
 		head += 1
