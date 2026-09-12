@@ -21,6 +21,7 @@ RedotCraft: a Minecraft-like voxel sandbox built with **Redot Engine** (Godot 4 
 
 - `voxel_defs.gd`: CHUNK_SIZE 16, WORLD_HEIGHT 128, SEA_LEVEL 32, collision layer 1, padded-neighbor face/AO tables. Shared by the mesher and clouds.
 - `voxel_world.gd`: streams chunks around the player (default render_distance 10, unload +2). Chunk generation and meshing run on `WorkerThreadPool` threads that may only read immutable state (`BlockRegistry`, `TerrainGenerator`, `ChunkMesher`); only the main thread touches scene nodes. Player edits are kept in `_edited_blocks` and re-applied when chunks regenerate.
+  - Spawning: `TerrainGenerator.find_spawn_position()` only knows terrain height, so `VoxelWorld.find_safe_spawn()` searches outward in the generated chunk data for a column whose topmost block is solid (not leaves) with two air cells above; `Main` calls it after `setup_player()`.
 - `terrain_generator.gd`: FastNoiseLite biomes (plains/forest/desert/snow/swamp), caves, ores, tree stamping. Deterministic per seed, no mutable state after `configure()`.
 - `chunk_mesher.gd`: produces one ArrayMesh per chunk, a separate water mesh, and ConcavePolygonShape3D collision. Face shading, ambient occlusion, and voxel light are baked per vertex. Before meshing, a 3x3-chunk block volume is assembled and flood-filled on the worker thread: a sky column pass + lateral BFS, and an RGB block-light BFS seeded from emissive blocks (run only when emissive blocks are present). Per-vertex light is packed into `ARRAY_CUSTOM0` (`ARRAY_CUSTOM_RGBA_FLOAT`: block RGB + sky level); `world/block.gdshader` multiplies sky light into albedo and adds block light as emission. Any custom-attribute mesh needs the `Mesh.ARRAY_FORMAT_CUSTOM0` flags in `arrays_to_mesh()`, and `world/block.gdshader` replaces the old StandardMaterial3D.
 - `block_registry.gd`: block table `BLOCK_DEFS` rows `[id, name, top, side, bottom, flags]`, packed into a runtime texture atlas (8 columns, 64px tiles, 2px UV inset).
@@ -29,6 +30,11 @@ RedotCraft: a Minecraft-like voxel sandbox built with **Redot Engine** (Godot 4 
   - Cross blocks (torches, plants): `FLAG_CROSS` meshes two intersecting inset quads instead of a cube, samples the cell's light without AO, and adds no collision. Torches combine `FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE`.
   - IDs are stored in `PackedByteArray`, so stay under 256. `TEXTURE_TINTS` applies per-texture tinting (grass, leaves, sand, ...).
 - Water: non-opaque, non-breakable, no collision; meshed as its own surface. `VoxelWorld.is_water_at()` drives the HUD underwater overlay.
+
+## Weather / atmosphere
+
+- `world/weather_system.gd` toggles `SUNNY`/`RAIN`; the toggle button is in `ui/inventory_overlay.tscn` (signal `weather_toggled` -> `Main`). Rain particles follow the camera and stop when a raycast finds cover.
+- `DayNightCycle.set_weather_dim(0..1)` owns the grading (sun/ambient energy, fog density, sky shader colors, cloud tint); `Main._apply_graphics()` sets `DayNightCycle.base_fog_density` so rain fog stacks on the preset value.
 
 ## Player / HUD contract
 

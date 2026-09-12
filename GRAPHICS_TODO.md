@@ -27,8 +27,8 @@ Tick items as they land. Property names are included so each item is easy to fin
 ## Sky / atmosphere
 - [x] Custom sky shader (`shader_type sky`) — procedural stars + moon phases (8 in-game day lunar cycle, moon tied to the anti-sun direction)
 - [ ] Milky way band + twinkle in the sky shader
-- [ ] Weather particles — `GPUParticles3D` rain/snow/mist per biome, camera-following
-- [ ] Volumetric mist — swamp-biome volumetric fog boost
+- [x] Weather system — sunny/rain toggle button in the inventory overlay; rain is a camera-following billboarded `GPUParticles3D` field that pauses when under cover, and `DayNightCycle.set_weather_dim()` grades sun/ambient/fog/sky/clouds toward overcast
+- [ ] Snow and swamp mist per biome, plus weather ambience (sound)
 
 ## Geometry / materials
 - [ ] `Texture2DArray` instead of the block atlas — removes UV/mip bleeding at distance

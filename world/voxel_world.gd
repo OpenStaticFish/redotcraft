@@ -2,6 +2,7 @@ class_name VoxelWorld
 extends Node3D
 
 const SPAWN_RADIUS := 1
+const SPAWN_SEARCH_RADIUS := 12
 const MAX_ACTIVE_JOBS := 12
 const COMMIT_BUDGET_MS := 5
 const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4]
@@ -375,6 +376,39 @@ func _touch_chunk(chunk_position: Vector2i, block_position: Vector3i) -> void:
 
 func get_spawn_position() -> Vector3:
 	return _generator.find_spawn_position()
+
+
+## Returns the closest column to `desired` whose topmost block is a solid,
+## non-foliage block with two air cells above it. Requires the spawn-area
+## chunks to be generated; falls back to `desired` when nothing is found.
+func find_safe_spawn(desired: Vector3) -> Vector3:
+	var base_x := floori(desired.x)
+	var base_z := floori(desired.z)
+	var scan_top := mini(floori(desired.y) + 20, VoxelDefs.WORLD_HEIGHT - 3)
+	for radius in range(0, SPAWN_SEARCH_RADIUS + 1):
+		for dx in range(-radius, radius + 1):
+			for dz in range(-radius, radius + 1):
+				if maxi(absi(dx), absi(dz)) != radius:
+					continue
+				var ground_y := _find_column_spawn(base_x + dx, base_z + dz, scan_top)
+				if ground_y >= 0:
+					return Vector3(float(base_x + dx) + 0.5, float(ground_y) + 1.5, float(base_z + dz) + 0.5)
+	return desired
+
+
+func _find_column_spawn(block_x: int, block_z: int, scan_top: int) -> int:
+	for y in range(scan_top, 0, -1):
+		var id := get_block_world(Vector3i(block_x, y, block_z))
+		if id == BlockRegistry.BLOCK_AIR:
+			continue
+		if not _blocks.is_opaque(id):
+			return -1
+		if get_block_world(Vector3i(block_x, y + 1, block_z)) != BlockRegistry.BLOCK_AIR:
+			return -1
+		if get_block_world(Vector3i(block_x, y + 2, block_z)) != BlockRegistry.BLOCK_AIR:
+			return -1
+		return y
+	return -1
 
 
 func get_block_name(block_id: int) -> String:

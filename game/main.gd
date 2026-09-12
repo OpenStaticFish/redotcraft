@@ -21,6 +21,7 @@ const SLOT_GAP := 6.0
 @onready var _status_label: Label = $HUD/HudRoot/StatusLabel
 @onready var _hotbar: Panel = $HUD/HudRoot/Hotbar
 @onready var _day_night: DayNightCycle = $DayNight
+@onready var _weather: WeatherSystem = $Weather
 @onready var _inventory_overlay: InventoryOverlay = $InventoryOverlay
 
 var slot_panels: Array[PanelContainer] = []
@@ -45,7 +46,14 @@ func _ready() -> void:
 	player.global_position = spawn
 	player.spawn_position = spawn
 	world.setup_player(player)
+	spawn = world.find_safe_spawn(spawn)
+	player.global_position = spawn
+	player.spawn_position = spawn
+	player.spawn_position = spawn
 	player.setup_world(world)
+	_weather.setup(player.camera, _day_night)
+	_weather.weather_changed.connect(_on_weather_changed)
+	_inventory_overlay.weather_toggled.connect(_on_weather_toggled)
 	player.set_selected_block(HOTBAR[selected_slot])
 	_update_inventory_display()
 	set_status("WASD move   double-tap SPACE to fly   ESC pause")
@@ -85,6 +93,7 @@ func _apply_graphics() -> void:
 	_environment.volumetric_fog_length = float(graphics["volumetric_fog_length"])
 	_environment.volumetric_fog_anisotropy = float(graphics["volumetric_fog_anisotropy"])
 	_environment.fog_density = float(graphics["fog_density"])
+	_day_night.base_fog_density = float(graphics["fog_density"])
 	_environment.glow_intensity = float(graphics["glow_intensity"])
 	_environment.tonemap_mode = int(graphics["tonemap"])
 	_environment.tonemap_exposure = float(graphics["tonemap_exposure"])
@@ -173,6 +182,7 @@ func activate_pause() -> void:
 
 func _on_inventory_opened() -> void:
 	_inventory_overlay.show_inventory(inventory, world)
+	_inventory_overlay.set_weather_state(_weather.is_raining())
 	get_tree().paused = true
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 
@@ -185,6 +195,15 @@ func _on_inventory_closed() -> void:
 func _on_inventory_time_selected(hours: float) -> void:
 	_day_night.set_time(hours)
 	set_status("Time set to %s" % _day_night.get_clock_text())
+
+
+func _on_weather_toggled() -> void:
+	_weather.toggle()
+	_inventory_overlay.set_weather_state(_weather.is_raining())
+
+
+func _on_weather_changed(state: int) -> void:
+	set_status("Weather: %s" % ("Rain" if state == WeatherSystem.State.RAIN else "Sunny"))
 
 
 func _on_setting_changed(key: String, value: Variant) -> void:

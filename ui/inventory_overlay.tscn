@@ -60,6 +60,16 @@ layout_mode = 2
 custom_minimum_size = Vector2(130, 36)
 text = "Night"
 
+[node name="WeatherRow" type="HBoxContainer" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="WeatherButton" type="Button" parent="Center/Panel/Box/WeatherRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(220, 36)
+text = "Weather: Sunny"
+
 [node name="Grid" type="GridContainer" parent="Center/Panel/Box"]
 layout_mode = 2
 theme_override_constants/h_separation = 10

@@ -4,6 +4,7 @@ extends CanvasLayer
 signal opened
 signal closed
 signal time_selected(hours: float)
+signal weather_toggled
 
 const TIME_BUTTONS := [
 	{"node": "MorningButton", "hours": 6.0},
@@ -15,6 +16,7 @@ const TIME_BUTTONS := [
 @onready var _panel: PanelContainer = $Center/Panel
 @onready var _time_row: HBoxContainer = $Center/Panel/Box/TimeRow
 @onready var _grid: GridContainer = $Center/Panel/Box/Grid
+@onready var _weather_button: Button = $Center/Panel/Box/WeatherRow/WeatherButton
 
 
 func _ready() -> void:
@@ -22,6 +24,7 @@ func _ready() -> void:
 	for entry in TIME_BUTTONS:
 		var button := _time_row.get_node(entry["node"]) as Button
 		button.pressed.connect(_on_time_button.bind(entry["hours"]))
+	_weather_button.pressed.connect(_on_weather_button)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -62,5 +65,13 @@ func show_inventory(inventory_data: Dictionary, world_ref: VoxelWorld) -> void:
 		slot.add_child(label)
 
 
+func set_weather_state(raining: bool) -> void:
+	_weather_button.text = "Weather: Rain" if raining else "Weather: Sunny"
+
+
 func _on_time_button(hours: float) -> void:
 	time_selected.emit(hours)
+
+
+func _on_weather_button() -> void:
+	weather_toggled.emit()
