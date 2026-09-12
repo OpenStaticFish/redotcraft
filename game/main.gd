@@ -49,7 +49,6 @@ func _ready() -> void:
 	spawn = world.find_safe_spawn(spawn)
 	player.global_position = spawn
 	player.spawn_position = spawn
-	player.spawn_position = spawn
 	player.setup_world(world)
 	_weather.setup(player.camera, _day_night)
 	_weather.weather_changed.connect(_on_weather_changed)
@@ -100,6 +99,8 @@ func _apply_graphics() -> void:
 	_environment.adjustment_enabled = true
 	_environment.adjustment_saturation = float(graphics["saturation"])
 	_environment.adjustment_contrast = float(graphics["contrast"])
+	_day_night.base_saturation = float(graphics["saturation"])
+	_day_night.base_contrast = float(graphics["contrast"])
 	_sun.directional_shadow_max_distance = float(graphics["shadow_max_distance"])
 	_sun.shadow_opacity = float(graphics["shadow_opacity"])
 	_sun.shadow_blur = float(graphics["shadow_blur"])

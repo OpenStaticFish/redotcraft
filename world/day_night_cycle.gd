@@ -34,7 +34,9 @@ const GROUND_HORIZON_SUNSET := Color(0.55, 0.3, 0.2)
 const GROUND_BOTTOM_DAY := Color(0.35, 0.52, 0.82)
 const GROUND_BOTTOM_NIGHT := Color(0.01, 0.015, 0.04)
 const GLOW_THRESHOLD_DAY := 1.15
-const GLOW_THRESHOLD_NIGHT := 0.9
+const GLOW_THRESHOLD_NIGHT := 1.05
+const NIGHT_SATURATION := 0.78
+const NIGHT_CONTRAST := 0.96
 const RAIN_CLOUD_DAY := Color(0.3, 0.33, 0.4)
 const RAIN_CLOUD_NIGHT := Color(0.07, 0.08, 0.11)
 const RAIN_SKY_TOP_DAY := Color(0.27, 0.3, 0.37)
@@ -69,6 +71,8 @@ const RAIN_AMBIENT_FACTOR := 0.7
 var time_hours := 0.0
 var weather_dim := 0.0
 var base_fog_density := 0.006
+var base_saturation := 1.08
+var base_contrast := 1.04
 var _sky_material: ShaderMaterial
 var _moon_phase := 0.5
 
@@ -129,6 +133,9 @@ func _apply() -> void:
 	environment.fog_light_color = FOG_DAY_COLOR.lerp(FOG_NIGHT_COLOR, night_amount).lerp(RAIN_FOG_NIGHT.lerp(RAIN_FOG_DAY, day_factor), weather_dim)
 	environment.fog_density = base_fog_density + RAIN_FOG_ADD * weather_dim
 	environment.glow_hdr_threshold = lerpf(GLOW_THRESHOLD_NIGHT, GLOW_THRESHOLD_DAY, day_factor)
+	environment.adjustment_enabled = true
+	environment.adjustment_saturation = base_saturation * lerpf(NIGHT_SATURATION, 1.0, day_factor)
+	environment.adjustment_contrast = base_contrast * lerpf(NIGHT_CONTRAST, 1.0, day_factor)
 	if _clouds:
 		var cloud_tint := CLOUD_DAY_TINT.lerp(CLOUD_NIGHT_TINT, night_amount)
 		_clouds.set_sky_tint(cloud_tint.lerp(RAIN_CLOUD_NIGHT.lerp(RAIN_CLOUD_DAY, day_factor), weather_dim))
