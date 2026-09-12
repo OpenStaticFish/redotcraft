@@ -11,6 +11,7 @@ uniform float alpha_base = 0.8;
 
 varying vec2 world_xz;
 varying float face_up;
+varying vec4 light_data;
 
 vec4 perm(vec4 x) {
 	return mod(((x * 34.0) + 1.0) * x, 289.0);
@@ -66,6 +67,7 @@ vec2 wave_noise(vec3 p, float off) {
 }
 
 void vertex() {
+	light_data = CUSTOM0;
 	world_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
 	face_up = step(0.5, NORMAL.y);
 	vec3 wave_pos = vec3(world_xz.x / 24.0, 0.0, world_xz.y / 16.0 + TIME * wave_speed);
@@ -86,8 +88,11 @@ void fragment() {
 
 	float ndv = clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0);
 	float fresnel = pow(1.0 - ndv, 5.0);
-	ALBEDO = color + sky_reflection * fresnel * 0.12;
+	vec3 block_light = light_data.rgb;
+	vec3 light_mask = max(block_light + vec3(light_data.a), vec3(0.05));
+	ALBEDO = (color + sky_reflection * fresnel * 0.12) * light_mask;
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.0;
 	ALPHA = clamp(alpha_base + fresnel * 0.08, 0.0, 1.0);
+	EMISSION = color * block_light * 0.5;
 }

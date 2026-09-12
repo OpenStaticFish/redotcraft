@@ -220,8 +220,8 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult) -> void:
 	chunk.heights = res.heights
 	chunk.max_y = res.max_y
 	chunk.mask = res.mask
-	chunk.mesh.mesh = ChunkMesher.arrays_to_mesh(res.verts, res.normals, res.uvs, res.colors, res.indices, _blocks.material, res.light)
-	chunk.water.mesh = ChunkMesher.arrays_to_mesh(res.water_verts, res.water_normals, res.water_uvs, res.water_colors, res.water_indices, _blocks.water_material)
+	chunk.mesh.mesh = ChunkMesher.arrays_to_mesh(res.verts, res.normals, res.uvs, res.colors, res.indices, _blocks.material, res.light, res.layers)
+	chunk.water.mesh = ChunkMesher.arrays_to_mesh(res.water_verts, res.water_normals, res.water_uvs, res.water_colors, res.water_indices, _blocks.water_material, res.water_light)
 	if res.collision.is_empty():
 		chunk.shape.shape = null
 	else:

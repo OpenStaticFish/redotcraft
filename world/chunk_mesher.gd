@@ -27,12 +27,14 @@ class MeshResult:
 	var uvs := PackedVector2Array()
 	var colors := PackedColorArray()
 	var light := PackedFloat32Array()
+	var layers := PackedFloat32Array()
 	var indices := PackedInt32Array()
 	var collision := PackedVector3Array()
 	var water_verts := PackedVector3Array()
 	var water_normals := PackedVector3Array()
 	var water_uvs := PackedVector2Array()
 	var water_colors := PackedColorArray()
+	var water_light := PackedFloat32Array()
 	var water_indices := PackedInt32Array()
 	var light_volume: LightVolume
 
@@ -158,17 +160,17 @@ func make_block_mesh(block_id: int) -> ArrayMesh:
 	if _blocks.has_flag(block_id, BlockRegistry.FLAG_CROSS):
 		var cross := MeshResult.new()
 		_append_cross_block(Vector3(-0.5, -0.5, -0.5), block_id, Color.BLACK, 1.0, cross)
-		return arrays_to_mesh(cross.verts, cross.normals, cross.uvs, cross.colors, cross.indices, _blocks.material, cross.light)
+		return arrays_to_mesh(cross.verts, cross.normals, cross.uvs, cross.colors, cross.indices, _blocks.material, cross.light, cross.layers)
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var uvs := PackedVector2Array()
 	var colors := PackedColorArray()
 	var light := PackedFloat32Array()
+	var layers := PackedFloat32Array()
 	var indices := PackedInt32Array()
 	for face in 6:
 		var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
-		var tile := _blocks.tile_for(block_id, face)
-		var uv_origin := _blocks.tile_uv_origin(tile)
+		var layer := _blocks.layer_for(block_id, face)
 		var base := verts.size()
 		var face_verts: Array = VoxelDefs.FACE_VERTS[face]
 		var face_uvs: Array = VoxelDefs.FACE_UVS[face]
@@ -177,15 +179,15 @@ func make_block_mesh(block_id: int) -> ArrayMesh:
 			var offset: Vector3i = face_verts[corner]
 			verts.append(Vector3(offset.x, offset.y, offset.z) - Vector3(0.5, 0.5, 0.5))
 			normals.append(Vector3(normal))
-			var uv: Vector2 = face_uvs[corner]
-			uvs.append(uv_origin + Vector2(uv.x * _blocks.tile_uv_size.x, uv.y * _blocks.tile_uv_size.y))
+			uvs.append(face_uvs[corner])
 			colors.append(Color(shade, shade, shade, 1.0))
 			light.append_array(PackedFloat32Array([0.0, 0.0, 0.0, 1.0]))
+			layers.push_back(float(layer))
 		indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
-	return arrays_to_mesh(verts, normals, uvs, colors, indices, _blocks.material, light)
+	return arrays_to_mesh(verts, normals, uvs, colors, indices, _blocks.material, light, layers)
 
 
-static func arrays_to_mesh(verts: PackedVector3Array, normals: PackedVector3Array, uvs: PackedVector2Array, colors: PackedColorArray, indices: PackedInt32Array, material: Material, light := PackedFloat32Array()) -> ArrayMesh:
+static func arrays_to_mesh(verts: PackedVector3Array, normals: PackedVector3Array, uvs: PackedVector2Array, colors: PackedColorArray, indices: PackedInt32Array, material: Material, light := PackedFloat32Array(), layers := PackedFloat32Array()) -> ArrayMesh:
 	if verts.is_empty():
 		return null
 	var arrays: Array = []
@@ -199,6 +201,9 @@ static func arrays_to_mesh(verts: PackedVector3Array, normals: PackedVector3Arra
 	if not light.is_empty():
 		arrays[Mesh.ARRAY_CUSTOM0] = light
 		flags = Mesh.ARRAY_FORMAT_CUSTOM0 | (Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
+	if not layers.is_empty():
+		arrays[Mesh.ARRAY_CUSTOM1] = layers
+		flags |= Mesh.ARRAY_FORMAT_CUSTOM1 | (Mesh.ARRAY_CUSTOM_R_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM1_SHIFT)
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, flags)
 	mesh.surface_set_material(0, material)
@@ -579,8 +584,7 @@ func _build_ao_offsets() -> void:
 func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int, block_id: int, padded: PackedByteArray, result: MeshResult) -> void:
 	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
 	var shade: float = VoxelDefs.FACE_SHADE[face]
-	var tile := _blocks.tile_for(block_id, face)
-	var uv_origin := _blocks.tile_uv_origin(tile)
+	var layer := _blocks.layer_for(block_id, face)
 	var base := result.verts.size()
 	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
 	var face_uvs: Array = VoxelDefs.FACE_UVS[face]
@@ -597,8 +601,8 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 		var position := Vector3(local_x + offset.x, y + offset.y, local_z + offset.z)
 		result.verts.append(position)
 		result.normals.append(Vector3(normal))
-		var uv: Vector2 = face_uvs[corner]
-		result.uvs.append(uv_origin + Vector2(uv.x * _blocks.tile_uv_size.x, uv.y * _blocks.tile_uv_size.y))
+		result.uvs.append(face_uvs[corner])
+		result.layers.push_back(float(layer))
 		var occlusion := 0
 		var light_count := 0
 		var sky_sum := 0
@@ -647,9 +651,7 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 
 
 func _append_cross_block(origin: Vector3, block_id: int, block_light: Color, sky_light: float, result: MeshResult) -> void:
-	var tile := _blocks.tile_for(block_id, 2)
-	var uv_origin := _blocks.tile_uv_origin(tile)
-	var tile_size := _blocks.tile_uv_size
+	var layer := _blocks.layer_for(block_id, 2)
 	var shade := 0.96
 	for plane in CROSS_PLANES:
 		var base := result.verts.size()
@@ -657,9 +659,9 @@ func _append_cross_block(origin: Vector3, block_id: int, block_light: Color, sky
 			var offset: Vector3 = plane[corner]
 			result.verts.append(origin + offset)
 			result.normals.append(Vector3.UP)
-			var uv: Vector2 = CROSS_UVS[corner]
-			result.uvs.append(uv_origin + Vector2(uv.x * tile_size.x, uv.y * tile_size.y))
+			result.uvs.append(CROSS_UVS[corner])
 			result.colors.append(Color(shade, shade, shade, 1.0))
+			result.layers.push_back(float(layer))
 			result.light.push_back(block_light.r)
 			result.light.push_back(block_light.g)
 			result.light.push_back(block_light.b)
@@ -711,4 +713,47 @@ func _append_water_face(face: int, local_x: int, y: int, local_z: int, top: floa
 		result.water_normals.append(Vector3(normal))
 		result.water_uvs.append(Vector2(local_x + offset.x, local_z + offset.z))
 		result.water_colors.append(Color(shade, shade, shade, 1.0))
+		var light := _sample_water_light(result.light_volume, local_x, y, local_z, face, corner)
+		result.water_light.push_back(light.r)
+		result.water_light.push_back(light.g)
+		result.water_light.push_back(light.b)
+		result.water_light.push_back(light.a)
 	result.water_indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
+
+
+func _sample_water_light(volume: LightVolume, local_x: int, y: int, local_z: int, face: int, corner: int) -> Color:
+	var block_light_active := not volume.block_r.is_empty()
+	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
+	var sky_sum := 0
+	var r_sum := 0
+	var g_sum := 0
+	var b_sum := 0
+	var count := 0
+	var front_y := y + normal.y
+	if front_y >= 0 and front_y < volume.h:
+		var index := (front_y * volume.d + local_z + LIGHT_PAD + normal.z) * volume.w + local_x + LIGHT_PAD + normal.x
+		sky_sum += int(volume.sky[index])
+		count += 1
+		if block_light_active:
+			r_sum += int(volume.block_r[index])
+			g_sum += int(volume.block_g[index])
+			b_sum += int(volume.block_b[index])
+	var samples: Array = _face_ao_offsets[face][corner]
+	for sample in samples:
+		var offset: Vector3i = sample
+		var sample_x := local_x + LIGHT_PAD + offset.x
+		var sample_y := y + offset.y
+		var sample_z := local_z + LIGHT_PAD + offset.z
+		if sample_x < 0 or sample_x >= volume.w or sample_z < 0 or sample_z >= volume.d or sample_y < 0 or sample_y >= volume.h:
+			continue
+		var index := (sample_y * volume.d + sample_z) * volume.w + sample_x
+		if _blocks.is_opaque(volume.blocks[index]):
+			continue
+		sky_sum += int(volume.sky[index])
+		count += 1
+		if block_light_active:
+			r_sum += int(volume.block_r[index])
+			g_sum += int(volume.block_g[index])
+			b_sum += int(volume.block_b[index])
+	var inverse := 1.0 / (float(maxi(count, 1)) * float(MAX_LEVEL))
+	return Color(float(r_sum) * inverse, float(g_sum) * inverse, float(b_sum) * inverse, float(sky_sum) * inverse)

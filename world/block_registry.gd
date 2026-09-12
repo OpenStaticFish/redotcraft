@@ -73,8 +73,6 @@ const WATER_TEXTURE_PATH := TEXTURE_ROOT + "water.png"
 const WATER_SHADER_PATH := "res://assets/placeholders/zigcraft/water.gdshader"
 const BLOCK_SHADER_PATH := "res://world/block.gdshader"
 const TILE_PX := 64
-const ATLAS_COLUMNS := 8
-const UV_INSET := 2.0
 const MAX_LIGHT_LEVEL := 15
 const EMISSIVE_COLORS := {
 	BLOCK_GLOWSTONE: Color(1.0, 0.78, 0.52),
@@ -94,19 +92,18 @@ const TEXTURE_TINTS := {
 
 var material: Material
 var water_material: Material
-var tile_uv_size := Vector2.ZERO
+var texture_array: Texture2DArray
 
 var _flags: PackedByteArray = PackedByteArray()
 var _opaque: PackedByteArray = PackedByteArray()
-var _tile_top: PackedInt32Array = PackedInt32Array()
-var _tile_side: PackedInt32Array = PackedInt32Array()
-var _tile_bottom: PackedInt32Array = PackedInt32Array()
+var _layer_top: PackedInt32Array = PackedInt32Array()
+var _layer_side: PackedInt32Array = PackedInt32Array()
+var _layer_bottom: PackedInt32Array = PackedInt32Array()
 var _names: PackedStringArray = PackedStringArray()
-var _tile_uv_origin: PackedVector2Array = PackedVector2Array()
 
 
 func _init() -> void:
-	var tile_lookup := _build_atlas()
+	var tile_lookup := _build_texture_array()
 	_build_block_tables(tile_lookup)
 	_load_water_material()
 
@@ -155,68 +152,53 @@ func is_emissive(block_id: int) -> bool:
 	return (has_flag(block_id, FLAG_EMISSIVE) or EMISSIVE_COLORS.has(block_id)) and is_valid_id(block_id)
 
 
-func tile_for(block_id: int, face: int) -> int:
+func layer_for(block_id: int, face: int) -> int:
 	if face == 0:
-		return _tile_top[block_id]
+		return _layer_top[block_id]
 	if face == 1:
-		return _tile_bottom[block_id]
-	return _tile_side[block_id]
+		return _layer_bottom[block_id]
+	return _layer_side[block_id]
 
 
-func tile_uv_origin(tile: int) -> Vector2:
-	return _tile_uv_origin[tile]
-
-
-func _build_atlas() -> Dictionary:
+func _build_texture_array() -> Dictionary:
 	var texture_names: PackedStringArray = PackedStringArray()
 	for def in BLOCK_DEFS:
 		for index in range(2, 5):
 			var name: String = def[index]
 			if name != "" and not texture_names.has(name):
 				texture_names.append(name)
-	var rows := int(ceil(float(texture_names.size()) / float(ATLAS_COLUMNS)))
-	var atlas := Image.create(ATLAS_COLUMNS * TILE_PX, rows * TILE_PX, false, Image.FORMAT_RGBA8)
+	var images: Array[Image] = []
 	var tile_lookup := {}
 	for index in texture_names.size():
 		var texture_name := texture_names[index]
 		var image := _load_image(TEXTURE_ROOT + texture_name)
-		var column := index % ATLAS_COLUMNS
-		var row := floori(float(index) / float(ATLAS_COLUMNS))
-		var destination := Vector2i(column * TILE_PX, row * TILE_PX)
-		atlas.blit_rect(image, Rect2i(0, 0, TILE_PX, TILE_PX), destination)
+		if image.get_width() != TILE_PX or image.get_height() != TILE_PX:
+			image.resize(TILE_PX, TILE_PX, Image.INTERPOLATE_NEAREST)
 		if TEXTURE_TINTS.has(texture_name):
-			_tint_atlas_region(atlas, destination, TEXTURE_TINTS[texture_name])
+			_tint_image(image, TEXTURE_TINTS[texture_name])
+		image.fix_alpha_edges()
+		image.generate_mipmaps()
+		images.append(image)
 		tile_lookup[texture_name] = index
-	atlas.fix_alpha_edges()
-	atlas.generate_mipmaps()
-	var atlas_texture := ImageTexture.create_from_image(atlas)
-	_build_material(atlas_texture)
-	var total_tiles := texture_names.size()
-	_tile_uv_origin.resize(total_tiles)
-	tile_uv_size = Vector2(
-		float(TILE_PX - UV_INSET * 2.0) / float(atlas.get_width()),
-		float(TILE_PX - UV_INSET * 2.0) / float(atlas.get_height())
-	)
-	for index in total_tiles:
-		var column := index % ATLAS_COLUMNS
-		var row := floori(float(index) / float(ATLAS_COLUMNS))
-		_tile_uv_origin[index] = Vector2(
-			(float(column * TILE_PX) + UV_INSET) / float(atlas.get_width()),
-			(float(row * TILE_PX) + UV_INSET) / float(atlas.get_height())
-		)
+	texture_array = Texture2DArray.new()
+	texture_array.create_from_images(images)
+	_build_material(texture_array, images[0] if not images.is_empty() else null)
 	return tile_lookup
 
 
-func _build_material(atlas_texture: Texture2D) -> void:
+func _build_material(array_texture: Texture2DArray, fallback_image: Image) -> void:
 	var shader := load(BLOCK_SHADER_PATH) as Shader
 	if shader:
 		var shader_material := ShaderMaterial.new()
 		shader_material.shader = shader
-		shader_material.set_shader_parameter("albedo_texture", atlas_texture)
+		shader_material.set_shader_parameter("albedo_texture", array_texture)
 		material = shader_material
 		return
+	var fallback_texture: Texture2D = null
+	if fallback_image != null:
+		fallback_texture = ImageTexture.create_from_image(fallback_image)
 	material = StandardMaterial3D.new()
-	material.albedo_texture = atlas_texture
+	material.albedo_texture = fallback_texture
 	material.albedo_color = Color.WHITE
 	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
@@ -242,29 +224,29 @@ func _load_image(path: String) -> Image:
 	return image
 
 
-func _tint_atlas_region(atlas: Image, origin: Vector2i, tint: Color) -> void:
-	for y in TILE_PX:
-		for x in TILE_PX:
-			var pixel := atlas.get_pixel(origin.x + x, origin.y + y)
-			atlas.set_pixel(origin.x + x, origin.y + y, Color(pixel.r * tint.r, pixel.g * tint.g, pixel.b * tint.b, pixel.a))
+func _tint_image(image: Image, tint: Color) -> void:
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			image.set_pixel(x, y, Color(pixel.r * tint.r, pixel.g * tint.g, pixel.b * tint.b, pixel.a))
 
 
 func _build_block_tables(tile_lookup: Dictionary) -> void:
 	var max_id := BLOCK_DEFS.size()
 	_flags.resize(max_id)
 	_opaque.resize(max_id)
-	_tile_top.resize(max_id)
-	_tile_side.resize(max_id)
-	_tile_bottom.resize(max_id)
+	_layer_top.resize(max_id)
+	_layer_side.resize(max_id)
+	_layer_bottom.resize(max_id)
 	_names.resize(max_id)
 	for def in BLOCK_DEFS:
 		var id: int = def[0]
 		_names[id] = def[1]
 		_flags[id] = def[5]
 		_opaque[id] = 1 if (int(def[5]) & FLAG_OPAQUE) != 0 else 0
-		_tile_top[id] = tile_lookup.get(def[2], 0)
-		_tile_side[id] = tile_lookup.get(def[3], 0)
-		_tile_bottom[id] = tile_lookup.get(def[4], 0)
+		_layer_top[id] = tile_lookup.get(def[2], 0)
+		_layer_side[id] = tile_lookup.get(def[3], 0)
+		_layer_bottom[id] = tile_lookup.get(def[4], 0)
 
 
 func _load_water_material() -> void:
