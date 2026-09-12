@@ -2,10 +2,12 @@ class_name Main
 extends Node3D
 
 const PauseMenuScene := preload("res://ui/pause_menu.tscn")
+const ShadowCaptureScript := preload("res://game/shadow_capture.gd")
 
 const HOTBAR: Array[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 27]
 const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32, 27: 32}
 const STATS_INTERVAL := 0.25
+const NEAR_SHADOW_DISTANCE := 6.0
 const SLOT_WIDTH := 92.0
 const SLOT_HEIGHT := 64.0
 const SLOT_GAP := 6.0
@@ -56,6 +58,43 @@ func _ready() -> void:
 	player.set_selected_block(HOTBAR[selected_slot])
 	_update_inventory_display()
 	set_status("WASD move   double-tap SPACE to fly   ESC pause")
+	var shadow_capture := ShadowCaptureScript.new()
+	shadow_capture.name = "ShadowCapture"
+	shadow_capture.state_provider = _get_shadow_capture_state
+	shadow_capture.status_requested.connect(set_status)
+	add_child(shadow_capture)
+
+
+func _get_shadow_capture_state() -> Dictionary:
+	var viewport := get_viewport()
+	return {
+		"engine": Engine.get_version_info(),
+		"world": GameConfig.world.duplicate(true),
+		"edited_blocks": world.get("_edited_blocks").duplicate(),
+		"paused": get_tree().paused,
+		"camera_transform": str(player.camera.global_transform),
+		"camera_fov": player.camera.fov,
+		"camera_far": player.camera.far,
+		"sun_transform": str(_sun.global_transform),
+		"sun_processing": _sun.can_process(),
+		"day_night_processing": _day_night.can_process(),
+		"time_hours": _day_night.time_hours,
+		"shadow_enabled": _sun.shadow_enabled,
+		"shadow_opacity": _sun.shadow_opacity,
+		"shadow_blur": _sun.shadow_blur,
+		"shadow_distance": _sun.directional_shadow_max_distance,
+		"light_angular_distance": _sun.light_angular_distance,
+		"taa": viewport.use_taa,
+		"msaa": viewport.msaa_3d,
+		"scaling_mode": viewport.scaling_3d_mode,
+		"scaling_scale": viewport.scaling_3d_scale,
+		"viewport_size": str(viewport.get_visible_rect().size),
+		"ssao": _environment.ssao_enabled,
+		"ssil": _environment.ssil_enabled,
+		"ssr": _environment.ssr_enabled,
+		"volumetric_fog": _environment.volumetric_fog_enabled,
+		"graphics_config": GameConfig.get_graphics().duplicate(true),
+	}
 
 
 func _exit_tree() -> void:
@@ -102,6 +141,12 @@ func _apply_graphics() -> void:
 	_day_night.base_saturation = float(graphics["saturation"])
 	_day_night.base_contrast = float(graphics["contrast"])
 	_sun.directional_shadow_max_distance = float(graphics["shadow_max_distance"])
+	# Reserve the first cascade for nearby blocks instead of spreading it over
+	# 10% of the full shadow range, which makes shadow texels visibly crawl.
+	var near_split := minf(NEAR_SHADOW_DISTANCE / maxf(_sun.directional_shadow_max_distance, 1.0), 0.1)
+	_sun.directional_shadow_split_1 = near_split
+	_sun.directional_shadow_split_2 = maxf(near_split * 2.0, 0.1)
+	_sun.directional_shadow_split_3 = maxf(_sun.directional_shadow_split_2 * 2.0, 0.3)
 	_sun.shadow_opacity = float(graphics["shadow_opacity"])
 	_sun.shadow_blur = float(graphics["shadow_blur"])
 	var soft_shadows := bool(graphics["soft_shadows"])
