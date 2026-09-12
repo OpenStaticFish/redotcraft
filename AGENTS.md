@@ -36,6 +36,7 @@ RedotCraft: a Minecraft-like voxel sandbox built with **Redot Engine** (Godot 4 
 - `world/weather_system.gd` toggles `SUNNY`/`RAIN`; the toggle button is in `ui/inventory_overlay.tscn` (signal `weather_toggled` -> `Main`). Rain particles follow the camera and stop when a raycast finds cover.
 - `DayNightCycle.set_weather_dim(0..1)` owns the grading (sun/ambient energy, fog density, sky shader colors, cloud tint); `Main._apply_graphics()` sets `DayNightCycle.base_fog_density` so rain fog stacks on the preset value.
 - `DayNightCycle` also owns the time-of-day colour grade: it scales `adjustment_saturation`/`adjustment_contrast` down at night (`base_saturation`/`base_contrast` come from the graphics preset) and animates `glow_hdr_threshold`.
+- `world/sky.gdshader` draws stars, the milky way band, and the phased moon (`moon_phase` uniform, 8 in-game day lunar cycle); `DayNightCycle` feeds it colors and `star_intensity` (0 during the day).
 
 ## Player / HUD contract
 

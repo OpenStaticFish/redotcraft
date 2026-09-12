@@ -11,6 +11,9 @@ uniform float sun_curve : hint_range(0.0, 1.0) = 0.02;
 uniform float sun_brightness : hint_range(0.0, 10.0) = 2.5;
 uniform float star_intensity : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 star_color : source_color = vec3(0.85, 0.9, 1.0);
+uniform float star_twinkle : hint_range(0.0, 1.0) = 0.35;
+uniform vec3 milky_way_color : source_color = vec3(0.52, 0.57, 0.72);
+uniform float milky_way_intensity : hint_range(0.0, 2.0) = 0.1;
 uniform float moon_phase : hint_range(0.0, 1.0) = 0.5;
 uniform float moon_radius : hint_range(0.005, 0.1) = 0.038;
 uniform vec3 moon_color : source_color = vec3(0.85, 0.88, 1.0);
@@ -38,7 +41,49 @@ float star_layer(vec3 dir, float scale, float threshold, float size_scale) {
 	float d = length(offset - (0.2 + rnd * 0.6));
 	float size = mix(0.05, 0.16, rnd.z) * size_scale;
 	float star = present * (1.0 - smoothstep(0.0, size, d));
-	return star * mix(0.25, 1.0, rnd.y);
+	float twinkle = 1.0 - star_twinkle * (0.5 + 0.5 * sin(TIME * (1.5 + rnd.x * 3.5) + rnd.z * 40.0));
+	return star * mix(0.25, 1.0, rnd.y) * twinkle;
+}
+
+float value_noise(vec3 p) {
+	vec3 cell = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	float n000 = hash13(cell);
+	float n100 = hash13(cell + vec3(1.0, 0.0, 0.0));
+	float n010 = hash13(cell + vec3(0.0, 1.0, 0.0));
+	float n110 = hash13(cell + vec3(1.0, 1.0, 0.0));
+	float n001 = hash13(cell + vec3(0.0, 0.0, 1.0));
+	float n101 = hash13(cell + vec3(1.0, 0.0, 1.0));
+	float n011 = hash13(cell + vec3(0.0, 1.0, 1.0));
+	float n111 = hash13(cell + vec3(1.0, 1.0, 1.0));
+	float nx00 = mix(n000, n100, f.x);
+	float nx10 = mix(n010, n110, f.x);
+	float nx01 = mix(n001, n101, f.x);
+	float nx11 = mix(n011, n111, f.x);
+	return mix(mix(nx00, nx10, f.y), mix(nx01, nx11, f.y), f.z);
+}
+
+float fbm(vec3 p) {
+	float sum = 0.0;
+	float amplitude = 0.5;
+	for (int i = 0; i < 3; i++) {
+		sum += amplitude * value_noise(p);
+		p *= 2.03;
+		amplitude *= 0.5;
+	}
+	return sum;
+}
+
+float milky_way(vec3 dir) {
+	vec3 plane_normal = normalize(vec3(0.35, 0.62, -0.7));
+	float plane_distance = dot(dir, plane_normal);
+	float band = exp(-abs(plane_distance) * 3.0);
+	float clouds = fbm(dir * 3.2);
+	float structure = mix(0.55, 1.0, clouds);
+	float dust = exp(-abs(plane_distance) * 13.0) * clouds;
+	band *= structure * (1.0 - 0.35 * dust);
+	return band;
 }
 
 void sky() {
@@ -55,11 +100,14 @@ void sky() {
 	}
 
 	if (star_intensity > 0.001) {
+		float horizon_fade = smoothstep(-0.05, 0.35, y);
+		float band = milky_way(EYEDIR);
 		float stars = star_layer(EYEDIR, 55.0, 0.86, 1.0);
 		stars += star_layer(EYEDIR, 110.0, 0.9, 0.7);
 		stars += star_layer(EYEDIR, 220.0, 0.93, 0.5);
-		float horizon_fade = smoothstep(-0.05, 0.35, y);
+		stars += star_layer(EYEDIR, 90.0, 0.72, 0.8) * band * milky_way_intensity * 5.0;
 		col += stars * star_color * star_intensity * horizon_fade * 1.6;
+		col += band * milky_way_color * star_intensity * milky_way_intensity * horizon_fade;
 	}
 
 	if (LIGHT0_ENABLED) {

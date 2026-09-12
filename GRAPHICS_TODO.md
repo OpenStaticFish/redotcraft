@@ -26,7 +26,7 @@ Tick items as they land. Property names are included so each item is easy to fin
 
 ## Sky / atmosphere
 - [x] Custom sky shader (`shader_type sky`) — procedural stars + moon phases (8 in-game day lunar cycle, moon tied to the anti-sun direction)
-- [ ] Milky way band + twinkle in the sky shader
+- [x] Milky way band + twinkle — `world/sky.gdshader` fbm band with a broken-up dust lane, band-concentrated faint stars, and a per-star `TIME` twinkle; all gated by `star_intensity` so the day sky is unaffected, and `milky_way_intensity` defaults to 0.1 (a faint variation, not a beam)
 - [x] Weather system — sunny/rain toggle button in the inventory overlay; rain is a camera-following billboarded `GPUParticles3D` field that pauses when under cover, and `DayNightCycle.set_weather_dim()` grades sun/ambient/fog/sky/clouds toward overcast
 - [ ] Snow and swamp mist per biome, plus weather ambience (sound)
 
