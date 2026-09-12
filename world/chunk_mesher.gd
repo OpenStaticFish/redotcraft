@@ -70,6 +70,23 @@ class NeighborSet:
 		return samples.get(direction)
 
 
+const LOD_NONE := 255
+const LOD_SIDE_FACES := [4, 5, 2, 3]
+
+
+class LodEdge:
+	var solid := PackedByteArray()
+	var water := PackedByteArray()
+
+
+class LodNeighbors:
+	var mask := 0
+	var edges: Dictionary = {}
+
+	func get_edge(direction: Vector2i) -> LodEdge:
+		return edges.get(direction)
+
+
 func _init(blocks: BlockRegistry) -> void:
 	_blocks = blocks
 	_build_ao_offsets()
@@ -125,7 +142,7 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedByteArray, nei
 				var id := padded[pad_index]
 				if id == BlockRegistry.BLOCK_AIR:
 					continue
-				if id == BlockRegistry.BLOCK_WATER:
+				if _blocks.is_water_id(id):
 					_append_water_block(padded, pad_index, local_x, y, local_z, result)
 					continue
 				if _blocks.has_flag(id, BlockRegistry.FLAG_CROSS):
@@ -152,6 +169,126 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedByteArray, nei
 					_append_face(face, pad_index, local_x, y, local_z, id, padded, result)
 	result.light_volume = null
 	return result
+
+
+## Distance mesh: one textured top quad per column plus vertical runs of side
+## quads on exposed edges. No light volume, AO, collision, or cross blocks;
+## the surface height matches the full mesh so chunk seams stay closed.
+## Thread-safe: only reads immutable block tables and the passed-in data.
+func build_lod(data: PackedByteArray, data_max_y: int, heights: PackedByteArray, neighbors: LodNeighbors) -> MeshResult:
+	var result := MeshResult.new()
+	result.data = data
+	result.heights = heights
+	result.mask = neighbors.mask
+	result.max_y = data_max_y
+	var solid_y := PackedByteArray()
+	var solid_id := PackedByteArray()
+	var water_y := PackedByteArray()
+	var water_id := PackedByteArray()
+	solid_y.resize(VoxelDefs.CHUNK_AREA)
+	solid_id.resize(VoxelDefs.CHUNK_AREA)
+	water_y.resize(VoxelDefs.CHUNK_AREA)
+	water_id.resize(VoxelDefs.CHUNK_AREA)
+	solid_y.fill(LOD_NONE)
+	water_y.fill(LOD_NONE)
+	for z in VoxelDefs.CHUNK_SIZE:
+		for x in VoxelDefs.CHUNK_SIZE:
+			var column := x + z * VoxelDefs.DATA_STRIDE_Z
+			for y in range(data_max_y, -1, -1):
+				var id := data[column + y * VoxelDefs.DATA_STRIDE_Y]
+				if id == BlockRegistry.BLOCK_AIR:
+					continue
+				if _blocks.is_water_id(id):
+					if water_y[column] == LOD_NONE:
+						water_y[column] = y
+						water_id[column] = id
+					continue
+				if _blocks.has_flag(id, BlockRegistry.FLAG_CROSS):
+					continue
+				solid_y[column] = y
+				solid_id[column] = id
+				break
+	for z in VoxelDefs.CHUNK_SIZE:
+		for x in VoxelDefs.CHUNK_SIZE:
+			var column := x + z * VoxelDefs.DATA_STRIDE_Z
+			var top_solid := -1 if solid_y[column] == LOD_NONE else int(solid_y[column])
+			var top_water := -1 if water_y[column] == LOD_NONE else int(water_y[column])
+			if top_solid >= 0:
+				_append_lod_block_face(0, x, top_solid, z, solid_id[column], result)
+			if top_water >= 0:
+				var above := BlockRegistry.BLOCK_AIR
+				if top_water + 1 <= data_max_y:
+					above = data[column + (top_water + 1) * VoxelDefs.DATA_STRIDE_Y]
+				if not _blocks.is_water_id(above) and not _blocks.is_opaque(above):
+					var water_level := _blocks.water_level(water_id[column])
+					_append_lod_water_face(0, x, top_water, z, _water_top(water_level), water_level < 8, result)
+			for index in VoxelDefs.DIRS_4.size():
+				var direction: Vector2i = VoxelDefs.DIRS_4[index]
+				var neighbor_solid := -1
+				var neighbor_water := -1
+				var neighbor_x := x + direction.x
+				var neighbor_z := z + direction.y
+				if neighbor_x >= 0 and neighbor_x < VoxelDefs.CHUNK_SIZE and neighbor_z >= 0 and neighbor_z < VoxelDefs.CHUNK_SIZE:
+					var neighbor_column := neighbor_x + neighbor_z * VoxelDefs.DATA_STRIDE_Z
+					neighbor_solid = -1 if solid_y[neighbor_column] == LOD_NONE else int(solid_y[neighbor_column])
+					neighbor_water = -1 if water_y[neighbor_column] == LOD_NONE else int(water_y[neighbor_column])
+				else:
+					var edge := neighbors.get_edge(direction)
+					if edge != null:
+						var edge_index := z if direction.x != 0 else x
+						neighbor_solid = -1 if edge.solid[edge_index] == LOD_NONE else int(edge.solid[edge_index])
+						neighbor_water = -1 if edge.water[edge_index] == LOD_NONE else int(edge.water[edge_index])
+				var face: int = LOD_SIDE_FACES[index]
+				var exposed_from := maxi(neighbor_solid, neighbor_water) + 1
+				for y in range(exposed_from, maxi(top_solid, top_water) + 1):
+					var id := data[column + y * VoxelDefs.DATA_STRIDE_Y]
+					if id == BlockRegistry.BLOCK_AIR or _blocks.has_flag(id, BlockRegistry.FLAG_CROSS):
+						continue
+					if _blocks.is_water_id(id):
+						if y > neighbor_water:
+							var level := _blocks.water_level(id)
+							var above_water := false
+							if y + 1 <= data_max_y:
+								above_water = _blocks.is_water_id(data[column + (y + 1) * VoxelDefs.DATA_STRIDE_Y])
+							var top := 1.0 if above_water else _water_top(level)
+							_append_lod_water_face(face, x, y, z, top, level < 8, result)
+					elif y <= top_solid:
+						_append_lod_block_face(face, x, y, z, id, result)
+	return result
+
+
+func _append_lod_block_face(face: int, x: int, y: int, z: int, block_id: int, result: MeshResult) -> void:
+	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
+	var layer := _blocks.layer_for(block_id, face)
+	var base := result.verts.size()
+	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
+	var face_uvs: Array = VoxelDefs.FACE_UVS[face]
+	var shade: float = VoxelDefs.FACE_SHADE[face]
+	for corner in 4:
+		var offset: Vector3i = face_verts[corner]
+		result.verts.append(Vector3(x + offset.x, y + offset.y, z + offset.z))
+		result.normals.append(Vector3(normal))
+		result.uvs.append(face_uvs[corner])
+		result.colors.append(Color(shade, shade, shade, 1.0))
+		result.layers.push_back(float(layer))
+		result.light.append_array(PackedFloat32Array([0.0, 0.0, 0.0, 1.0]))
+	result.indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
+
+
+func _append_lod_water_face(face: int, x: int, y: int, z: int, top: float, flowing: bool, result: MeshResult) -> void:
+	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
+	var base := result.water_verts.size()
+	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
+	var shade := 1.0 if face == 0 else 0.92
+	var flow_alpha := 0.72 if flowing else 1.0
+	for corner in 4:
+		var offset: Vector3i = face_verts[corner]
+		result.water_verts.append(Vector3(x + offset.x, y + (top if offset.y == 1 else 0.0), z + offset.z))
+		result.water_normals.append(Vector3(normal))
+		result.water_uvs.append(Vector2(x + offset.x, z + offset.z))
+		result.water_colors.append(Color(shade, shade, shade, flow_alpha))
+		result.water_light.append_array(PackedFloat32Array([0.0, 0.0, 0.0, 1.0]))
+	result.water_indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
 
 
 func make_block_mesh(block_id: int) -> ArrayMesh:
@@ -688,31 +825,43 @@ func _append_cross_collision(origin: Vector3, result: MeshResult) -> void:
 	]))
 
 
+## Compresses the 1..8 flow levels into a narrower height range so larger
+## flows read as a gentle slope instead of a staircase.
+func _water_top(level: int) -> float:
+	return 0.9 * (0.35 + 0.65 * float(level) / 8.0)
+
+
 func _append_water_block(padded: PackedByteArray, pad_index: int, local_x: int, y: int, local_z: int, result: MeshResult) -> void:
+	var level := _blocks.water_level(padded[pad_index])
 	var above := padded[pad_index + VoxelDefs.PAD_STRIDE_Y]
-	var top := 0.9 if above != BlockRegistry.BLOCK_WATER else 1.0
-	if above != BlockRegistry.BLOCK_WATER and not _blocks.is_opaque(above):
-		_append_water_face(0, local_x, y, local_z, top, result)
+	var above_water := _blocks.is_water_id(above)
+	var top := 1.0 if above_water else _water_top(level)
+	var flowing := level < 8
+	if not above_water and not _blocks.is_opaque(above):
+		_append_water_face(0, local_x, y, local_z, top, flowing, result)
 	for face in range(2, 6):
 		var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
 		var neighbor_index := pad_index + normal.x + normal.z * VoxelDefs.PAD_STRIDE_Z + normal.y * VoxelDefs.PAD_STRIDE_Y
 		var neighbor := padded[neighbor_index]
-		if neighbor == BlockRegistry.BLOCK_WATER or _blocks.is_opaque(neighbor):
+		if _blocks.is_opaque(neighbor):
 			continue
-		_append_water_face(face, local_x, y, local_z, top, result)
+		if _blocks.is_water_id(neighbor) and _blocks.water_level(neighbor) >= level:
+			continue
+		_append_water_face(face, local_x, y, local_z, top, flowing, result)
 
 
-func _append_water_face(face: int, local_x: int, y: int, local_z: int, top: float, result: MeshResult) -> void:
+func _append_water_face(face: int, local_x: int, y: int, local_z: int, top: float, flowing: bool, result: MeshResult) -> void:
 	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
 	var base := result.water_verts.size()
 	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
 	var shade := 1.0 if face == 0 else 0.92
+	var flow_alpha := 0.72 if flowing else 1.0
 	for corner in 4:
 		var offset: Vector3i = face_verts[corner]
 		result.water_verts.append(Vector3(local_x + offset.x, y + (top if offset.y == 1 else 0.0), local_z + offset.z))
 		result.water_normals.append(Vector3(normal))
 		result.water_uvs.append(Vector2(local_x + offset.x, local_z + offset.z))
-		result.water_colors.append(Color(shade, shade, shade, 1.0))
+		result.water_colors.append(Color(shade, shade, shade, flow_alpha))
 		var light := _sample_water_light(result.light_volume, local_x, y, local_z, face, corner)
 		result.water_light.push_back(light.r)
 		result.water_light.push_back(light.g)

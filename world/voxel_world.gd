@@ -6,8 +6,17 @@ const SPAWN_SEARCH_RADIUS := 12
 const MAX_ACTIVE_JOBS := 12
 const COMMIT_BUDGET_MS := 5
 const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4]
+const WATER_TICK_INTERVAL := 0.25
+const WATER_CELLS_PER_TICK := 1024
+const WATER_NEIGHBOR_OFFSETS := [
+	Vector3i.ZERO,
+	Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
+	Vector3i(0, 1, 0), Vector3i(0, -1, 0),
+	Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+]
 
 var render_distance := 10
+var lod_distance := 5
 var unload_radius := 12
 
 var _blocks: BlockRegistry
@@ -22,9 +31,14 @@ var _gen_queued: Dictionary = {}
 var _dirty: Dictionary = {}
 var _desired: Dictionary = {}
 var _edited_blocks: Dictionary = {}
+var _edits_by_chunk: Dictionary = {}
 var _chunk_edit_version: Dictionary = {}
 var _stream_center := Vector2i(999999, 999999)
 var _player: Node3D
+var _water_queue: Array[Vector3i] = []
+var _water_queued: Dictionary = {}
+var _water_head := 0
+var _water_accum := 0.0
 
 
 class Chunk:
@@ -32,6 +46,7 @@ class Chunk:
 	var heights := PackedByteArray()
 	var max_y := 0
 	var mask := 0
+	var lod := false
 	var mesh: MeshInstance3D
 	var water: MeshInstance3D
 	var body: StaticBody3D
@@ -41,6 +56,7 @@ class Chunk:
 class PendingJob:
 	var task := -1
 	var version := 0
+	var lod := false
 	var slot: Dictionary = {}
 
 
@@ -48,11 +64,13 @@ class CommitItem:
 	var pos := Vector2i.ZERO
 	var result: ChunkMesher.MeshResult
 	var version := 0
+	var lod := false
 
-	func _init(p_pos: Vector2i, p_result: ChunkMesher.MeshResult, p_version: int) -> void:
+	func _init(p_pos: Vector2i, p_result: ChunkMesher.MeshResult, p_version: int, p_lod: bool) -> void:
 		pos = p_pos
 		result = p_result
 		version = p_version
+		lod = p_lod
 
 
 func _ready() -> void:
@@ -61,10 +79,14 @@ func _ready() -> void:
 	_mesher = ChunkMesher.new(_blocks)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if _player == null:
 		return
 	_stream_tick()
+	_water_accum += delta
+	if _water_accum >= WATER_TICK_INTERVAL:
+		_water_accum = 0.0
+		_water_tick()
 
 
 func _exit_tree() -> void:
@@ -77,12 +99,14 @@ func _exit_tree() -> void:
 ## in flight: recreating the noise set invalidates running workers.
 func configure(world_config: Dictionary, render_distance_chunks: int) -> void:
 	render_distance = maxi(render_distance_chunks, 1)
+	lod_distance = maxi(3, render_distance / 2)
 	unload_radius = render_distance + 2
 	_generator.configure(world_config)
 
 
 func set_render_distance(value: int) -> void:
 	render_distance = maxi(value, 1)
+	lod_distance = maxi(3, render_distance / 2)
 	unload_radius = render_distance + 2
 	_rebuild_desired()
 
@@ -116,9 +140,9 @@ func _generate_spawn_area() -> void:
 				if _chunks.has(pos):
 					continue
 				var slot: Dictionary = {}
-				_run_chunk_job(pos, _edited_blocks.duplicate(), _gather_neighbors(pos), slot)
+				_run_chunk_job(pos, _chunk_edits_for(pos), _gather_neighbors(pos), slot, false)
 				if slot.has("result"):
-					_commit_chunk(pos, slot["result"])
+					_commit_chunk(pos, slot["result"], false)
 
 
 func _rebuild_desired() -> void:
@@ -128,6 +152,9 @@ func _rebuild_desired() -> void:
 		for dz in range(-render_distance, render_distance + 1):
 			var pos := _stream_center + Vector2i(dx, dz)
 			_desired[pos] = true
+			var want_lod := _chunk_uses_lod(pos)
+			if _chunks.has(pos) and (_chunks[pos] as Chunk).lod != want_lod:
+				_dirty[pos] = true
 			if not _chunks.has(pos) and not _pending.has(pos):
 				wanted.append(pos)
 	var center := _stream_center
@@ -147,7 +174,6 @@ func _rebuild_desired() -> void:
 func _schedule_jobs() -> void:
 	if _gen_queue.is_empty():
 		return
-	var edits_snapshot := _edited_blocks.duplicate()
 	while _pending.size() < MAX_ACTIVE_JOBS and not _gen_queue.is_empty():
 		var pos: Vector2i = _gen_queue.pop_front()
 		_gen_queued.erase(pos)
@@ -156,11 +182,13 @@ func _schedule_jobs() -> void:
 		if _chunks.has(pos) and not _dirty.has(pos):
 			continue
 		_dirty.erase(pos)
+		var lod := _chunk_uses_lod(pos)
 		var job := PendingJob.new()
 		job.version = _chunk_edit_version.get(pos, 0)
+		job.lod = lod
 		job.slot = {}
 		job.task = WorkerThreadPool.add_task(
-			_run_chunk_job.bind(pos, edits_snapshot, _gather_neighbors(pos), job.slot),
+			_run_chunk_job.bind(pos, _chunk_edits_for(pos), _gather_job_neighbors(pos, lod), job.slot, lod),
 			true,
 			"voxel_chunk")
 		_pending[pos] = job
@@ -172,10 +200,10 @@ func _process_commit_queue() -> void:
 		var item: CommitItem = _commit_queue.pop_front()
 		if not _desired.has(item.pos):
 			continue
-		if item.version != _chunk_edit_version.get(item.pos, 0):
+		if item.version != _chunk_edit_version.get(item.pos, 0) or item.lod != _chunk_uses_lod(item.pos):
 			_queue_rebuild(item.pos)
 			continue
-		_commit_chunk(item.pos, item.result)
+		_commit_chunk(item.pos, item.result, item.lod)
 		if Time.get_ticks_msec() - start > COMMIT_BUDGET_MS:
 			break
 
@@ -188,14 +216,66 @@ func _collect_jobs() -> void:
 		WorkerThreadPool.wait_for_task_completion(job.task)
 		_pending.erase(pos)
 		if job.slot.has("result"):
-			_commit_queue.append(CommitItem.new(pos, job.slot["result"], job.version))
+			_commit_queue.append(CommitItem.new(pos, job.slot["result"], job.version, job.lod))
 
 
 ## Worker-thread entry point. Only reads state that is immutable while jobs
 ## are in flight (generator noise set, mesher tables, block registry).
-func _run_chunk_job(chunk_pos: Vector2i, edits: Dictionary, neighbors: ChunkMesher.NeighborSet, slot: Dictionary) -> void:
+func _run_chunk_job(chunk_pos: Vector2i, edits: Dictionary, neighbors, slot: Dictionary, lod: bool) -> void:
 	var generated := _generator.generate_data(chunk_pos, edits)
-	slot["result"] = _mesher.build(generated.data, generated.max_y, generated.heights, neighbors)
+	if lod:
+		slot["result"] = _mesher.build_lod(generated.data, generated.max_y, generated.heights, neighbors)
+	else:
+		slot["result"] = _mesher.build(generated.data, generated.max_y, generated.heights, neighbors)
+
+
+func _chunk_uses_lod(pos: Vector2i) -> bool:
+	return maxi(absi(pos.x - _stream_center.x), absi(pos.y - _stream_center.y)) > lod_distance
+
+
+func _gather_job_neighbors(pos: Vector2i, lod: bool):
+	if lod:
+		return _gather_lod_neighbors(pos)
+	return _gather_neighbors(pos)
+
+
+func _gather_lod_neighbors(pos: Vector2i) -> ChunkMesher.LodNeighbors:
+	var out := ChunkMesher.LodNeighbors.new()
+	for index in VoxelDefs.DIRS_4.size():
+		var direction: Vector2i = VoxelDefs.DIRS_4[index]
+		var chunk: Chunk = _chunks.get(pos + direction)
+		if chunk == null:
+			continue
+		out.edges[direction] = _build_lod_edge(chunk, direction)
+		out.mask |= (1 << index)
+	return out
+
+
+func _build_lod_edge(chunk: Chunk, direction: Vector2i) -> ChunkMesher.LodEdge:
+	var edge := ChunkMesher.LodEdge.new()
+	edge.solid.resize(VoxelDefs.CHUNK_SIZE)
+	edge.water.resize(VoxelDefs.CHUNK_SIZE)
+	for index in VoxelDefs.CHUNK_SIZE:
+		var local_x := index if direction.y != 0 else (0 if direction.x > 0 else VoxelDefs.CHUNK_SIZE - 1)
+		var local_z := index if direction.x != 0 else (0 if direction.y > 0 else VoxelDefs.CHUNK_SIZE - 1)
+		var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
+		var solid := ChunkMesher.LOD_NONE
+		var water := ChunkMesher.LOD_NONE
+		for y in range(chunk.max_y, -1, -1):
+			var id: int = chunk.data[column + y * VoxelDefs.DATA_STRIDE_Y]
+			if id == BlockRegistry.BLOCK_AIR:
+				continue
+			if _blocks.is_water_id(id):
+				if water == ChunkMesher.LOD_NONE:
+					water = y
+				continue
+			if _blocks.has_flag(id, BlockRegistry.FLAG_CROSS):
+				continue
+			solid = y
+			break
+		edge.solid[index] = solid
+		edge.water[index] = water
+	return edge
 
 
 func _gather_neighbors(pos: Vector2i) -> ChunkMesher.NeighborSet:
@@ -211,11 +291,12 @@ func _gather_neighbors(pos: Vector2i) -> ChunkMesher.NeighborSet:
 	return out
 
 
-func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult) -> void:
+func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> void:
 	var chunk: Chunk = _chunks.get(pos)
 	if chunk == null:
 		chunk = _create_chunk_nodes(pos)
 		_chunks[pos] = chunk
+	chunk.lod = lod
 	chunk.data = res.data
 	chunk.heights = res.heights
 	chunk.max_y = res.max_y
@@ -323,7 +404,7 @@ func get_block_world(block_position: Vector3i) -> int:
 
 
 func is_water_at(world_position: Vector3) -> bool:
-	return get_block_world(Vector3i(floori(world_position.x), floori(world_position.y), floori(world_position.z))) == BlockRegistry.BLOCK_WATER
+	return _blocks.is_water_id(get_block_world(Vector3i(floori(world_position.x), floori(world_position.y), floori(world_position.z))))
 
 
 func break_block(block_position: Vector3i) -> int:
@@ -338,8 +419,9 @@ func break_block(block_position: Vector3i) -> int:
 	if not _blocks.is_breakable(block_id):
 		return BlockRegistry.BLOCK_AIR
 	chunk.data[index] = BlockRegistry.BLOCK_AIR
-	_edited_blocks[block_position] = BlockRegistry.BLOCK_AIR
+	_record_edit(block_position, BlockRegistry.BLOCK_AIR)
 	_touch_chunk(chunk_position, block_position)
+	_seed_water(block_position)
 	return block_id
 
 
@@ -353,12 +435,115 @@ func place_block(block_position: Vector3i, block_id: int) -> bool:
 	if chunk == null:
 		return false
 	var index := _data_index(block_position)
-	if chunk.data[index] != BlockRegistry.BLOCK_AIR:
+	var existing: int = chunk.data[index]
+	if existing != BlockRegistry.BLOCK_AIR and not _blocks.is_water_id(existing):
 		return false
 	chunk.data[index] = block_id
-	_edited_blocks[block_position] = block_id
+	_record_edit(block_position, block_id)
 	_touch_chunk(chunk_position, block_position)
+	_seed_water(block_position)
 	return true
+
+
+func _record_edit(block_position: Vector3i, block_id: int) -> void:
+	_edited_blocks[block_position] = block_id
+	var chunk_position := _chunk_for_block(block_position)
+	var bucket = _edits_by_chunk.get(chunk_position)
+	if bucket == null:
+		bucket = {}
+		_edits_by_chunk[chunk_position] = bucket
+	bucket[block_position] = block_id
+
+
+func _chunk_edits_for(pos: Vector2i) -> Dictionary:
+	var bucket = _edits_by_chunk.get(pos)
+	if bucket == null:
+		return {}
+	return bucket.duplicate()
+
+
+func _seed_water(block_position: Vector3i) -> void:
+	for offset in WATER_NEIGHBOR_OFFSETS:
+		_queue_water(block_position + offset)
+
+
+func _queue_water(position: Vector3i) -> void:
+	if position.y < 1 or position.y >= VoxelDefs.WORLD_HEIGHT:
+		return
+	if _water_queued.has(position):
+		return
+	_water_queued[position] = true
+	_water_queue.append(position)
+
+
+## Cellular flow: only runs for cells seeded by edits or by nearby water
+## changes, so oceans and lakes stay static until disturbed.
+func _water_tick() -> void:
+	var budget := WATER_CELLS_PER_TICK
+	while budget > 0 and _water_head < _water_queue.size():
+		var position: Vector3i = _water_queue[_water_head]
+		_water_head += 1
+		budget -= 1
+		_water_queued.erase(position)
+		if _loaded_chunk_for(position) == null:
+			continue
+		_update_water_cell(position)
+	if _water_head == _water_queue.size():
+		_water_queue.clear()
+		_water_head = 0
+	elif _water_head > 4096:
+		_water_queue = _water_queue.slice(_water_head)
+		_water_head = 0
+
+
+func _update_water_cell(position: Vector3i) -> void:
+	var id := get_block_world(position)
+	if id != BlockRegistry.BLOCK_AIR and not _blocks.is_water_id(id):
+		return
+	var is_source := id == BlockRegistry.BLOCK_WATER
+	var current_level := _blocks.water_level(id)
+	var feed := 0
+	if _blocks.is_water_id(get_block_world(position + Vector3i(0, 1, 0))):
+		feed = 7
+	for direction in VoxelDefs.DIRS_4:
+		var neighbor := get_block_world(position + Vector3i(direction.x, 0, direction.y))
+		if not _blocks.is_water_id(neighbor):
+			continue
+		feed = maxi(feed, 7 if neighbor == BlockRegistry.BLOCK_WATER else _blocks.water_level(neighbor) - 1)
+	if is_source:
+		feed = 8
+	if feed != current_level:
+		_water_place(position, _blocks.water_id_for_level(feed))
+	if feed <= 0:
+		return
+	var below := get_block_world(position + Vector3i(0, -1, 0))
+	if below == BlockRegistry.BLOCK_AIR:
+		if position.y > 1:
+			_water_place(position + Vector3i(0, -1, 0), _blocks.water_id_for_level(7))
+		return
+	if feed <= 1:
+		return
+	for direction in VoxelDefs.DIRS_4:
+		var target := position + Vector3i(direction.x, 0, direction.y)
+		var target_id := get_block_world(target)
+		if target_id == BlockRegistry.BLOCK_AIR:
+			_water_place(target, _blocks.water_id_for_level(feed - 1))
+		elif _blocks.is_water_id(target_id) and target_id != BlockRegistry.BLOCK_WATER and _blocks.water_level(target_id) < feed - 1:
+			_water_place(target, _blocks.water_id_for_level(feed - 1))
+
+
+func _water_place(position: Vector3i, block_id: int) -> void:
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null:
+		return
+	var index := _data_index(position)
+	if chunk.data[index] == block_id:
+		return
+	chunk.data[index] = block_id
+	_record_edit(position, block_id)
+	_touch_chunk(_chunk_for_block(position), position)
+	for offset in WATER_NEIGHBOR_OFFSETS:
+		_queue_water(position + offset)
 
 
 func _touch_chunk(chunk_position: Vector2i, block_position: Vector3i) -> void:

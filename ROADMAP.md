@@ -32,7 +32,7 @@ Property names and file references are included so each item is easy to find.
 ## Geometry / materials
 - [x] `Texture2DArray` instead of the block atlas — `BlockRegistry` now builds one 64px layer per texture (per-image tint, alpha edge fix-up, mipmaps) and the mesher writes each face's layer into `ARRAY_CUSTOM1` (`ARRAY_CUSTOM_R_FLOAT`); `block.gdshader` samples `vec3(UV, layer)`, so there is no atlas inset and no cross-tile UV/mip bleeding
 - [ ] Chunk merging / MultiMesh — fewer draw calls for distant chunks
-- [ ] Chunk LOD meshes — cheaper distant geometry (biggest rendering win)
+- [x] Chunk LOD meshes — `ChunkMesher.build_lod()` heightmap distance meshes (top quad per column + exposed side runs, no light volume/AO/collision) for chunks beyond `lod_distance` (half the render distance, minimum 3); `VoxelWorld` streams full detail near the player and rebuilds LOD<->full on approach/retreat with the same version checks as edits. Measured: LOD builds 7.2 ms vs 157 ms full (12 concurrent, headless) and ~1.4k vs ~4.1k triangles per chunk at render distance 16
 
 ## Post-processing
 - [x] Per-time-of-day color grading — `DayNightCycle` scales preset saturation/contrast at night (`Main._apply_graphics()` sets `base_saturation`/`base_contrast`), keeping nights muted instead of neon
@@ -47,4 +47,4 @@ Property names and file references are included so each item is easy to find.
 - [ ] Audio pass — footsteps, block break/place, UI clicks, and rain ambience (needs audio assets)
 
 ## World / simulation
-- [ ] Water polish — flowing water and better shore blending; water is currently a static block with a wavy shader
+- [x] Water polish — flowing water levels (IDs 28-34) with a 4 Hz cellular spill/dry sim seeded by edits, falling cascades, settled state persisted through `_edited_blocks`; the mesher renders `_water_top(level)` surfaces with a flowing vertex-color flag, and `water.gdshader` adds screen-space refraction (wave-distorted `hint_screen_texture` with a faint chromatic split and depth-based blue absorption) plus depth-texture shore foam and calmer, faster-scrolling flow waves

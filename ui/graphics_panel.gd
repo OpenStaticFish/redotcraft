@@ -10,6 +10,7 @@ const SECTIONS := [
 		{"type": "check", "key": "sdfgi", "label": "SDFGI (stutters with day/night)"},
 	]},
 	{"title": "SHADOWS", "rows": [
+		{"type": "check", "key": "soft_shadows", "label": "Soft Shadows (vibrate without TAA/FSR2)"},
 		{"type": "slider", "key": "shadow_max_distance", "label": "Shadow Distance", "min": 64.0, "max": 512.0, "step": 8.0, "format": "%d m"},
 		{"type": "slider", "key": "shadow_opacity", "label": "Shadow Opacity", "min": 0.0, "max": 1.0, "step": 0.05, "format": "%.2f"},
 		{"type": "slider", "key": "shadow_blur", "label": "Shadow Blur", "min": 0.0, "max": 4.0, "step": 0.1, "format": "%.1f"},
@@ -29,7 +30,8 @@ const SECTIONS := [
 	]},
 	{"title": "PERFORMANCE", "rows": [
 		{"type": "option", "key": "msaa", "label": "MSAA", "options": ["Off", "2x", "4x", "8x"]},
-		{"type": "slider", "key": "fsr_scale", "label": "Render Scale (FSR2)", "min": 0.5, "max": 1.0, "step": 0.01, "format": "%d%%", "display_scale": 100.0},
+		{"type": "check", "key": "taa", "label": "Temporal AA (TAA)"},
+		{"type": "slider", "key": "fsr_scale", "label": "Render Scale (FSR2 below 100%)", "min": 0.5, "max": 1.0, "step": 0.01, "format": "%d%%", "display_scale": 100.0},
 	]},
 ]
 

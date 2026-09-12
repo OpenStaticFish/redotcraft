@@ -104,9 +104,18 @@ func _apply_graphics() -> void:
 	_sun.directional_shadow_max_distance = float(graphics["shadow_max_distance"])
 	_sun.shadow_opacity = float(graphics["shadow_opacity"])
 	_sun.shadow_blur = float(graphics["shadow_blur"])
+	var soft_shadows := bool(graphics["soft_shadows"])
+	var shadow_quality: int = RenderingServer.SHADOW_QUALITY_SOFT_LOW if soft_shadows else RenderingServer.SHADOW_QUALITY_HARD
+	RenderingServer.directional_soft_shadow_filter_set_quality(shadow_quality)
+	RenderingServer.positional_soft_shadow_filter_set_quality(shadow_quality)
+	_sun.light_angular_distance = 0.3 if soft_shadows else 0.0
 	var viewport := get_viewport()
 	if viewport:
-		viewport.scaling_3d_scale = float(graphics["fsr_scale"])
+		var fsr_scale := float(graphics["fsr_scale"])
+		viewport.scaling_3d_scale = fsr_scale
+		viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR2 if fsr_scale < 1.0 else Viewport.SCALING_3D_MODE_BILINEAR
+		viewport.use_taa = bool(graphics["taa"])
+		viewport.anisotropic_filtering_level = Viewport.ANISOTROPY_16X
 		viewport.msaa_3d = int(graphics["msaa"])
 
 

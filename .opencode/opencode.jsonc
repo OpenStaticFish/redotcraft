@@ -4,7 +4,10 @@
     "redot": {
       "type": "local",
       "command": [
-        "/home/micqdf/Code/redot-engine/redot-mcp.sh",
+        "/home/micqdf/.nix-profile/bin/redot",
+        "--headless",
+        "--mcp-server",
+        "--path",
         "/home/micqdf/game-dev/redot-minecraft/redot-minecraft"
       ],
       "enabled": true

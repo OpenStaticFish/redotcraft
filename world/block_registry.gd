@@ -29,6 +29,13 @@ const BLOCK_BIRCH_LEAVES := 24
 const BLOCK_TERRACOTTA := 25
 const BLOCK_MYCELIUM := 26
 const BLOCK_TORCH := 27
+const BLOCK_WATER_FLOW_7 := 28
+const BLOCK_WATER_FLOW_6 := 29
+const BLOCK_WATER_FLOW_5 := 30
+const BLOCK_WATER_FLOW_4 := 31
+const BLOCK_WATER_FLOW_3 := 32
+const BLOCK_WATER_FLOW_2 := 33
+const BLOCK_WATER_FLOW_1 := 34
 
 const FLAG_OPAQUE := 1
 const FLAG_CUTOUT := 2
@@ -66,6 +73,13 @@ const BLOCK_DEFS := [
 	[25, "TERRACOTTA", "terracotta.png", "terracotta.png", "terracotta.png", FLAG_OPAQUE],
 	[26, "MYCELIUM", "mycelium_top.png", "mycelium_side.png", "dirt.png", FLAG_OPAQUE],
 	[27, "TORCH", "torch.png", "torch.png", "torch.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE],
+	[28, "WATER FLOW 7", "water.png", "water.png", "water.png", 0],
+	[29, "WATER FLOW 6", "water.png", "water.png", "water.png", 0],
+	[30, "WATER FLOW 5", "water.png", "water.png", "water.png", 0],
+	[31, "WATER FLOW 4", "water.png", "water.png", "water.png", 0],
+	[32, "WATER FLOW 3", "water.png", "water.png", "water.png", 0],
+	[33, "WATER FLOW 2", "water.png", "water.png", "water.png", 0],
+	[34, "WATER FLOW 1", "water.png", "water.png", "water.png", 0],
 ]
 
 const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
@@ -126,10 +140,31 @@ func has_flag(block_id: int, flag: int) -> bool:
 	return block_id >= 0 and block_id < _flags.size() and (_flags[block_id] & flag) != 0
 
 
+func is_water_id(block_id: int) -> bool:
+	return block_id == BLOCK_WATER or (block_id >= BLOCK_WATER_FLOW_7 and block_id <= BLOCK_WATER_FLOW_1)
+
+
+## 8 for a source block, 7..1 for flowing water, 0 for anything else.
+func water_level(block_id: int) -> int:
+	if block_id == BLOCK_WATER:
+		return 8
+	if block_id >= BLOCK_WATER_FLOW_7 and block_id <= BLOCK_WATER_FLOW_1:
+		return BLOCK_WATER_FLOW_1 - block_id + 1
+	return 0
+
+
+func water_id_for_level(level: int) -> int:
+	if level <= 0:
+		return BLOCK_AIR
+	if level >= 8:
+		return BLOCK_WATER
+	return BLOCK_WATER_FLOW_1 - level + 1
+
+
 func is_breakable(block_id: int) -> bool:
 	if not is_valid_id(block_id):
 		return false
-	if block_id == BLOCK_WATER:
+	if is_water_id(block_id):
 		return false
 	return not has_flag(block_id, FLAG_UNBREAKABLE)
 
@@ -137,7 +172,7 @@ func is_breakable(block_id: int) -> bool:
 func light_attenuation(block_id: int) -> int:
 	if is_opaque(block_id):
 		return MAX_LIGHT_LEVEL
-	if block_id == BLOCK_WATER:
+	if is_water_id(block_id):
 		return ATTENUATION_WATER
 	if has_flag(block_id, FLAG_LEAVES):
 		return ATTENUATION_LEAVES
