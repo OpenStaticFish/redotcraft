@@ -8,7 +8,13 @@ const SPAWN_SEARCH_RADIUS := 12
 ## more and risks starving the main thread on smaller machines.
 const MIN_ACTIVE_JOBS := 4
 const MAX_ACTIVE_JOBS := 8
-const MAX_FULL_DETAIL_DISTANCE := 8
+## Full-detail chunks run to the render distance. Only distances past this cap
+## (the Extreme toggle) fall back to compact LOD chunks.
+const MAX_FULL_DETAIL_DISTANCE := 32
+## Collision shapes are only built for chunks near the player; approaching a
+## distant full chunk rebuilds it to add collision instead of holding a shape
+## for every loaded chunk.
+const COLLISION_DISTANCE := 6
 const COMMIT_BUDGET_MS := 5
 const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4]
 const WATER_TICK_INTERVAL := 0.25
@@ -129,7 +135,7 @@ func _exit_tree() -> void:
 ## in flight: recreating the noise set invalidates running workers.
 func configure(world_config: Dictionary, render_distance_chunks: int) -> void:
 	render_distance = maxi(render_distance_chunks, 1)
-	lod_distance = clampi(render_distance / 2, 3, MAX_FULL_DETAIL_DISTANCE)
+	lod_distance = mini(render_distance, MAX_FULL_DETAIL_DISTANCE)
 	unload_radius = render_distance + 2
 	_generator.configure(world_config)
 	_worldgen_revision += 1
@@ -137,7 +143,7 @@ func configure(world_config: Dictionary, render_distance_chunks: int) -> void:
 
 func set_render_distance(value: int) -> void:
 	render_distance = maxi(value, 1)
-	lod_distance = clampi(render_distance / 2, 3, MAX_FULL_DETAIL_DISTANCE)
+	lod_distance = mini(render_distance, MAX_FULL_DETAIL_DISTANCE)
 	unload_radius = render_distance + 2
 	_rebuild_desired()
 	_unload_far()
@@ -157,9 +163,33 @@ func _stream_tick() -> void:
 		_stream_center = center
 		_rebuild_desired()
 		_unload_far()
+		_drop_far_collision()
 	_collect_jobs()
 	_process_commit_queue()
 	_schedule_jobs()
+	_ensure_near_collision()
+
+
+## Distant full chunks are committed without a collision shape. Rebuilds are
+## only requested as the player gets close, which keeps shape memory bounded to
+## the local area while the world stays full-detail everywhere in range.
+func _ensure_near_collision() -> void:
+	for dz in range(-COLLISION_DISTANCE, COLLISION_DISTANCE + 1):
+		for dx in range(-COLLISION_DISTANCE, COLLISION_DISTANCE + 1):
+			var pos := _stream_center + Vector2i(dx, dz)
+			var chunk: Chunk = _chunks.get(pos)
+			if chunk == null or chunk.lod or chunk.shape.shape != null:
+				continue
+			_queue_rebuild(pos)
+
+
+func _drop_far_collision() -> void:
+	for pos in _chunks.keys():
+		var chunk: Chunk = _chunks[pos]
+		if chunk.shape.shape == null:
+			continue
+		if maxi(absi(pos.x - _stream_center.x), absi(pos.y - _stream_center.y)) > COLLISION_DISTANCE + 1:
+			chunk.shape.shape = null
 
 
 func _generate_spawn_area() -> void:
@@ -172,7 +202,7 @@ func _generate_spawn_area() -> void:
 				if _chunks.has(pos):
 					continue
 				var slot: Dictionary = {}
-				_run_chunk_job(pos, _chunk_edits_for(pos), _gather_neighbors(pos), slot, false)
+				_run_chunk_job(pos, _chunk_edits_for(pos), _gather_neighbors(pos), slot, false, true)
 				if slot.has("result"):
 					_record_job_metrics(slot, false)
 					_commit_chunk(pos, slot["result"], false)
@@ -222,7 +252,8 @@ func _schedule_jobs() -> void:
 		job.lod = lod
 		job.slot = {}
 		job.task = WorkerThreadPool.add_task(
-			_run_chunk_job.bind(pos, _chunk_edits_for(pos), _gather_job_neighbors(pos, lod), job.slot, lod),
+			_run_chunk_job.bind(pos, _chunk_edits_for(pos), _gather_job_neighbors(pos, lod), job.slot, lod,
+				not lod and _within_collision_range(pos)),
 			true,
 			"voxel_chunk")
 		_pending[pos] = job
@@ -256,13 +287,13 @@ func _collect_jobs() -> void:
 
 ## Worker-thread entry point. Only reads state that is immutable while jobs
 ## are in flight (generator noise set, mesher tables, block registry).
-func _run_chunk_job(chunk_pos: Vector2i, edits: Dictionary, neighbors, slot: Dictionary, lod: bool) -> void:
+func _run_chunk_job(chunk_pos: Vector2i, edits: Dictionary, neighbors, slot: Dictionary, lod: bool, want_collision: bool = true) -> void:
 	var generated := _generator.generate_data(chunk_pos, edits, lod)
 	var mesh_start := Time.get_ticks_usec()
 	if lod:
 		slot["result"] = _mesher.build_lod(generated.lod_solid_y, generated.lod_solid_id, generated.lod_sub_id, generated.lod_water_y, generated.lod_water_level, generated.max_y, generated.foliage_tints, generated.water_tints, neighbors)
 	else:
-		slot["result"] = _mesher.build(generated.data, generated.max_y, generated.heights, generated.foliage_tints, generated.water_tints, neighbors)
+		slot["result"] = _mesher.build(generated.data, generated.max_y, generated.heights, generated.foliage_tints, generated.water_tints, neighbors, want_collision)
 	slot["timings"] = generated.timings
 	slot["mesh_us"] = Time.get_ticks_usec() - mesh_start
 
@@ -378,14 +409,18 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> voi
 	chunk.mask = res.mask
 	chunk.mesh.mesh = ChunkMesher.arrays_to_mesh(res.verts, res.normals, res.uvs, res.colors, res.indices, _blocks.material, res.light, res.layers)
 	chunk.water.mesh = ChunkMesher.arrays_to_mesh(res.water_verts, res.water_normals, res.water_uvs, res.water_colors, res.water_indices, _blocks.water_material, res.water_light)
-	if res.collision.is_empty():
-		chunk.shape.shape = null
-	else:
+	if not lod and _within_collision_range(pos) and not res.collision.is_empty():
 		var shape := ConcavePolygonShape3D.new()
 		shape.set_faces(res.collision)
 		shape.backface_collision = true
 		chunk.shape.shape = shape
+	else:
+		chunk.shape.shape = null
 	_remesh_on_commit_neighbors(pos)
+
+
+func _within_collision_range(pos: Vector2i) -> bool:
+	return maxi(absi(pos.x - _stream_center.x), absi(pos.y - _stream_center.y)) <= COLLISION_DISTANCE
 
 
 func _create_chunk_nodes(pos: Vector2i) -> Chunk:

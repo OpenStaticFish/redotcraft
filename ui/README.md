@@ -17,12 +17,33 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
 - Cyan is reserved for values, quantities, and telemetry.
 - Eyebrows, dividers, modal chrome, form rows, and button variants come from `UITheme` rather than per-screen styling.
 
+## Menu hierarchy
+
+- **Play** opens `play_panel` (world type, seed, clipboard import, Create Game). Its
+  **Advanced** button opens `world_gen_panel`, which owns only the detailed world
+  tunables; `build_config()` returns them and the play screen merges seed/type in.
+- **Settings** opens `settings_menu`, a category hub. Categories are
+  `settings_category_panel` instances (`category` property): Display (render
+  distance + extreme toggle, FOV, fullscreen), Graphics (preset + advanced),
+  Sound (three buses), Gameplay (mouse sensitivity). `graphics_panel` is the
+  nested advanced screen, reachable only from the Graphics category, and is
+  itself a hub: each `GraphicsSections.SECTIONS` entry (Lighting, Shadows,
+  Sky & Atmosphere, Post-Processing, Performance) opens a
+  `graphics_section_panel` with that section's rows.
+- `ui_cancel` unwinds one layer at a time: advanced section -> advanced hub ->
+  category -> settings hub. The `settings_menu` hub drives that routing (it
+  calls `graphics_panel.close_section()` first), and the pause menu reuses the
+  same settings hub.
+
 ## Interaction Contract
 
 - Every modal provides initial keyboard/controller focus and handles `ui_cancel`.
-- Nested graphics settings close before their parent and restore focus to the opener.
+- Nested screens close before their parent and restore focus to the control that opened them.
 - Main-menu panels restore focus to the button that opened them.
 - Settings and gameplay signals remain presentation-independent; UI scripts do not reach into the player.
 - Inventory columns and hotbar slots adapt to available viewport width.
+- `redot --headless --path . --script res://tools/ui_flow_verify.gd` checks the
+  Play/Advanced and Settings/category/advanced flows, cancel order, and focus
+  restoration.
 
 When adding a screen, apply `UITheme.build()` at its root, use the shared factories and button styles, preserve natural container layout, and add only motion that does not delay closing or scene changes.

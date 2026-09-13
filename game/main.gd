@@ -9,11 +9,11 @@ const HOTBAR: Array[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 27]
 const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32, 27: 32}
 const STATS_INTERVAL := 0.25
 const NEAR_SHADOW_DISTANCE := 6.0
-const SLOT_WIDTH := 76.0
-const SLOT_HEIGHT := 76.0
-const SLOT_GAP := 8.0
-const SLOT_MARGIN := 10.0
-const SLOT_ICON := 46.0
+const SLOT_WIDTH := 48.0
+const SLOT_HEIGHT := 48.0
+const SLOT_GAP := 5.0
+const SLOT_MARGIN := 6.0
+const SLOT_ICON := 30.0
 
 @onready var world: VoxelWorld = $World
 @onready var player: Player = $Player
@@ -178,6 +178,9 @@ func _apply_graphics() -> void:
 	_sun.directional_shadow_split_1 = near_split
 	_sun.directional_shadow_split_2 = maxf(near_split * 2.0, 0.1)
 	_sun.directional_shadow_split_3 = maxf(_sun.directional_shadow_split_2 * 2.0, 0.3)
+	# Overlap the cascades slightly; without blending the split boundaries show
+	# as hard diagonal lines that follow the camera.
+	_sun.directional_shadow_blend_splits = true
 	_sun.shadow_opacity = float(graphics["shadow_opacity"])
 	var soft_shadows := bool(graphics["soft_shadows"])
 	# Keep a narrow spatial filter on hard sun shadows to smooth texel steps.
@@ -222,12 +225,12 @@ func _style_hud() -> void:
 	# Instrument chips: coords read out position, stats read out telemetry.
 	var chip := UITheme.chip_style()
 	_coords_label.add_theme_font_override("font", UITheme.font_semi())
-	_coords_label.add_theme_font_size_override("font_size", 14)
+	_coords_label.add_theme_font_size_override("font_size", 12)
 	_coords_label.add_theme_color_override("font_color", UITheme.INK)
 	var coords_panel := _coords_label.get_parent() as PanelContainer
 	coords_panel.add_theme_stylebox_override("panel", chip)
 	_stats_label.add_theme_font_override("font", UITheme.font_semi())
-	_stats_label.add_theme_font_size_override("font_size", 14)
+	_stats_label.add_theme_font_size_override("font_size", 12)
 	_stats_label.add_theme_color_override("font_color", UITheme.MUTED)
 	var stats_panel := _stats_label.get_parent() as PanelContainer
 	stats_panel.add_theme_stylebox_override("panel", chip.duplicate())
@@ -238,7 +241,7 @@ func _style_hud() -> void:
 	_selection_chip.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	_selection_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_selection_chip.add_theme_font_override("font", UITheme.font_semi())
-	_selection_chip.add_theme_font_size_override("font_size", 15)
+	_selection_chip.add_theme_font_size_override("font_size", 13)
 	_selection_chip.add_theme_color_override("font_color", UITheme.EMBER_HI)
 	_selection_chip.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.75))
 	_selection_chip.add_theme_constant_override("shadow_offset_x", 1)
@@ -246,15 +249,15 @@ func _style_hud() -> void:
 	_selection_chip.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_hud_root.add_child(_selection_chip)
 	_selection_chip.offset_left = -160.0
-	_selection_chip.offset_top = -148.0
+	_selection_chip.offset_top = -110.0
 	_selection_chip.offset_right = 160.0
-	_selection_chip.offset_bottom = -126.0
+	_selection_chip.offset_bottom = -92.0
 	_selection_chip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
-	_status_label.offset_top = -172.0
-	_status_label.offset_bottom = -146.0
+	_status_label.offset_top = -134.0
+	_status_label.offset_bottom = -112.0
 	_status_label.add_theme_font_override("font", UITheme.font_semi())
-	_status_label.add_theme_font_size_override("font_size", 15)
+	_status_label.add_theme_font_size_override("font_size", 14)
 	_status_label.add_theme_color_override("font_color", UITheme.INK_DIM)
 
 
@@ -316,9 +319,9 @@ func _build_hotbar() -> void:
 	_hotbar_icon_size = minf(SLOT_ICON, _hotbar_slot_size - 22.0)
 	var hotbar_width := slot_count * _hotbar_slot_size + (slot_count - 1) * SLOT_GAP + SLOT_MARGIN * 2.0
 	_hotbar.offset_left = -hotbar_width * 0.5
-	_hotbar.offset_top = -110.0
+	_hotbar.offset_top = -76.0
 	_hotbar.offset_right = hotbar_width * 0.5
-	_hotbar.offset_bottom = -14.0
+	_hotbar.offset_bottom = -10.0
 	var empty := StyleBoxEmpty.new()
 	_hotbar.add_theme_stylebox_override("panel", empty)
 
@@ -348,7 +351,7 @@ func _build_hotbar() -> void:
 
 		var icon := TextureRect.new()
 		icon.name = "Icon"
-		var content := _hotbar_slot_size - 12.0
+		var content := _hotbar_slot_size - 10.0
 		icon.custom_minimum_size = Vector2(_hotbar_icon_size, _hotbar_icon_size)
 		icon.size = Vector2(_hotbar_icon_size, _hotbar_icon_size)
 		icon.position = Vector2((content - _hotbar_icon_size) * 0.5, (content - _hotbar_icon_size) * 0.5)
@@ -363,18 +366,18 @@ func _build_hotbar() -> void:
 		key_label.text = _slot_key_hint(index)
 		key_label.position = Vector2(1, 0)
 		key_label.add_theme_font_override("font", UITheme.font_semi())
-		key_label.add_theme_font_size_override("font_size", 10)
+		key_label.add_theme_font_size_override("font_size", 9)
 		key_label.add_theme_color_override("font_color", UITheme.FAINT)
 		key_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		overlay.add_child(key_label)
 		slot_key_labels.append(key_label)
 
 		var count_label := Label.new()
-		count_label.position = Vector2(0, _hotbar_slot_size - 12.0 - 17.0)
-		count_label.size = Vector2(_hotbar_slot_size - 12.0, 16)
+		count_label.position = Vector2(0, _hotbar_slot_size - 10.0 - 13.0)
+		count_label.size = Vector2(_hotbar_slot_size - 10.0, 13)
 		count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		count_label.add_theme_font_override("font", UITheme.font_semi())
-		count_label.add_theme_font_size_override("font_size", 13)
+		count_label.add_theme_font_size_override("font_size", 11)
 		count_label.add_theme_color_override("font_color", UITheme.INK_DIM)
 		count_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
 		count_label.add_theme_constant_override("shadow_offset_x", 1)

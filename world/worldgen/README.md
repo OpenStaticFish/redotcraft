@@ -42,7 +42,7 @@ ranges live in `world_gen_config.gd`.
 - `terrain_scale`: multiplies local relief; Amplified applies an additional scale.
 - `macro_scale`: size of continents and broad terrain regions.
 - `biome_scale`: size of temperature/moisture regions, independent of landforms
-  (default 1792 blocks; larger values make biome territories broader).
+  (default 3072 blocks; larger values make biome territories broader).
 - `river_density`: controls channel-mask width and can disable rivers at zero.
 - `erosion_strength`: local talus smoothing and profile terracing.
 - `regional_erosion`: broad rainfall/transport erosion strength.
@@ -67,8 +67,16 @@ Forest, jungle, taiga, and swamp trees use broad deterministic grove fields with
 dense interiors and open clearings. Spruce crowns use tapered whorls and an
 exposed lower trunk; broadleaf crowns use short hash-directed limbs and
 asymmetric rounded layers. Their maximum horizontal reach stays at three blocks,
-within the six-block feature halo. Ecological flags keep dry plants on sand,
-reeds and mangroves near wet ground, and shade plants inside grove cover.
+within the six-block feature halo. Groves wider than a threshold strength grow
+`FEATURE_ANCIENT_TREE` interiors with a full understory so forests have
+old-growth cores. Ecological flags keep dry plants on sand, reeds and mangroves
+near wet ground, and shade plants inside grove cover.
+Ground cover mixes wildflowers into grass tufts, and a short bush layer (1-2
+leaf blocks) sits between ground cover and trees. Deliberate props (pebbles,
+rock outcrops, stumps, dead and large trees, fallen logs) and a floor-patch
+pass (worn dirt, mud, gravel scars) add near-field detail; patches also apply
+to compact LOD columns so distance matches. Raising any of these counts must be
+checked against the full-generation budget in `worldgen_benchmark.gd`.
 
 ### Terrain-shape guardrails
 
@@ -90,7 +98,10 @@ reeds and mangroves near wet ground, and shade plants inside grove cover.
 - Local relief is dominated by 80-block shoulders with a smaller 32-block knoll
   accent; the 13-block fine layer is a fraction of a block to two blocks. Keep
   the talus weight (`smoothstep(0.6, 5.5, gradient) * 0.33`) and profile fine
-  amplitudes low or the surface reads as broken voxel steps.
+  amplitudes low or the surface reads as broken voxel steps. Isolated
+  one-to-two block deviations are also relaxed 35% toward the local mean in
+  `_final_from_raw_neighborhood`, which removes rice-terrace bumps on gentle
+  ground without touching consistent slopes.
 
 Terrain tuning changes the output for existing seeds. Restart into a fresh world
 to review it; an already-running world retains its configured sampler and chunks.
@@ -126,6 +137,10 @@ to review it; an already-running world retains its configured sampler and chunks
   mesh top geometry, full chunks meshing against compact neighbors, baked tree
   crowns over forest chunks (never open water), and LOD occlusion shading that
   varies on hills while staying uniform on flat ground.
+- `redot --headless --path . --script res://tools/stream_full_verify.gd`
+  checks that the render distance really renders full chunks: no LOD inside
+  the configured distance, collision only near the player, and collision added
+  when approaching a distant chunk.
 - `redot --headless --path . --script res://tools/worldgen_stream_benchmark.gd`
   records ring-load wall time and throughput at render distances 10/16/32 and
   several job-concurrency levels.

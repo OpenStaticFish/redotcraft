@@ -543,6 +543,12 @@ func _final_from_raw_neighborhood(x: int, z: int, raw: float, west: float, east:
 	var mean: float = (west + east + north + south) * 0.25
 	var talus_weight: float = _smoothstep(0.6, 5.5, gradient) * _config.erosion_strength
 	var talus: float = lerpf(raw, mean, talus_weight * 0.33)
+	# Flatten isolated one-to-two block deviations from the local mean. On a
+	# consistent slope raw is already close to the mean, so this only removes
+	# the single-block bumps that read as rice terraces on gentle ground.
+	var micro: float = talus - mean
+	if absf(micro) <= 1.8:
+		talus = mean + micro * 0.35
 	var continental: float = _continentalness_at(x, z)
 	var profile_position: float = _profile_position_at(x, z, continental)
 	# Terracing belongs on plateaus, not every hillside and mountain flank.

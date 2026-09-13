@@ -106,15 +106,27 @@ func _verify_chunk(clean: TerrainGenerator, decorated: TerrainGenerator, cave_fr
 func _verify_canopy_coverage(generator: TerrainGenerator) -> void:
 	var grove_pos := _find_biome_chunk(generator, [BiomeCatalog.FOREST, BiomeCatalog.TAIGA, BiomeCatalog.JUNGLE, BiomeCatalog.SWAMP])
 	var grove_canopies := 0
+	var grove_patches := 0
 	if grove_pos.x != NO_OCEAN.x:
 		var grove_lod := generator.generate_data(grove_pos, {}, true)
 		for column in VoxelDefs.CHUNK_AREA:
-			if _is_tree_block(grove_lod.lod_solid_id[column]):
+			var top_id: int = grove_lod.lod_solid_id[column]
+			if _is_tree_block(top_id):
 				grove_canopies += 1
 				if grove_lod.lod_solid_y[column] <= VoxelDefs.SEA_LEVEL:
 					_fail("distance canopy sits at or below sea level at %s" % grove_pos)
+		# Floor patches are deliberately sparse per chunk, so count a small area.
+		for dz in range(-3, 4):
+			for dx in range(-3, 4):
+				var lod := generator.generate_data(grove_pos + Vector2i(dx, dz), {}, true)
+				for column in VoxelDefs.CHUNK_AREA:
+					var top_id: int = lod.lod_solid_id[column]
+					if top_id == BlockRegistry.BLOCK_DIRT or top_id == BlockRegistry.BLOCK_GRAVEL or top_id == BlockRegistry.BLOCK_MUD:
+						grove_patches += 1
 	if grove_canopies < 32:
 		_fail("distance grove sample at %s has only %d canopy columns" % [grove_pos, grove_canopies])
+	if grove_pos.x != NO_OCEAN.x and grove_patches == 0:
+		_fail("distance floor patches did not propagate at %s" % grove_pos)
 	var ocean_pos := _find_biome_chunk(generator, [BiomeCatalog.OCEAN, BiomeCatalog.DEEP_OCEAN])
 	if ocean_pos.x != NO_OCEAN.x:
 		var ocean_lod := generator.generate_data(ocean_pos, {}, true)
@@ -122,7 +134,7 @@ func _verify_canopy_coverage(generator: TerrainGenerator) -> void:
 			if _is_tree_block(ocean_lod.lod_solid_id[column]):
 				_fail("distance canopy appeared over open water at %s" % ocean_pos)
 				break
-	print("WORLDGEN LOD CANOPY: grove=%s columns=%d ocean=%s" % [grove_pos, grove_canopies, ocean_pos])
+	print("WORLDGEN LOD CANOPY: grove=%s columns=%d patches=%d ocean=%s" % [grove_pos, grove_canopies, grove_patches, ocean_pos])
 
 
 func _find_biome_chunk(generator: TerrainGenerator, wanted: Array[int]) -> Vector2i:

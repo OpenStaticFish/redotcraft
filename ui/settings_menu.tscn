@@ -1,16 +1,17 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
-[ext_resource type="Script" path="res://ui/settings_panel.gd" id="1_settings"]
-[ext_resource type="PackedScene" path="res://ui/graphics_panel.tscn" id="2_graphics"]
+[ext_resource type="Script" path="res://ui/settings_menu.gd" id="1_menu"]
+[ext_resource type="PackedScene" path="res://ui/settings_category_panel.tscn" id="2_category"]
+[ext_resource type="PackedScene" path="res://ui/graphics_panel.tscn" id="3_graphics"]
 
-[node name="SettingsPanel" type="Control"]
+[node name="SettingsMenu" type="Control"]
 layout_mode = 3
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 visible = false
-script = ExtResource("1_settings")
+script = ExtResource("1_menu")
 
 [node name="Dim" type="ColorRect" parent="."]
 layout_mode = 1
@@ -44,22 +45,29 @@ horizontal_alignment = 1
 
 [node name="RowsBox" type="VBoxContainer" parent="Center/Panel/Box"]
 layout_mode = 2
-theme_override_constants/separation = 14
+theme_override_constants/separation = 12
 
 [node name="Footer" type="HBoxContainer" parent="Center/Panel/Box"]
 layout_mode = 2
 theme_override_constants/separation = 10
 alignment = 2
 
-[node name="AdvancedButton" type="Button" parent="Center/Panel/Box/Footer"]
-layout_mode = 2
-custom_minimum_size = Vector2(230, 0)
-text = "Advanced Graphics..."
-
 [node name="DoneButton" type="Button" parent="Center/Panel/Box/Footer"]
 layout_mode = 2
 custom_minimum_size = Vector2(150, 0)
 text = "Done"
 
-[node name="GraphicsPanel" parent="." instance=ExtResource("2_graphics")]
+[node name="GraphicsCategory" parent="." instance=ExtResource("2_category")]
+category = "graphics"
+
+[node name="DisplayCategory" parent="." instance=ExtResource("2_category")]
+category = "display"
+
+[node name="SoundCategory" parent="." instance=ExtResource("2_category")]
+category = "sound"
+
+[node name="GameplayCategory" parent="." instance=ExtResource("2_category")]
+category = "gameplay"
+
+[node name="GraphicsPanel" parent="." instance=ExtResource("3_graphics")]
 visible = false

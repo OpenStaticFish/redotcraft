@@ -29,7 +29,7 @@ func _initialize() -> void:
 	print("STREAM BENCH seed=", SEED, " workers=", OS.get_processor_count())
 	_breakdown(generator, mesher)
 	for render_distance in [10, 16, 32]:
-		var lod_distance := clampi(render_distance / 3, 3, VoxelWorld.MAX_FULL_DETAIL_DISTANCE)
+		var lod_distance := mini(render_distance, VoxelWorld.MAX_FULL_DETAIL_DISTANCE)
 		var positions := _ring(render_distance)
 		var full := 0
 		for pos in positions:

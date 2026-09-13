@@ -23,7 +23,8 @@ const SKYLINE_SEED := 7
 const SKYLINE_COLUMN := 26.0
 const DRIFT_WRAP_MARGIN := 320.0
 
-@onready var _settings_panel: SettingsPanel = $SettingsPanel
+@onready var _play_panel: PlayPanel = $PlayPanel
+@onready var _settings_menu: SettingsMenu = $SettingsMenu
 @onready var _world_gen_panel: WorldGenPanel = $WorldGenPanel
 @onready var _background: TextureRect = $Background
 @onready var _title: Label = $Center/Column/Title
@@ -48,12 +49,13 @@ func _ready() -> void:
 	_restyle_buttons()
 	_restyle_footer()
 	$Center/Column/PlayButton.pressed.connect(_on_play)
-	$Center/Column/WorldGenButton.pressed.connect(_on_world_gen)
 	$Center/Column/SettingsButton.pressed.connect(_on_settings)
 	$Center/Column/QuitButton.pressed.connect(_on_quit)
-	_settings_panel.closed.connect(_on_panel_closed)
-	_world_gen_panel.closed.connect(_on_panel_closed)
-	_world_gen_panel.create_world.connect(_on_create_world)
+	_play_panel.closed.connect(_on_panel_closed)
+	_play_panel.advanced_requested.connect(_on_play_advanced)
+	_play_panel.create_requested.connect(_on_create_world)
+	_settings_menu.closed.connect(_on_panel_closed)
+	_world_gen_panel.closed.connect(_on_world_gen_closed)
 	$Center/Column/PlayButton.grab_focus()
 
 
@@ -193,12 +195,10 @@ func _restyle_wordmark() -> void:
 func _restyle_buttons() -> void:
 	var column := _title.get_parent()
 	UITheme.style_button_primary(column.get_node("PlayButton"))
-	UITheme.style_button_ghost(column.get_node("WorldGenButton"))
 	UITheme.style_button_ghost(column.get_node("SettingsButton"))
 	UITheme.style_button_ghost(column.get_node("QuitButton"))
 	Motion.stagger_in([
 		column.get_node("PlayButton"),
-		column.get_node("WorldGenButton"),
 		column.get_node("SettingsButton"),
 		column.get_node("QuitButton"),
 	])
@@ -207,7 +207,7 @@ func _restyle_buttons() -> void:
 func _restyle_footer() -> void:
 	_footer.add_theme_color_override("font_color", UITheme.FAINT)
 	_footer.add_theme_font_size_override("font_size", 13)
-	_footer.text = "WASD move · SPACE jump · double-tap SPACE fly · I inventory · F3 worldgen map · ESC pause"
+	_footer.text = "WASD move · SPACE jump · double-tap SPACE fly · E inventory · F3 worldgen map · ESC pause"
 
 
 func _on_panel_closed() -> void:
@@ -217,21 +217,30 @@ func _on_panel_closed() -> void:
 
 
 func _on_play() -> void:
-	GameConfig.reset_world_defaults()
-	_start_game()
-
-
-func _on_world_gen() -> void:
-	_panel_focus_return = $Center/Column/WorldGenButton
-	_world_gen_panel.open_panel()
+	_panel_focus_return = $Center/Column/PlayButton
+	_play_panel.open_panel()
 
 
 func _on_settings() -> void:
 	_panel_focus_return = $Center/Column/SettingsButton
-	_settings_panel.open_panel()
+	_settings_menu.open_panel()
 
 
-func _on_create_world(config: Dictionary) -> void:
+func _on_play_advanced() -> void:
+	_world_gen_panel.open_panel()
+
+
+func _on_world_gen_closed() -> void:
+	# The advanced screen is only reachable from the play screen, which stays
+	# open underneath, so focus returns to the button that opened it.
+	if _play_panel.visible:
+		_play_panel.focus_advanced()
+
+
+func _on_create_world(seed: int, world_type: int) -> void:
+	var config := _world_gen_panel.build_config()
+	config["seed"] = seed
+	config["world_type"] = world_type
 	GameConfig.apply_world(config)
 	_start_game()
 

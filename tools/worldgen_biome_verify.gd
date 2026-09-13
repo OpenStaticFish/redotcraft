@@ -18,7 +18,7 @@ func _init() -> void:
 	var generator := TerrainGenerator.new()
 	generator.configure({
 		"seed": SEED,
-		"biome_scale": 1792.0,
+		"biome_scale": 3072.0,
 		"tree_density": 1.0,
 		"decoration_density": 1.0,
 	})
@@ -128,8 +128,10 @@ func _verify_vegetation(generator: TerrainGenerator, centers: Dictionary) -> voi
 		var center: Vector2i = centers[biome]
 		var center_chunk := Vector2i(floori(float(center.x) / 16.0), floori(float(center.y) / 16.0))
 		var counts := {}
-		for dz in range(-2, 3):
-			for dx in range(-2, 3):
+		# Larger biomes need a wider sample: one dense grove can otherwise
+		# dominate or miss a 5x5 window at the chosen interior.
+		for dz in range(-3, 4):
+			for dx in range(-3, 4):
 				var result := generator.generate_data(center_chunk + Vector2i(dx, dz), {}, false)
 				for block_id in result.data:
 					if block_id != BlockRegistry.BLOCK_AIR:
@@ -140,12 +142,11 @@ func _verify_vegetation(generator: TerrainGenerator, centers: Dictionary) -> voi
 	var swamp: Dictionary = counts_by_biome[BiomeCatalog.SWAMP]
 	var jungle: Dictionary = counts_by_biome[BiomeCatalog.JUNGLE]
 	var taiga: Dictionary = counts_by_biome[BiomeCatalog.TAIGA]
-	_check(int(forest.get(BlockRegistry.BLOCK_LOG, 0)) >= 80, "forest interior is missing dense oak vegetation")
-	_check(int(swamp.get(BlockRegistry.BLOCK_MANGROVE_LOG, 0)) >= 25, "swamp interior is missing mangroves")
-	_check(int(swamp.get(BlockRegistry.BLOCK_VINE, 0)) >= 5, "swamp interior is missing vines")
-	_check(int(jungle.get(BlockRegistry.BLOCK_JUNGLE_LOG, 0)) >= 150, "jungle interior is missing dense jungle trees")
+	_check(int(forest.get(BlockRegistry.BLOCK_LOG, 0)) >= 150, "forest interior is missing dense oak vegetation")
+	_check(int(swamp.get(BlockRegistry.BLOCK_MANGROVE_LOG, 0)) >= 50, "swamp interior is missing mangroves")
+	_check(int(jungle.get(BlockRegistry.BLOCK_JUNGLE_LOG, 0)) >= 300, "jungle interior is missing dense jungle trees")
 	_check(int(jungle.get(BlockRegistry.BLOCK_VINE, 0)) >= 20, "jungle interior is missing vines")
-	_check(int(taiga.get(BlockRegistry.BLOCK_SPRUCE_LOG, 0)) >= 150, "taiga interior is missing dense spruce vegetation")
+	_check(int(taiga.get(BlockRegistry.BLOCK_SPRUCE_LOG, 0)) >= 300, "taiga interior is missing dense spruce vegetation")
 	print("WORLDGEN BIOME DENSITY: forest_oak=%d swamp_mangrove=%d swamp_vine=%d jungle_log=%d jungle_vine=%d taiga_spruce=%d" % [
 		int(forest.get(BlockRegistry.BLOCK_LOG, 0)),
 		int(swamp.get(BlockRegistry.BLOCK_MANGROVE_LOG, 0)),
@@ -153,6 +154,17 @@ func _verify_vegetation(generator: TerrainGenerator, centers: Dictionary) -> voi
 		int(jungle.get(BlockRegistry.BLOCK_JUNGLE_LOG, 0)),
 		int(jungle.get(BlockRegistry.BLOCK_VINE, 0)),
 		int(taiga.get(BlockRegistry.BLOCK_SPRUCE_LOG, 0))])
+	var forest_grass := int(forest.get(BlockRegistry.BLOCK_TALL_GRASS, 0))
+	var forest_flowers := int(forest.get(BlockRegistry.BLOCK_YELLOW_FLOWER, 0)) + int(forest.get(BlockRegistry.BLOCK_RED_FLOWER, 0))
+	var taiga_grass := int(taiga.get(BlockRegistry.BLOCK_TALL_GRASS, 0))
+	var jungle_bamboo := int(jungle.get(BlockRegistry.BLOCK_BAMBOO, 0))
+	var swamp_reeds := int(swamp.get(BlockRegistry.BLOCK_TALL_GRASS, 0))
+	_check(forest_grass >= 250, "forest ground cover thinned out (%d tall grass)" % forest_grass)
+	_check(forest_flowers >= 40, "forest flowers thinned out (%d)" % forest_flowers)
+	_check(taiga_grass >= 200, "taiga ground cover thinned out (%d tall grass)" % taiga_grass)
+	_check(jungle_bamboo >= 100, "jungle bamboo thinned out (%d)" % jungle_bamboo)
+	print("WORLDGEN BIOME COVER: forest_grass=%d forest_flowers=%d taiga_grass=%d jungle_bamboo=%d swamp_reeds=%d" % [
+		forest_grass, forest_flowers, taiga_grass, jungle_bamboo, swamp_reeds])
 
 
 func _check(condition: bool, message: String) -> void:

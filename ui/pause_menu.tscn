@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://ui/pause_menu.gd" id="1_pause"]
-[ext_resource type="PackedScene" path="res://ui/settings_panel.tscn" id="2_settings"]
+[ext_resource type="PackedScene" path="res://ui/settings_menu.tscn" id="2_settings"]
 
 [node name="PauseMenu" type="CanvasLayer"]
 layer = 20
@@ -64,5 +64,5 @@ theme_override_font_sizes/font_size = 13
 text = "WASD move   SPACE jump   double-tap SPACE to fly\nSHIFT sprint / descend   CTRL fast fly   LMB mine   RMB place\n1-9 / 0 or wheel select block"
 horizontal_alignment = 1
 
-[node name="SettingsPanel" parent="." instance=ExtResource("2_settings")]
+[node name="SettingsMenu" parent="." instance=ExtResource("2_settings")]
 visible = false

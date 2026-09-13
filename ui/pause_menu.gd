@@ -14,18 +14,18 @@ signal quit_requested
 @onready var _quit_button: Button = $Center/Panel/Box/QuitGameButton
 @onready var _hint: Label = $Center/Panel/Box/Hint
 @onready var _dim: ColorRect = $Dim
-@onready var _settings_panel: SettingsPanel = $SettingsPanel
+@onready var _settings_menu: SettingsMenu = $SettingsMenu
 
 
 func _ready() -> void:
 	_panel.theme = UITheme.build()
 	_style_static()
 	_resume_button.pressed.connect(close_menu)
-	_settings_button.pressed.connect(func() -> void: _settings_panel.open_panel())
+	_settings_button.pressed.connect(func() -> void: _settings_menu.open_panel())
 	_new_world_button.pressed.connect(func() -> void: new_world_requested.emit())
 	_quit_button.pressed.connect(func() -> void: quit_requested.emit())
-	_settings_panel.closed.connect(func() -> void: _settings_button.grab_focus())
-	_settings_panel.setting_changed.connect(func(key: String, value: Variant) -> void: setting_changed.emit(key, value))
+	_settings_menu.closed.connect(func() -> void: _settings_button.grab_focus())
+	_settings_menu.setting_changed.connect(func(key: String, value: Variant) -> void: setting_changed.emit(key, value))
 
 
 func _style_static() -> void:
@@ -58,8 +58,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not visible:
 		return
 	if event.is_action_pressed("ui_cancel"):
-		if _settings_panel.visible:
-			_settings_panel.close_panel()
+		if _settings_menu.visible:
+			_settings_menu.close_panel()
 		else:
 			close_menu()
 		get_viewport().set_input_as_handled()
@@ -76,7 +76,7 @@ func open_menu() -> void:
 
 func close_menu() -> void:
 	visible = false
-	_settings_panel.visible = false
+	_settings_menu.visible = false
 	get_tree().paused = false
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	resumed.emit()

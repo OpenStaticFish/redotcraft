@@ -44,6 +44,9 @@ class MeshResult:
 	var water_light := PackedFloat32Array()
 	var water_indices := PackedInt32Array()
 	var light_volume: LightVolume
+	## Distant full chunks skip collision triangles; approaching them rebuilds
+	## the chunk with collision enabled.
+	var build_collision := true
 	# Distance meshes carry compact per-column tops instead of a full voxel
 	# array, so LOD chunks cost kilobytes rather than ~50 KB each.
 	var lod_solid_y := PackedInt32Array()
@@ -140,11 +143,12 @@ func _init(blocks: BlockRegistry) -> void:
 
 
 ## Thread-safe: only reads immutable block tables once constructed.
-func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, foliage_tints: PackedColorArray, water_tints: PackedColorArray, neighbors: NeighborSet) -> MeshResult:
+func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, foliage_tints: PackedColorArray, water_tints: PackedColorArray, neighbors: NeighborSet, want_collision: bool = true) -> MeshResult:
 	var result := MeshResult.new()
 	result.data = data
 	result.heights = heights
 	result.mask = neighbors.mask
+	result.build_collision = want_collision
 	var max_y := clampi(data_max_y + 1, 1, VoxelDefs.WORLD_HEIGHT - 1)
 	result.max_y = max_y
 	var light_volume := _assemble_light_volume(data, data_max_y, heights, neighbors)
@@ -887,7 +891,8 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 	var p2: Vector3 = result.verts[base + 2]
 	var p3: Vector3 = result.verts[base + 3]
 	result.indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
-	result.collision.append_array(PackedVector3Array([p0, p2, p1, p0, p3, p2]))
+	if result.build_collision:
+		result.collision.append_array(PackedVector3Array([p0, p2, p1, p0, p3, p2]))
 
 
 func _append_cross_block(origin: Vector3, block_id: int, block_light: Color, sky_light: float, tint: Color, result: MeshResult) -> void:

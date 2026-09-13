@@ -24,6 +24,18 @@ const FEATURE_RED_MUSHROOM: int = 18
 ## There is no separate reed block. The populator renders reeds using the
 ## tall-grass cross block, which is the closest supported registry asset.
 const FEATURE_REEDS: int = 19
+## A short leaf block cluster that sits between ground cover and trees.
+const FEATURE_BUSH: int = 20
+## Deliberate small props (as opposed to the random debris removed earlier).
+const FEATURE_PEBBLE: int = 21
+const FEATURE_ROCK_OUTCROP: int = 22
+const FEATURE_STUMP: int = 23
+const FEATURE_DEAD_TREE: int = 24
+const FEATURE_LARGE_TREE: int = 25
+const FEATURE_DRIFTWOOD: int = 26
+## Grove interiors only: a tall old broadleaf that never appears in the
+## ordinary species lottery.
+const FEATURE_ANCIENT_TREE: int = 27
 
 const FLAG_TREE: int = 1
 const FLAG_WATER_EDGE: int = 2
@@ -38,51 +50,71 @@ func _init() -> void:
 	# placement flags]. The occurrence chance is multiplied by world settings.
 	_sets = {
 		BiomeCatalog.DECORATION_PLAINS: [
-			[FEATURE_OAK, 8, 0.08, FLAG_TREE], [FEATURE_BIRCH, 2, 0.04, FLAG_TREE],
-			[FEATURE_YELLOW_FLOWER, 18, 0.52, 0], [FEATURE_RED_FLOWER, 14, 0.46, 0],
-			[FEATURE_MELON, 2, 0.04, 0],
+			[FEATURE_OAK, 8, 0.14, FLAG_TREE], [FEATURE_BIRCH, 2, 0.08, FLAG_TREE],
+			[FEATURE_YELLOW_FLOWER, 18, 0.72, 0], [FEATURE_RED_FLOWER, 14, 0.66, 0],
+			[FEATURE_BUSH, 6, 0.14, 0], [FEATURE_PEBBLE, 4, 0.06, 0], [FEATURE_MELON, 2, 0.04, 0],
 		],
 		BiomeCatalog.DECORATION_MEADOW: [
-			[FEATURE_BIRCH, 4, 0.08, FLAG_TREE],
-			[FEATURE_YELLOW_FLOWER, 30, 0.72, 0], [FEATURE_RED_FLOWER, 26, 0.68, 0],
+			[FEATURE_BIRCH, 4, 0.12, FLAG_TREE],
+			[FEATURE_YELLOW_FLOWER, 30, 0.85, 0], [FEATURE_RED_FLOWER, 26, 0.82, 0],
+			[FEATURE_BUSH, 8, 0.18, 0], [FEATURE_PEBBLE, 3, 0.05, 0],
 		],
 		BiomeCatalog.DECORATION_SAVANNA: [
-			[FEATURE_ACACIA, 24, 0.30, FLAG_TREE], [FEATURE_DEAD_BUSH, 18, 0.34, 0],
-			[FEATURE_TALL_GRASS, 28, 0.48, 0],
+			[FEATURE_ACACIA, 24, 0.40, FLAG_TREE], [FEATURE_DEAD_BUSH, 18, 0.44, 0],
+			[FEATURE_TALL_GRASS, 28, 0.62, 0], [FEATURE_BUSH, 4, 0.10, 0],
+			[FEATURE_PEBBLE, 4, 0.07, 0], [FEATURE_DEAD_TREE, 3, 0.06, 0],
 		],
 		BiomeCatalog.DECORATION_FOREST: [
 			[FEATURE_OAK, 30, 0.44, FLAG_TREE], [FEATURE_BIRCH, 15, 0.30, FLAG_TREE],
-			[FEATURE_YELLOW_FLOWER, 5, 0.18, 0], [FEATURE_RED_FLOWER, 5, 0.18, 0],
-			[FEATURE_BROWN_MUSHROOM, 8, 0.26, FLAG_SHADE], [FEATURE_RED_MUSHROOM, 3, 0.12, FLAG_SHADE],
+			[FEATURE_LARGE_TREE, 7, 0.0, FLAG_TREE],
+			[FEATURE_YELLOW_FLOWER, 5, 0.35, 0], [FEATURE_RED_FLOWER, 5, 0.35, 0],
+			[FEATURE_BUSH, 10, 0.24, 0], [FEATURE_PEBBLE, 3, 0.05, 0],
+			[FEATURE_FALLEN_LOG, 6, 0.14, 0], [FEATURE_STUMP, 5, 0.12, 0],
+			[FEATURE_BROWN_MUSHROOM, 8, 0.40, FLAG_SHADE], [FEATURE_RED_MUSHROOM, 3, 0.20, FLAG_SHADE],
 		],
 		BiomeCatalog.DECORATION_DESERT: [
-			[FEATURE_CACTUS, 24, 0.38, FLAG_DRY_GROUND], [FEATURE_DEAD_BUSH, 42, 0.58, FLAG_DRY_GROUND],
+			[FEATURE_CACTUS, 24, 0.38, FLAG_DRY_GROUND], [FEATURE_DEAD_BUSH, 42, 0.62, FLAG_DRY_GROUND],
+			[FEATURE_PEBBLE, 8, 0.16, FLAG_DRY_GROUND],
 		],
 		BiomeCatalog.DECORATION_SWAMP: [
-			[FEATURE_MANGROVE, 28, 0.72, FLAG_TREE | FLAG_WATER_EDGE], [FEATURE_REEDS, 48, 0.82, FLAG_WATER_EDGE],
-			[FEATURE_VINE, 20, 0.52, FLAG_WATER_EDGE], [FEATURE_BROWN_MUSHROOM, 8, 0.28, FLAG_SHADE],
-			[FEATURE_RED_MUSHROOM, 4, 0.16, FLAG_SHADE],
+			[FEATURE_MANGROVE, 28, 0.72, FLAG_TREE | FLAG_WATER_EDGE], [FEATURE_REEDS, 48, 0.90, FLAG_WATER_EDGE],
+			[FEATURE_VINE, 20, 0.70, FLAG_WATER_EDGE], [FEATURE_BROWN_MUSHROOM, 8, 0.42, FLAG_SHADE],
+			[FEATURE_RED_MUSHROOM, 4, 0.24, FLAG_SHADE], [FEATURE_DRIFTWOOD, 5, 0.14, FLAG_WATER_EDGE],
+			[FEATURE_STUMP, 3, 0.10, 0],
 		],
 		BiomeCatalog.DECORATION_RIVERBANK: [
-			[FEATURE_REEDS, 58, 0.86, FLAG_WATER_EDGE], [FEATURE_YELLOW_FLOWER, 8, 0.24, FLAG_WATER_EDGE],
-			[FEATURE_RED_FLOWER, 6, 0.20, FLAG_WATER_EDGE],
+			[FEATURE_REEDS, 58, 0.92, FLAG_WATER_EDGE], [FEATURE_YELLOW_FLOWER, 8, 0.36, FLAG_WATER_EDGE],
+			[FEATURE_RED_FLOWER, 6, 0.32, FLAG_WATER_EDGE], [FEATURE_DRIFTWOOD, 8, 0.20, FLAG_WATER_EDGE],
+			[FEATURE_PEBBLE, 5, 0.12, FLAG_WATER_EDGE],
+		],
+		BiomeCatalog.DECORATION_BEACH: [
+			[FEATURE_DRIFTWOOD, 12, 0.26, 0], [FEATURE_PEBBLE, 10, 0.22, 0],
+			[FEATURE_REEDS, 8, 0.16, FLAG_WATER_EDGE],
 		],
 		BiomeCatalog.DECORATION_TROPICAL: [
-			[FEATURE_JUNGLE, 34, 0.62, FLAG_TREE], [FEATURE_BAMBOO, 28, 0.66, 0],
-			[FEATURE_VINE, 22, 0.56, 0], [FEATURE_MELON, 10, 0.22, 0],
+			[FEATURE_JUNGLE, 34, 0.62, FLAG_TREE], [FEATURE_LARGE_TREE, 6, 0.0, FLAG_TREE],
+			[FEATURE_BAMBOO, 28, 0.80, 0],
+			[FEATURE_VINE, 22, 0.75, 0], [FEATURE_BUSH, 10, 0.22, 0], [FEATURE_MELON, 10, 0.30, 0],
+			[FEATURE_FALLEN_LOG, 5, 0.12, 0], [FEATURE_STUMP, 4, 0.10, 0],
 		],
 		BiomeCatalog.DECORATION_TAIGA: [
-			[FEATURE_SPRUCE, 48, 0.62, FLAG_TREE],
-			[FEATURE_BROWN_MUSHROOM, 10, 0.24, FLAG_SHADE], [FEATURE_RED_MUSHROOM, 4, 0.12, FLAG_SHADE],
+			[FEATURE_SPRUCE, 48, 0.62, FLAG_TREE], [FEATURE_BUSH, 6, 0.16, 0],
+			[FEATURE_BROWN_MUSHROOM, 10, 0.38, FLAG_SHADE], [FEATURE_RED_MUSHROOM, 4, 0.20, FLAG_SHADE],
+			[FEATURE_STUMP, 6, 0.14, 0], [FEATURE_FALLEN_LOG, 6, 0.14, 0],
+			[FEATURE_DEAD_TREE, 3, 0.07, 0], [FEATURE_PEBBLE, 3, 0.06, 0],
 		],
 		BiomeCatalog.DECORATION_SNOWFIELD: [
-			[FEATURE_SPRUCE, 18, 0.12, FLAG_TREE],
+			[FEATURE_SPRUCE, 18, 0.20, FLAG_TREE],
+			[FEATURE_ROCK_OUTCROP, 4, 0.10, 0], [FEATURE_PEBBLE, 4, 0.10, 0],
 		],
 		BiomeCatalog.DECORATION_BADLANDS: [
-			[FEATURE_CACTUS, 20, 0.34, FLAG_DRY_GROUND], [FEATURE_DEAD_BUSH, 38, 0.52, FLAG_DRY_GROUND],
+			[FEATURE_CACTUS, 20, 0.34, FLAG_DRY_GROUND], [FEATURE_DEAD_BUSH, 38, 0.56, FLAG_DRY_GROUND],
+			[FEATURE_PEBBLE, 10, 0.20, FLAG_DRY_GROUND], [FEATURE_ROCK_OUTCROP, 6, 0.14, FLAG_DRY_GROUND],
+			[FEATURE_DEAD_TREE, 3, 0.08, FLAG_DRY_GROUND],
 		],
 		BiomeCatalog.DECORATION_ALPINE: [
-			[FEATURE_SPRUCE, 12, 0.10, FLAG_TREE],
+			[FEATURE_SPRUCE, 12, 0.18, FLAG_TREE],
+			[FEATURE_ROCK_OUTCROP, 8, 0.18, 0], [FEATURE_PEBBLE, 6, 0.14, 0],
 		],
 	}
 
@@ -115,24 +147,24 @@ func choose_non_tree(decoration_set: int, selector: float) -> Array:
 
 
 ## Ground cover is populated independently of the one-feature-per-cell lottery.
-## Values are deliberately modest; a successful cover cell produces a 2-4 grass
-## tuft over a 10x10 area rather than carpeting every grass block.
+## A successful cover cell produces a 3-6 grass tuft over an 8x8 area, layered
+## under flowers, bushes, and trees rather than carpeting every grass block.
 func ground_cover_chance(decoration_set: int) -> float:
 	match decoration_set:
 		BiomeCatalog.DECORATION_PLAINS:
-			return 0.82
+			return 0.90
 		BiomeCatalog.DECORATION_MEADOW:
-			return 0.94
+			return 0.96
 		BiomeCatalog.DECORATION_SAVANNA:
-			return 0.58
+			return 0.70
 		BiomeCatalog.DECORATION_FOREST:
-			return 0.52
+			return 0.70
 		BiomeCatalog.DECORATION_TROPICAL:
-			return 0.72
+			return 0.85
 		BiomeCatalog.DECORATION_TAIGA:
-			return 0.30
+			return 0.45
 		BiomeCatalog.DECORATION_SWAMP:
-			return 0.24
+			return 0.35
 	return 0.0
 
 

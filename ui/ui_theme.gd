@@ -122,12 +122,14 @@ static func modal_style() -> StyleBoxFlat:
 
 
 ## Small HUD chip surface (instrument-cluster look); pair with accent_bar().
+## Compact instrument chip used by the HUD readouts; padding stays tight so
+## coords/stats occupy as little screen space as possible.
 static func chip_style() -> StyleBoxFlat:
-	var style := panel_style(Color(SURFACE.r, SURFACE.g, SURFACE.b, 0.88), LINE, 1, 8)
-	style.content_margin_left = 14.0
-	style.content_margin_right = 14.0
-	style.content_margin_top = 7.0
-	style.content_margin_bottom = 7.0
+	var style := panel_style(Color(SURFACE.r, SURFACE.g, SURFACE.b, 0.88), LINE, 1, 7)
+	style.content_margin_left = 10.0
+	style.content_margin_right = 10.0
+	style.content_margin_top = 5.0
+	style.content_margin_bottom = 5.0
 	return style
 
 

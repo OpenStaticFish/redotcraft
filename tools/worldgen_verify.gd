@@ -34,6 +34,7 @@ func _initialize() -> void:
 	_verify_surface_blankets()
 	_verify_foliage_tint_blending(generator)
 	_verify_ground_cover()
+	_verify_props()
 	_verify_seabed_sediment()
 	_verify_edit_priority(generator)
 	_verify_parallel_generation(generator)
@@ -265,10 +266,100 @@ func _verify_ground_cover() -> void:
 	var soil_index := 1 + (VoxelDefs.SEA_LEVEL + 5) * VoxelDefs.DATA_STRIDE_Y
 	var target_index := 1 + (VoxelDefs.SEA_LEVEL + 6) * VoxelDefs.DATA_STRIDE_Y
 	carved_fixture[soil_index] = BlockRegistry.BLOCK_AIR
-	_expect(populator._place_ground_cover(carved_fixture, field, 0, 0, 1, 0) == -1,
+	_expect(populator._place_ground_cover(carved_fixture, field, 0, 0, 1, 0, BiomeCatalog.PLAINS, 0) == -1,
 		"ground cover floated above an absent soil voxel")
 	_expect(carved_fixture[target_index] == BlockRegistry.BLOCK_AIR,
 		"ground cover wrote into a floating target")
+
+
+## Props must add their own blocks and nothing else, and floor patches must be
+## deterministic and replace only the biome's surface block.
+func _verify_props() -> void:
+	var populator := VoxelPopulator.new(WorldGenConfig.new(TEST_CONFIG), BiomeCatalog.new())
+	var surface_y := VoxelDefs.SEA_LEVEL + 5
+
+	var pebble := _grass_fixture(surface_y)
+	populator._stamp_pebble(pebble, 0, 0, 8, surface_y, 8, 12345)
+	var pebble_count := 0
+	for local_z in VoxelDefs.CHUNK_SIZE:
+		for local_x in VoxelDefs.CHUNK_SIZE:
+			var above := pebble[local_x + local_z * VoxelDefs.DATA_STRIDE_Z + (surface_y + 1) * VoxelDefs.DATA_STRIDE_Y]
+			if above == BlockRegistry.BLOCK_COBBLESTONE or above == BlockRegistry.BLOCK_STONE:
+				pebble_count += 1
+			elif above != BlockRegistry.BLOCK_AIR:
+				_expect(false, "pebble stamped an unexpected block")
+	_expect(pebble_count >= 1 and pebble_count <= 3, "pebble prop size out of range (%d)" % pebble_count)
+
+	var stump := _grass_fixture(surface_y)
+	populator._stamp_stump(stump, 0, 0, 8, surface_y, 8, 33)
+	var stump_logs := 0
+	var stump_roots := 0
+	for local_z in VoxelDefs.CHUNK_SIZE:
+		for local_x in VoxelDefs.CHUNK_SIZE:
+			for y in range(surface_y + 1, surface_y + 4):
+				var block: int = stump[local_x + local_z * VoxelDefs.DATA_STRIDE_Z + y * VoxelDefs.DATA_STRIDE_Y]
+				if block == BlockRegistry.BLOCK_LOG:
+					stump_logs += 1
+				elif block == BlockRegistry.BLOCK_MANGROVE_ROOTS:
+					stump_roots += 1
+	_expect(stump_logs >= 1 and stump_logs <= 2, "stump trunk height out of range (%d)" % stump_logs)
+	_expect(stump_roots <= 1, "stump placed too many roots")
+
+	var dead := _grass_fixture(surface_y)
+	populator._stamp_dead_tree(dead, 0, 0, 8, surface_y, 8, 99)
+	var dead_logs := 0
+	var dead_leaves := 0
+	for local_z in VoxelDefs.CHUNK_SIZE:
+		for local_x in VoxelDefs.CHUNK_SIZE:
+			for y in range(surface_y + 1, surface_y + 7):
+				var block: int = dead[local_x + local_z * VoxelDefs.DATA_STRIDE_Z + y * VoxelDefs.DATA_STRIDE_Y]
+				if block == BlockRegistry.BLOCK_LOG:
+					dead_logs += 1
+				elif block == BlockRegistry.BLOCK_LEAVES:
+					dead_leaves += 1
+	_expect(dead_logs >= 4, "dead tree trunk too short")
+	_expect(dead_leaves == 0, "dead tree produced leaves")
+
+	var large := _grass_fixture(surface_y)
+	populator._stamp_tree(large, 0, 0, 8, surface_y, 8, BlockRegistry.BLOCK_LOG, BlockRegistry.BLOCK_LEAVES, 7, 3, 55)
+	var large_logs := 0
+	var large_leaves := 0
+	for local_z in VoxelDefs.CHUNK_SIZE:
+		for local_x in VoxelDefs.CHUNK_SIZE:
+			for y in range(surface_y + 1, surface_y + 9):
+				var block: int = large[local_x + local_z * VoxelDefs.DATA_STRIDE_Z + y * VoxelDefs.DATA_STRIDE_Y]
+				if block == BlockRegistry.BLOCK_LOG:
+					large_logs += 1
+				elif block == BlockRegistry.BLOCK_LEAVES:
+					large_leaves += 1
+	_expect(large_logs >= 6, "large tree trunk too short")
+	_expect(large_leaves > 0, "large tree produced no canopy")
+
+	var field := _uniform_field(surface_y, BiomeCatalog.FOREST)
+	var patch_found := false
+	var patch_origin := Vector2i.ZERO
+	for chunk_x in range(0, 8):
+		for chunk_z in range(0, 4):
+			var fixture := _grass_fixture(surface_y)
+			populator._decorate_floor_patches(fixture, field, chunk_x * VoxelDefs.CHUNK_SIZE, chunk_z * VoxelDefs.CHUNK_SIZE)
+			for local_z in VoxelDefs.CHUNK_SIZE:
+				for local_x in VoxelDefs.CHUNK_SIZE:
+					var index := local_x + local_z * VoxelDefs.DATA_STRIDE_Z + surface_y * VoxelDefs.DATA_STRIDE_Y
+					if fixture[index] == BlockRegistry.BLOCK_DIRT:
+						if not patch_found:
+							patch_origin = Vector2i(chunk_x, chunk_z)
+						patch_found = true
+					elif fixture[index] != BlockRegistry.BLOCK_GRASS:
+						_expect(false, "floor patch wrote an unexpected block")
+	if not patch_found:
+		_expect(false, "floor patch pass produced no patches for the fixture seed")
+	else:
+		var first := _grass_fixture(surface_y)
+		var second := _grass_fixture(surface_y)
+		populator._decorate_floor_patches(first, field, patch_origin.x * VoxelDefs.CHUNK_SIZE, patch_origin.y * VoxelDefs.CHUNK_SIZE)
+		populator._decorate_floor_patches(second, field, patch_origin.x * VoxelDefs.CHUNK_SIZE, patch_origin.y * VoxelDefs.CHUNK_SIZE)
+		_expect(first == second, "floor patches changed between identical runs")
+		_expect(first != _grass_fixture(surface_y), "floor patch origin produced no patch for the comparison")
 
 
 func _verify_seabed_sediment() -> void:

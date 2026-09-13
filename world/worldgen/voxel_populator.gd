@@ -22,7 +22,7 @@ const TREE_CELL_SIZE: int = 6
 const TREE_FOOTPRINT_RADIUS: int = 3
 const TREE_GROVE_CELL_SIZE: int = 48
 const TREE_GROVE_SEARCH_RADIUS: int = 1
-const GROUND_COVER_CELL_SIZE: int = 10
+const GROUND_COVER_CELL_SIZE: int = 8
 const GROUND_COVER_RADIUS: int = 4
 const CAVE_CELL_SIZE: int = 24
 const ORE_CELL_SIZE: int = 20
@@ -48,6 +48,8 @@ func populate(chunk_pos: Vector2i, field: ChunkTerrainData, edits: Dictionary, f
 	var origin_x: int = chunk_pos.x * VoxelDefsScript.CHUNK_SIZE
 	var origin_z: int = chunk_pos.y * VoxelDefsScript.CHUNK_SIZE
 	var max_y := _fill_base_and_surface(data, field)
+	if full_detail:
+		_decorate_floor_patches(data, field, origin_x, origin_z)
 	if full_detail and config.world_type != WorldGenConfigScript.WORLD_TYPE_FLAT and config.cave_density > 0.0:
 		_carve_worm_caves(data, field, origin_x, origin_z)
 		_carve_cave_entrances(data, field, origin_x, origin_z)
@@ -107,6 +109,8 @@ func populate_lod(chunk_pos: Vector2i, field: ChunkTerrainData) -> Dictionary:
 				max_y = maxi(max_y, column_water_y)
 			else:
 				max_y = maxi(max_y, surface_y)
+	_apply_lod_floor_patches(solid_y, solid_id, field, origin_x, origin_z)
+	max_y = maxi(max_y, _apply_lod_scrub(solid_y, solid_id, sub_id, water_y, field, origin_x, origin_z))
 	max_y = maxi(max_y, _apply_lod_canopies(solid_y, solid_id, sub_id, water_y, field, origin_x, origin_z))
 	return {
 		"solid_y": solid_y,
@@ -577,7 +581,8 @@ func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int, groun
 			var decoration_set: int = biomes.decoration_set(ground.y)
 			if not _uses_grove_trees(decoration_set):
 				continue
-			var probability: float = _grove_tree_probability(decoration_set, _tree_grove_strength(world_x, world_z))
+			var grove_strength: float = _tree_grove_strength(world_x, world_z)
+			var probability: float = _grove_tree_probability(decoration_set, grove_strength)
 			if WorldGenHashScript.float_01_2d(config.seed + 1237, cell_x, cell_z) >= probability:
 				continue
 			var feature_hash: int = WorldGenHashScript.hash_2d(config.seed + 1249, cell_x, cell_z)
@@ -585,6 +590,10 @@ func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int, groun
 			if entry.is_empty():
 				continue
 			var feature: int = int(entry[0])
+			# Deep forest cores grow ancient trees so the interior reads as old
+			# growth instead of the same crown mix as the edges.
+			if decoration_set == BiomeCatalogScript.DECORATION_FOREST and grove_strength > 0.75 and anchor_hash % 3 == 0:
+				feature = DecorationCatalog.FEATURE_ANCIENT_TREE
 			if not lod:
 				if not _feature_site_is_valid(field, ground_cache, world_x, ground.x, world_z, int(entry[3])):
 					continue
@@ -648,11 +657,11 @@ func _tree_grove_strength(world_x: int, world_z: int) -> float:
 	for grove_z in range(cell_z - TREE_GROVE_SEARCH_RADIUS, cell_z + TREE_GROVE_SEARCH_RADIUS + 1):
 		for grove_x in range(cell_x - TREE_GROVE_SEARCH_RADIUS, cell_x + TREE_GROVE_SEARCH_RADIUS + 1):
 			var grove_hash: int = WorldGenHashScript.hash_2d(config.seed + 1277, grove_x, grove_z)
-			if float(grove_hash % 1000) / 1000.0 >= 0.80:
+			if float(grove_hash % 1000) / 1000.0 >= 0.90:
 				continue
-			var center_x: int = grove_x * TREE_GROVE_CELL_SIZE + 10 + grove_hash % 29
-			var center_z: int = grove_z * TREE_GROVE_CELL_SIZE + 10 + (grove_hash / 37) % 29
-			var radius: float = float(22 + (grove_hash / 73) % 9)
+			var center_x: int = grove_x * TREE_GROVE_CELL_SIZE + 10 + grove_hash % 33
+			var center_z: int = grove_z * TREE_GROVE_CELL_SIZE + 10 + (grove_hash / 37) % 33
+			var radius: float = float(30 + (grove_hash / 73) % 13)
 			var dx: float = float(world_x - center_x)
 			var dz: float = float(world_z - center_z)
 			var distance: float = sqrt(dx * dx + dz * dz)
@@ -666,14 +675,14 @@ func _grove_tree_probability(decoration_set: int, grove_strength: float) -> floa
 	var base := 0.0
 	match decoration_set:
 		BiomeCatalogScript.DECORATION_FOREST:
-			base = 0.94
+			base = 0.97
 		BiomeCatalogScript.DECORATION_TAIGA:
-			base = 0.90
+			base = 0.95
 		BiomeCatalogScript.DECORATION_TROPICAL:
-			base = 0.96
+			base = 0.985
 		BiomeCatalogScript.DECORATION_SWAMP:
-			base = 0.86
-	return minf(0.96, base * grove_strength * config.tree_density * config.decoration_density)
+			base = 0.92
+	return minf(0.98, base * grove_strength * config.tree_density * config.decoration_density)
 
 
 ## Placement flags are evaluated from immutable terrain samples so every chunk
@@ -706,7 +715,7 @@ func _feature_site_is_valid(field: ChunkTerrainData, ground_cache: Dictionary, w
 
 func _tree_footprint_for(feature: int) -> int:
 	match feature:
-		DecorationCatalog.FEATURE_JUNGLE, DecorationCatalog.FEATURE_SPRUCE:
+		DecorationCatalog.FEATURE_JUNGLE, DecorationCatalog.FEATURE_SPRUCE, DecorationCatalog.FEATURE_ANCIENT_TREE:
 			return 3
 		_:
 			return 2
@@ -722,6 +731,8 @@ func _tree_top_offset_for(feature: int, hash_value: int) -> int:
 			return 6 + hash_value % 4 + 1
 		DecorationCatalog.FEATURE_JUNGLE:
 			return 7 + hash_value % 4 + 2
+		DecorationCatalog.FEATURE_ANCIENT_TREE:
+			return 8 + hash_value % 4 + 2
 	return 0
 
 
@@ -800,22 +811,25 @@ func _decorate_ground_cover(data: PackedByteArray, field: ChunkTerrainData, orig
 			var ground := _decoration_ground(field, center_x, center_z)
 			if ground.x <= VoxelDefsScript.SEA_LEVEL + 1:
 				continue
-			var chance: float = decorations.ground_cover_chance(biomes.decoration_set(ground.y)) * config.decoration_density
-			if chance <= 0.0 or WorldGenHashScript.float_01_2d(config.seed + 1193, cell_x, cell_z) >= minf(0.92, chance):
+			var decoration_set: int = biomes.decoration_set(ground.y)
+			# Grove interiors get a full, layered understory instead of clearings.
+			var deep_forest: bool = _uses_grove_trees(decoration_set) and _tree_grove_strength(center_x, center_z) > 0.70
+			var chance: float = 1.0 if deep_forest else decorations.ground_cover_chance(decoration_set) * config.decoration_density
+			if chance <= 0.0 or WorldGenHashScript.float_01_2d(config.seed + 1193, cell_x, cell_z) >= minf(0.95, chance):
 				continue
-			var tuft_count: int = 2 + (anchor_hash / 71) % 3
+			var tuft_count: int = 3 + (anchor_hash / 71) % 4 + (2 if deep_forest else 0)
 			for tuft_index in tuft_count:
 				var tuft_hash: int = WorldGenHashScript.hash_3d(config.seed + 1201, cell_x, tuft_index, cell_z)
 				var world_x: int = center_x + (tuft_hash % 5) - 2
 				var world_z: int = center_z + ((tuft_hash / 13) % 5) - 2
-				max_y = maxi(max_y, _place_ground_cover(data, field, origin_x, origin_z, world_x, world_z))
+				max_y = maxi(max_y, _place_ground_cover(data, field, origin_x, origin_z, world_x, world_z, decoration_set, tuft_hash))
 	return max_y
 
 
 ## Validate against the generated voxel data after caves and regular features:
 ## grass never floats over a carved entrance, overwrites a feature, or appears
 ## on water/sand. Grass surface blocks are opaque, dry soil by definition.
-func _place_ground_cover(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int, world_x: int, world_z: int) -> int:
+func _place_ground_cover(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int, world_x: int, world_z: int, decoration_set: int, hash_value: int) -> int:
 	var local_x: int = world_x - origin_x
 	var local_z: int = world_z - origin_z
 	if local_x < 0 or local_x >= VoxelDefsScript.CHUNK_SIZE or local_z < 0 or local_z >= VoxelDefsScript.CHUNK_SIZE:
@@ -828,8 +842,167 @@ func _place_ground_cover(data: PackedByteArray, field: ChunkTerrainData, origin_
 		return -1
 	if data[_index(local_x, ground_y + 1, local_z)] != BlockRegistryScript.BLOCK_AIR:
 		return -1
-	data[_index(local_x, ground_y + 1, local_z)] = BlockRegistryScript.BLOCK_TALL_GRASS
+	data[_index(local_x, ground_y + 1, local_z)] = _ground_cover_block(decoration_set, hash_value)
 	return ground_y + 1
+
+
+## Grassland ground cover mixes wildflowers into the tufts so fields read as a
+## layered meadow instead of a uniform grass carpet.
+func _ground_cover_block(decoration_set: int, hash_value: int) -> int:
+	match decoration_set:
+		BiomeCatalogScript.DECORATION_PLAINS, BiomeCatalogScript.DECORATION_MEADOW, BiomeCatalogScript.DECORATION_RIVERBANK:
+			if hash_value % 100 < 22:
+				return BlockRegistryScript.BLOCK_YELLOW_FLOWER if hash_value % 2 == 0 else BlockRegistryScript.BLOCK_RED_FLOWER
+		BiomeCatalogScript.DECORATION_FOREST:
+			if hash_value % 100 < 16:
+				return BlockRegistryScript.BLOCK_YELLOW_FLOWER if hash_value % 2 == 0 else BlockRegistryScript.BLOCK_RED_FLOWER
+	return BlockRegistryScript.BLOCK_TALL_GRASS
+
+
+## Worn ground patches: dirt scars in grasslands and forests, mud in wetlands,
+## gravel on rocky or shore biomes. Replaces only the biome's own surface block,
+## so it can never carve into props, ores, or player edits.
+const FLOOR_PATCH_CELL: int = 32
+const FLOOR_PATCH_HALO: int = 5
+const FLOOR_PATCH_CHANCE: float = 0.30
+
+func _decorate_floor_patches(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> void:
+	for cell_z in range(WorldGenHashScript.floor_div(origin_z - FLOOR_PATCH_HALO, FLOOR_PATCH_CELL), WorldGenHashScript.floor_div(origin_z + VoxelDefsScript.CHUNK_SIZE - 1 + FLOOR_PATCH_HALO, FLOOR_PATCH_CELL) + 1):
+		for cell_x in range(WorldGenHashScript.floor_div(origin_x - FLOOR_PATCH_HALO, FLOOR_PATCH_CELL), WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + FLOOR_PATCH_HALO, FLOOR_PATCH_CELL) + 1):
+			var hash_value: int = WorldGenHashScript.hash_2d(config.seed + 1321, cell_x, cell_z)
+			if float(hash_value % 1000) / 1000.0 >= FLOOR_PATCH_CHANCE:
+				continue
+			var center_x: int = cell_x * FLOOR_PATCH_CELL + 6 + (hash_value / 7) % 20
+			var center_z: int = cell_z * FLOOR_PATCH_CELL + 6 + (hash_value / 53) % 20
+			var radius: int = 1 + (hash_value / 101) % 3
+			for dz in range(-radius, radius + 1):
+				for dx in range(-radius, radius + 1):
+					if dx * dx + dz * dz > radius * radius:
+						continue
+					var local_x: int = center_x + dx - origin_x
+					var local_z: int = center_z + dz - origin_z
+					if local_x < 0 or local_x >= VoxelDefsScript.CHUNK_SIZE or local_z < 0 or local_z >= VoxelDefsScript.CHUNK_SIZE:
+						continue
+					var field_index: int = ChunkTerrainDataScript.cell_index(local_x, local_z)
+					var biome: int = int(field.biome_id[field_index])
+					var patch_block: int = _floor_patch_block(biomes.decoration_set(biome))
+					if patch_block == BlockRegistryScript.BLOCK_AIR:
+						continue
+					var surface_y: int = _surface_height(field, field_index)
+					var voxel_index: int = _index(local_x, surface_y, local_z)
+					if data[voxel_index] != biomes.surface_block(biome):
+						continue
+					data[voxel_index] = patch_block
+
+
+## Mirrors the full-detail patch pass by swapping the compact top id, so the
+## same scars are visible from a distance without any extra geometry.
+func _apply_lod_floor_patches(solid_y: PackedInt32Array, solid_id: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> void:
+	for cell_z in range(WorldGenHashScript.floor_div(origin_z - FLOOR_PATCH_HALO, FLOOR_PATCH_CELL), WorldGenHashScript.floor_div(origin_z + VoxelDefsScript.CHUNK_SIZE - 1 + FLOOR_PATCH_HALO, FLOOR_PATCH_CELL) + 1):
+		for cell_x in range(WorldGenHashScript.floor_div(origin_x - FLOOR_PATCH_HALO, FLOOR_PATCH_CELL), WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + FLOOR_PATCH_HALO, FLOOR_PATCH_CELL) + 1):
+			var hash_value: int = WorldGenHashScript.hash_2d(config.seed + 1321, cell_x, cell_z)
+			if float(hash_value % 1000) / 1000.0 >= FLOOR_PATCH_CHANCE:
+				continue
+			var center_x: int = cell_x * FLOOR_PATCH_CELL + 6 + (hash_value / 7) % 20
+			var center_z: int = cell_z * FLOOR_PATCH_CELL + 6 + (hash_value / 53) % 20
+			var radius: int = 1 + (hash_value / 101) % 3
+			for dz in range(-radius, radius + 1):
+				for dx in range(-radius, radius + 1):
+					if dx * dx + dz * dz > radius * radius:
+						continue
+					var local_x: int = center_x + dx - origin_x
+					var local_z: int = center_z + dz - origin_z
+					if local_x < 0 or local_x >= VoxelDefsScript.CHUNK_SIZE or local_z < 0 or local_z >= VoxelDefsScript.CHUNK_SIZE:
+						continue
+					var column: int = local_x + local_z * VoxelDefsScript.DATA_STRIDE_Z
+					if solid_y[column] < 0:
+						continue
+					var field_index: int = ChunkTerrainDataScript.cell_index(local_x, local_z)
+					var biome: int = int(field.biome_id[field_index])
+					var patch_block: int = _floor_patch_block(biomes.decoration_set(biome))
+					if patch_block == BlockRegistryScript.BLOCK_AIR:
+						continue
+					if solid_id[column] != biomes.surface_block(biome):
+						continue
+					solid_id[column] = patch_block
+
+
+func _floor_patch_block(decoration_set: int) -> int:
+	match decoration_set:
+		BiomeCatalogScript.DECORATION_PLAINS, BiomeCatalogScript.DECORATION_MEADOW, \
+		BiomeCatalogScript.DECORATION_SAVANNA, BiomeCatalogScript.DECORATION_FOREST, \
+		BiomeCatalogScript.DECORATION_TAIGA, BiomeCatalogScript.DECORATION_TROPICAL:
+			return BlockRegistryScript.BLOCK_DIRT
+		BiomeCatalogScript.DECORATION_SWAMP:
+			return BlockRegistryScript.BLOCK_MUD
+		BiomeCatalogScript.DECORATION_RIVERBANK, BiomeCatalogScript.DECORATION_BEACH, \
+		BiomeCatalogScript.DECORATION_ALPINE, BiomeCatalogScript.DECORATION_SNOWFIELD, \
+		BiomeCatalogScript.DECORATION_BADLANDS:
+			return BlockRegistryScript.BLOCK_GRAVEL
+	return BlockRegistryScript.BLOCK_AIR
+
+
+## Low scrub bumps on the edges and clearings of groves. Grove strength is
+## sampled on a coarse lattice because resolving it per column costs ~5 ms.
+const LOD_COVER_STRIDE: int = 8
+
+func _apply_lod_scrub(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: PackedByteArray, water_y: PackedInt32Array, field: ChunkTerrainData, origin_x: int, origin_z: int) -> int:
+	if config.tree_density <= 0.0 or config.decoration_density <= 0.0:
+		return 0
+	var side: int = VoxelDefsScript.CHUNK_SIZE / LOD_COVER_STRIDE + 1
+	var strengths := PackedFloat32Array()
+	strengths.resize(side * side)
+	for sample_z in side:
+		for sample_x in side:
+			strengths[sample_x + sample_z * side] = _tree_grove_strength(
+				origin_x + sample_x * LOD_COVER_STRIDE, origin_z + sample_z * LOD_COVER_STRIDE)
+	var max_y := 0
+	for local_z in VoxelDefsScript.CHUNK_SIZE:
+		for local_x in VoxelDefsScript.CHUNK_SIZE:
+			var column: int = local_x + local_z * VoxelDefsScript.DATA_STRIDE_Z
+			if solid_y[column] <= VoxelDefsScript.SEA_LEVEL or water_y[column] >= 0:
+				continue
+			var strength: float = _sample_scrub_strength(strengths, side, local_x, local_z)
+			if strength < 0.45 or strength > 0.85:
+				continue
+			if WorldGenHashScript.hash_2d(config.seed + 1301, origin_x + local_x, origin_z + local_z) % 100 >= 12:
+				continue
+			var field_index: int = ChunkTerrainDataScript.cell_index(local_x, local_z)
+			var leaf_id: int = _grove_leaf_block(biomes.decoration_set(int(field.biome_id[field_index])))
+			if leaf_id == BlockRegistryScript.BLOCK_AIR:
+				continue
+			solid_y[column] += 1
+			solid_id[column] = leaf_id
+			sub_id[column] = leaf_id
+			max_y = maxi(max_y, solid_y[column])
+	return max_y
+
+
+func _sample_scrub_strength(strengths: PackedFloat32Array, side: int, local_x: int, local_z: int) -> float:
+	var fx: float = float(local_x) / float(LOD_COVER_STRIDE)
+	var fz: float = float(local_z) / float(LOD_COVER_STRIDE)
+	var x0: int = clampi(floori(fx), 0, side - 1)
+	var z0: int = clampi(floori(fz), 0, side - 1)
+	var x1: int = mini(x0 + 1, side - 1)
+	var z1: int = mini(z0 + 1, side - 1)
+	var tx: float = clampf(fx - float(x0), 0.0, 1.0)
+	var tz: float = clampf(fz - float(z0), 0.0, 1.0)
+	var north := lerpf(strengths[x0 + z0 * side], strengths[x1 + z0 * side], tx)
+	var south := lerpf(strengths[x0 + z1 * side], strengths[x1 + z1 * side], tx)
+	return lerpf(north, south, tz)
+
+
+func _grove_leaf_block(decoration_set: int) -> int:
+	match decoration_set:
+		BiomeCatalogScript.DECORATION_FOREST:
+			return BlockRegistryScript.BLOCK_LEAVES
+		BiomeCatalogScript.DECORATION_TAIGA:
+			return BlockRegistryScript.BLOCK_SPRUCE_LEAVES
+		BiomeCatalogScript.DECORATION_TROPICAL:
+			return BlockRegistryScript.BLOCK_JUNGLE_LEAVES
+		BiomeCatalogScript.DECORATION_SWAMP:
+			return BlockRegistryScript.BLOCK_MANGROVE_LEAVES
+	return BlockRegistryScript.BLOCK_AIR
 
 
 ## The field handles the immediate border; farther feature-cell origins query
@@ -863,6 +1036,22 @@ func _stamp_feature(data: PackedByteArray, origin_x: int, origin_z: int, world_x
 			return _stamp_vertical(data, origin_x, origin_z, world_x, ground_y + 1, world_z, BlockRegistryScript.BLOCK_CACTUS, 2 + hash_value % 3)
 		DecorationCatalog.FEATURE_BAMBOO:
 			return _stamp_vertical(data, origin_x, origin_z, world_x, ground_y + 1, world_z, BlockRegistryScript.BLOCK_BAMBOO, 3 + hash_value % 5)
+		DecorationCatalog.FEATURE_BUSH:
+			return _stamp_bush(data, origin_x, origin_z, world_x, ground_y, world_z, hash_value)
+		DecorationCatalog.FEATURE_PEBBLE:
+			return _stamp_pebble(data, origin_x, origin_z, world_x, ground_y, world_z, hash_value)
+		DecorationCatalog.FEATURE_ROCK_OUTCROP:
+			return _stamp_rock_outcrop(data, origin_x, origin_z, world_x, ground_y, world_z, hash_value)
+		DecorationCatalog.FEATURE_STUMP:
+			return _stamp_stump(data, origin_x, origin_z, world_x, ground_y, world_z, hash_value)
+		DecorationCatalog.FEATURE_DEAD_TREE:
+			return _stamp_dead_tree(data, origin_x, origin_z, world_x, ground_y, world_z, hash_value)
+		DecorationCatalog.FEATURE_LARGE_TREE:
+			return _stamp_tree(data, origin_x, origin_z, world_x, ground_y, world_z, BlockRegistryScript.BLOCK_LOG, BlockRegistryScript.BLOCK_LEAVES, 6 + hash_value % 3, 3, hash_value)
+		DecorationCatalog.FEATURE_ANCIENT_TREE:
+			return _stamp_tree(data, origin_x, origin_z, world_x, ground_y, world_z, BlockRegistryScript.BLOCK_LOG, BlockRegistryScript.BLOCK_LEAVES, 8 + hash_value % 4, 3, hash_value)
+		DecorationCatalog.FEATURE_DRIFTWOOD:
+			return _stamp_fallen_log(data, origin_x, origin_z, world_x, ground_y, world_z, hash_value)
 		DecorationCatalog.FEATURE_VINE:
 			return _stamp_vertical(data, origin_x, origin_z, world_x, ground_y + 1, world_z, BlockRegistryScript.BLOCK_VINE, 2 + hash_value % 4)
 		DecorationCatalog.FEATURE_BOULDER:
@@ -971,6 +1160,70 @@ func _stamp_mangrove(data: PackedByteArray, origin_x: int, origin_z: int, world_
 			if dx * dx + dz * dz <= 5:
 				_place(data, origin_x, origin_z, world_x + dx, base_y + 7, world_z + dz, BlockRegistryScript.BLOCK_MANGROVE_LEAVES)
 	return base_y + 7
+
+
+## One or two loose cobbles. A single block reads as a stone in the grass; a
+## second block extends it along one axis instead of forming a symmetric cross.
+func _stamp_pebble(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, ground_y: int, world_z: int, hash_value: int) -> int:
+	_place(data, origin_x, origin_z, world_x, ground_y + 1, world_z, BlockRegistryScript.BLOCK_STONE)
+	if hash_value % 2 == 0:
+		var direction: Vector2i = VoxelDefsScript.DIRS_4[(hash_value / 13) % 4]
+		_place(data, origin_x, origin_z, world_x + direction.x, ground_y + 1, world_z + direction.y, BlockRegistryScript.BLOCK_STONE)
+	return ground_y + 1
+
+
+## An irregular cobble boulder for rocky biomes: a short base along one or two
+## axes with one raised cap. Single-material and asymmetric so it reads as a
+## natural rock instead of a built cross.
+func _stamp_rock_outcrop(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, ground_y: int, world_z: int, hash_value: int) -> int:
+	var block_id: int = BlockRegistryScript.BLOCK_COBBLESTONE
+	var first: Vector2i = VoxelDefsScript.DIRS_4[hash_value % 4]
+	var second: Vector2i = VoxelDefsScript.DIRS_4[(hash_value / 7) % 4]
+	_place(data, origin_x, origin_z, world_x, ground_y + 1, world_z, block_id)
+	_place(data, origin_x, origin_z, world_x + first.x, ground_y + 1, world_z + first.y, block_id)
+	if second != first and hash_value % 2 == 0:
+		_place(data, origin_x, origin_z, world_x + second.x, ground_y + 1, world_z + second.y, block_id)
+	var cap_x := world_x + (first.x if hash_value % 3 != 0 else 0)
+	var cap_z := world_z + (first.y if hash_value % 3 != 0 else 0)
+	var top := _place(data, origin_x, origin_z, cap_x, ground_y + 2, cap_z, block_id)
+	return top if top >= 0 else ground_y + 1
+
+
+## A cut trunk with a root nub: the leftover of a felled tree.
+func _stamp_stump(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, ground_y: int, world_z: int, hash_value: int) -> int:
+	var height: int = 1 + (hash_value / 7) % 2
+	for y in range(1, height + 1):
+		_place(data, origin_x, origin_z, world_x, ground_y + y, world_z, BlockRegistryScript.BLOCK_LOG)
+	var direction: Vector2i = VoxelDefsScript.DIRS_4[hash_value % 4]
+	_place(data, origin_x, origin_z, world_x + direction.x, ground_y + 1, world_z + direction.y, BlockRegistryScript.BLOCK_MANGROVE_ROOTS)
+	return ground_y + height
+
+
+## A bare trunk with one or two branches and no canopy.
+func _stamp_dead_tree(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, ground_y: int, world_z: int, hash_value: int) -> int:
+	var height: int = 4 + hash_value % 3
+	for y in range(1, height + 1):
+		_place(data, origin_x, origin_z, world_x, ground_y + y, world_z, BlockRegistryScript.BLOCK_LOG)
+	var branches: int = 1 + (hash_value / 11) % 2
+	for branch in branches:
+		var direction: Vector2i = VoxelDefsScript.DIRS_4[(hash_value / (17 + branch * 7)) % 4]
+		var branch_y: int = ground_y + height - 1 - branch
+		_place(data, origin_x, origin_z, world_x + direction.x, branch_y, world_z + direction.y, BlockRegistryScript.BLOCK_LOG)
+		if hash_value % 2 == 0:
+			_place(data, origin_x, origin_z, world_x + direction.x * 2, branch_y, world_z + direction.y * 2, BlockRegistryScript.BLOCK_LOG)
+	return ground_y + height
+
+
+## Short leaf cluster between ground cover and trees: one core column plus an
+## optional side leaf keeps the footprint tiny and never collides with a trunk.
+func _stamp_bush(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, ground_y: int, world_z: int, hash_value: int) -> int:
+	var height: int = 1 + hash_value % 2
+	for y in range(1, height + 1):
+		_place(data, origin_x, origin_z, world_x, ground_y + y, world_z, BlockRegistryScript.BLOCK_LEAVES)
+	if height > 1 and hash_value % 3 != 0:
+		var direction: Vector2i = VoxelDefsScript.DIRS_4[hash_value % 4]
+		_place(data, origin_x, origin_z, world_x + direction.x, ground_y + height, world_z + direction.y, BlockRegistryScript.BLOCK_LEAVES)
+	return ground_y + height
 
 
 func _stamp_vertical(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, start_y: int, world_z: int, block_id: int, height: int) -> int:
