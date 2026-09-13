@@ -15,6 +15,7 @@ Property names and file references are included so each item is easy to find.
 - [x] Full per-option menu — `ui/graphics_panel.tscn` ("Advanced Graphics..." in Settings); sections: Lighting, Shadows, Sky & Atmosphere, Post-Processing, Performance
 - [x] Per-option overrides on top of a preset with "Custom" indicator + "Reset to Preset"
 - [x] Graphics settings persist to `user://settings.cfg` (`[graphics] values` dictionary)
+- [x] Render distance slider 4-32 chunks — `ui/settings_panel.gd` raises the cap from 16; full detail stays within 6 chunks (`VoxelWorld.MAX_FULL_DETAIL_DISTANCE`) and everything farther streams as compact LOD. Measured RD 32 ring (4225 chunks) drains in ~80 s in-game at 60 FPS on the test desktop
 
 ## Shadows
 - [x] Near-shadow resolution — `Main.NEAR_SHADOW_DISTANCE` reserves the first cascade for 6 m around the player, keeping close-up shadow texels dense enough to stop edge crawl (user-confirmed fixed)
@@ -41,7 +42,7 @@ Property names and file references are included so each item is easy to find.
 ## Geometry / materials
 - [x] `Texture2DArray` instead of the block atlas — `BlockRegistry` now builds one 64px layer per texture (per-image tint, alpha edge fix-up, mipmaps) and the mesher writes each face's layer into `ARRAY_CUSTOM1` (`ARRAY_CUSTOM_R_FLOAT`); `block.gdshader` samples `vec3(UV, layer)`, so there is no atlas inset and no cross-tile UV/mip bleeding
 - [ ] Chunk merging / MultiMesh — fewer draw calls for distant chunks
-- [x] Chunk LOD meshes — `ChunkMesher.build_lod()` heightmap distance meshes (top quad per column + exposed side runs, no light volume/AO/collision) for chunks beyond `lod_distance` (a third of the render distance, minimum 3); `VoxelWorld` streams full detail near the player and rebuilds LOD<->full on approach/retreat with the same version checks as edits. Pinned benchmark: full mesh CPU averages ~185 ms vs ~13 ms for LOD because full meshes assemble a light volume, compute AO, and emit collision
+- [x] Chunk LOD meshes — `ChunkMesher.build_lod()` distance meshes (top quad per column + exposed side runs, no light volume/AO/collision) for chunks beyond `lod_distance` (a third of the render distance, capped at 6 chunks); full detail stays near the player and rebuilds LOD<->full on approach/retreat with the same version checks as edits. Distance chunks carry compact per-column top/sub/water arrays (~3 KB) instead of a full 192-block data array (~50 KB), and full chunks expand compact neighbors on worker threads for correct light and culling. Pinned benchmark: full mesh CPU averages ~181 ms vs ~13 ms for LOD, and LOD generation ~12 ms vs ~41 ms full
 
 ## Post-processing
 - [x] Per-time-of-day color grading — `DayNightCycle` scales preset saturation/contrast at night (`Main._apply_graphics()` sets `base_saturation`/`base_contrast`), keeping nights muted instead of neon
@@ -73,7 +74,8 @@ Current state: the TerraForged-inspired staged pipeline is live under `world/wor
 - [x] Phase 4 — surfaces and decoration: biome catalogs own layer/tint/feature rules, and global hash-cell origins let trees and larger decorations cross chunk edges independently of generation order.
 - [x] Phase 5 — cave regions: deterministic worm segments, bounded caverns, rare multi-lobed mega-caves, aquifers/lava, ore veins, and sparse cave decoration run after surface fill with surface/river protection.
 - [x] Phase 6 — optional regional hydraulic erosion: deterministic 64x64 droplet tiles are cached by immutable worldgen configuration and sampled seam-safely. It remains off by default because a cold tile solve is intentionally a high-quality/slower option.
-- [x] Phase 7 — streaming robustness: every chunk job carries a worldgen config revision, so results generated under an old configuration are discarded and requeued; worker concurrency is capped at 4 jobs because higher counts added wall-time variance without throughput gain.
+- [x] Phase 7 — streaming robustness: every chunk job carries a worldgen config revision, so results generated under an old configuration are discarded and requeued; worker concurrency scales with half the logical cores (4-8) after measuring 8 jobs ~40% faster than 4 while 16 added only ~10% more.
+- [x] Phase 8 — compact distance chunks: LOD population writes per-column top/sub/water arrays instead of a full 192-block data array, making far chunks ~3x cheaper to generate and kilobyte-sized. Decorations (including distant tree canopies) are omitted from LOD on purpose: the full tree pass costs ~6 ms per chunk, which would halve the streaming gain. Measured 8-job ring loads: RD 10 ~4.2 s (was ~5.9), RD 16 ~10.7 s (was ~14.0), RD 32 ~31 s with full detail capped at 6.
 
 ### Terrain and biomes
 - [x] Vertical limit fix — 192-block storage, typed heights, profile-specific relief, and sampled cap verification remove the old flat-topped 104-block limit.
@@ -105,7 +107,9 @@ Current state: the TerraForged-inspired staged pipeline is live under `world/wor
 - [x] Seeded worldgen verification — `tools/worldgen_verify.gd` checks repeatability, seams, edits, concurrency, biome distribution, rivers, height caps, field/point parity, flat-world height, surface blankets, and near/far roughness; F9 capture metadata includes worldgen parameters and the F3/F4 overlay supports pinned-seed visual tours.
 - [x] Vegetation and texture regressions — `tools/worldgen_tree_verify.gd` checks crown connectivity, footprints, chunk borders, site rejection, and density controls; `tools/worldgen_cactus_verify.gd` checks prepared-texture opacity and closed stacked meshes.
 - [x] Pinned benchmarks — `tools/worldgen_benchmark.gd` and `tools/worldgen_mesh_benchmark.gd` record full/LOD generation and mesh CPU times for fixed chunks.
-- [ ] Perf budget — record memory and draw calls at render distance 16 across the full biome set; pinned generation/mesh CPU times and F3 EMAs cover chunk build cost, and mesher work must stay worker-thread safe and deterministic per seed.
+- [x] LOD seam verification — `tools/worldgen_lod_verify.gd` compares compact columns against a decoration-free full chunk (top/sub/water, height map), checks distance-mesh top-face geometry, and meshes a full chunk against compact neighbor samples.
+- [x] Streaming benchmark — `tools/worldgen_stream_benchmark.gd` records ring-load wall time and throughput at render distances 10/16/32 with 4/8/16 concurrent jobs.
+- [ ] Perf budget — record memory and draw calls at render distance 32 across the full biome set; pinned generation/mesh/streaming benchmarks and F3 EMAs cover CPU cost, and mesher work must stay worker-thread safe and deterministic per seed.
 
 ## World / simulation
 - [x] Water polish — flowing water levels (IDs 28-34) with a 4 Hz cellular spill/dry sim seeded by edits, falling cascades, settled state persisted through `_edited_blocks`; the mesher renders `_water_top(level)` surfaces with a flowing vertex-color flag. `water.gdshader` uses sharp, gently distorted scene refraction with chromatic split disabled, progressive depth absorption, and faint narrow shore foam.

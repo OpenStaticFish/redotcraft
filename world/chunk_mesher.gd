@@ -44,6 +44,13 @@ class MeshResult:
 	var water_light := PackedFloat32Array()
 	var water_indices := PackedInt32Array()
 	var light_volume: LightVolume
+	# Distance meshes carry compact per-column tops instead of a full voxel
+	# array, so LOD chunks cost kilobytes rather than ~50 KB each.
+	var lod_solid_y := PackedInt32Array()
+	var lod_solid_id := PackedByteArray()
+	var lod_sub_id := PackedByteArray()
+	var lod_water_y := PackedInt32Array()
+	var lod_water_level := PackedByteArray()
 
 
 class LightVolume:
@@ -62,11 +69,43 @@ class NeighborSample:
 	var data := PackedByteArray()
 	var max_y := 0
 	var heights := PackedInt32Array()
+	# Compact LOD neighbors are expanded into the light volume on the worker
+	# thread instead of materializing a full 50 KB tile per neighbor.
+	var lod := false
+	var lod_solid_y := PackedInt32Array()
+	var lod_solid_id := PackedByteArray()
+	var lod_sub_id := PackedByteArray()
+	var lod_water_y := PackedInt32Array()
 
 	func _init(p_data: PackedByteArray, p_max_y: int, p_heights: PackedInt32Array) -> void:
 		data = p_data
 		max_y = p_max_y
 		heights = p_heights
+
+	static func from_lod(p_solid_y: PackedInt32Array, p_solid_id: PackedByteArray, p_sub_id: PackedByteArray, p_water_y: PackedInt32Array) -> NeighborSample:
+		var sample := NeighborSample.new(PackedByteArray(), 0, PackedInt32Array())
+		sample.lod = true
+		sample.lod_solid_y = p_solid_y
+		sample.lod_solid_id = p_solid_id
+		sample.lod_sub_id = p_sub_id
+		sample.lod_water_y = p_water_y
+		for column in p_solid_y.size():
+			sample.max_y = maxi(sample.max_y, maxi(p_solid_y[column], p_water_y[column]))
+		return sample
+
+	## Compact neighbors answer per-voxel occupancy without materializing a tile.
+	func block_at(local_x: int, y: int, local_z: int) -> int:
+		if not lod:
+			return data[local_x + local_z * VoxelDefs.DATA_STRIDE_Z + y * VoxelDefs.DATA_STRIDE_Y]
+		var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
+		var top: int = lod_solid_y[column]
+		if y > top:
+			if y <= lod_water_y[column]:
+				return BlockRegistry.BLOCK_WATER
+			return BlockRegistry.BLOCK_AIR
+		if y == top:
+			return lod_solid_id[column]
+		return lod_sub_id[column]
 
 
 class NeighborSet:
@@ -140,7 +179,7 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, fo
 					if sample != null and y >= 0 and y <= sample.max_y:
 						var neighbor_x := local_x - dx * VoxelDefs.CHUNK_SIZE
 						var neighbor_z := local_z - dz * VoxelDefs.CHUNK_SIZE
-						id = sample.data[neighbor_x + neighbor_z * VoxelDefs.DATA_STRIDE_Z + y * VoxelDefs.DATA_STRIDE_Y]
+						id = sample.block_at(neighbor_x, y, neighbor_z)
 				padded[pad_x + pad_z * VoxelDefs.PAD_STRIDE_Z + pad_y * VoxelDefs.PAD_STRIDE_Y] = id
 	for y in range(0, max_y + 1):
 		for local_z in VoxelDefs.CHUNK_SIZE:
@@ -183,54 +222,26 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, fo
 ## Distance mesh: one textured top quad per column plus vertical runs of side
 ## quads on exposed edges. No light volume, AO, collision, or cross blocks;
 ## the surface height matches the full mesh so chunk seams stay closed.
-## Thread-safe: only reads immutable block tables and the passed-in data.
-func build_lod(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, foliage_tints: PackedColorArray, water_tints: PackedColorArray, neighbors: LodNeighbors) -> MeshResult:
+## Thread-safe: only reads immutable block tables and the passed-in columns.
+func build_lod(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: PackedByteArray, water_y: PackedInt32Array, water_level: PackedByteArray, data_max_y: int, foliage_tints: PackedColorArray, water_tints: PackedColorArray, neighbors: LodNeighbors) -> MeshResult:
 	var result := MeshResult.new()
-	result.data = data
-	result.heights = heights
 	result.mask = neighbors.mask
 	result.max_y = data_max_y
-	var solid_y := PackedInt32Array()
-	var solid_id := PackedByteArray()
-	var water_y := PackedInt32Array()
-	var water_id := PackedByteArray()
-	solid_y.resize(VoxelDefs.CHUNK_AREA)
-	solid_id.resize(VoxelDefs.CHUNK_AREA)
-	water_y.resize(VoxelDefs.CHUNK_AREA)
-	water_id.resize(VoxelDefs.CHUNK_AREA)
-	solid_y.fill(LOD_NONE)
-	water_y.fill(LOD_NONE)
-	for z in VoxelDefs.CHUNK_SIZE:
-		for x in VoxelDefs.CHUNK_SIZE:
-			var column := x + z * VoxelDefs.DATA_STRIDE_Z
-			for y in range(data_max_y, -1, -1):
-				var id := data[column + y * VoxelDefs.DATA_STRIDE_Y]
-				if id == BlockRegistry.BLOCK_AIR:
-					continue
-				if _water_level[id] > 0:
-					if water_y[column] == LOD_NONE:
-						water_y[column] = y
-						water_id[column] = id
-					continue
-				if _cross[id] == 1:
-					continue
-				solid_y[column] = y
-				solid_id[column] = id
-				break
+	result.lod_solid_y = solid_y
+	result.lod_solid_id = solid_id
+	result.lod_sub_id = sub_id
+	result.lod_water_y = water_y
+	result.lod_water_level = water_level
 	for z in VoxelDefs.CHUNK_SIZE:
 		for x in VoxelDefs.CHUNK_SIZE:
 			var column := x + z * VoxelDefs.DATA_STRIDE_Z
 			var top_solid := solid_y[column]
 			var top_water := water_y[column]
+			var level := int(water_level[column])
 			if top_solid >= 0:
 				_append_lod_block_face(0, x, top_solid, z, solid_id[column], _tint_for(solid_id[column], column, foliage_tints), result)
-			if top_water >= 0:
-				var above := BlockRegistry.BLOCK_AIR
-				if top_water + 1 <= data_max_y:
-					above = data[column + (top_water + 1) * VoxelDefs.DATA_STRIDE_Y]
-				if _water_level[above] == 0 and _opacity[above] < MAX_LEVEL:
-					var water_level := _water_level[water_id[column]]
-					_append_lod_water_face(0, x, top_water, z, _water_top(water_level), water_level < 8, _column_tint(column, water_tints), result)
+			if top_water >= 0 and level > 0:
+				_append_lod_water_face(0, x, top_water, z, _water_top(level), level < 8, _column_tint(column, water_tints), result)
 			for index in VoxelDefs.DIRS_4.size():
 				var direction: Vector2i = VoxelDefs.DIRS_4[index]
 				var neighbor_solid := -1
@@ -249,19 +260,14 @@ func build_lod(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array
 						neighbor_water = edge.water[edge_index]
 				var face: int = LOD_SIDE_FACES[index]
 				var exposed_from := maxi(neighbor_solid, neighbor_water) + 1
-				for y in range(exposed_from, maxi(top_solid, top_water) + 1):
-					var id := data[column + y * VoxelDefs.DATA_STRIDE_Y]
-					if id == BlockRegistry.BLOCK_AIR or _cross[id] == 1:
-						continue
-					if _water_level[id] > 0:
-						if y > neighbor_water:
-							var level := _water_level[id]
-							var above_water := false
-							if y + 1 <= data_max_y:
-								above_water = _water_level[data[column + (y + 1) * VoxelDefs.DATA_STRIDE_Y]] > 0
-							var top := 1.0 if above_water else _water_top(level)
-							_append_lod_water_face(face, x, y, z, top, level < 8, _column_tint(column, water_tints), result)
-					elif y <= top_solid:
+				var top := maxi(top_solid, top_water)
+				for y in range(exposed_from, top + 1):
+					if y > top_solid:
+						if level > 0 and y > neighbor_water:
+							var above_water := y + 1 <= top_water
+							_append_lod_water_face(face, x, y, z, 1.0 if above_water else _water_top(level), level < 8, _column_tint(column, water_tints), result)
+					else:
+						var id := solid_id[column] if y == top_solid else sub_id[column]
 						_append_lod_block_face(face, x, y, z, id, _tint_for(id, column, foliage_tints), result)
 	return result
 
@@ -410,8 +416,12 @@ func _assemble_light_volume(data: PackedByteArray, data_max_y: int, data_heights
 			else:
 				var sample := neighbors.get_sample(direction)
 				if sample != null:
-					tiles[index] = sample.data
-					tile_heights[index] = sample.heights
+					if sample.lod:
+						tiles[index] = _expand_lod_tile(sample)
+						tile_heights[index] = _lod_heights(sample)
+					else:
+						tiles[index] = sample.data
+						tile_heights[index] = sample.heights
 					tile_max[index] = sample.max_y
 					max_y = maxi(max_y, sample.max_y)
 	volume.h = mini(max_y + 3, VoxelDefs.WORLD_HEIGHT)
@@ -442,6 +452,41 @@ func _assemble_light_volume(data: PackedByteArray, data_max_y: int, data_heights
 					volume.blocks.resize(volume.blocks.size() + VoxelDefs.CHUNK_SIZE)
 	volume.sky.resize(volume.blocks.size())
 	return volume
+
+
+## Expands compact LOD columns into a full tile so the light volume and face
+## culling treat distance chunks exactly like generated ones.
+func _expand_lod_tile(sample: NeighborSample) -> PackedByteArray:
+	var tile := PackedByteArray()
+	tile.resize(VoxelDefs.CHUNK_AREA * VoxelDefs.WORLD_HEIGHT)
+	var solid_y := sample.lod_solid_y
+	var solid_id := sample.lod_solid_id
+	var sub_id := sample.lod_sub_id
+	var water_y := sample.lod_water_y
+	var water := BlockRegistry.BLOCK_WATER
+	for local_z in VoxelDefs.CHUNK_SIZE:
+		for local_x in VoxelDefs.CHUNK_SIZE:
+			var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
+			var top := solid_y[column]
+			if top < 0:
+				continue
+			var sub := sub_id[column]
+			var top_id := solid_id[column]
+			for y in range(0, top + 1):
+				tile[y * VoxelDefs.DATA_STRIDE_Y + column] = top_id if y == top else sub
+			var surface := water_y[column]
+			if surface >= 0:
+				for y in range(top + 1, surface + 1):
+					tile[y * VoxelDefs.DATA_STRIDE_Y + column] = water
+	return tile
+
+
+func _lod_heights(sample: NeighborSample) -> PackedInt32Array:
+	var heights := PackedInt32Array()
+	heights.resize(VoxelDefs.CHUNK_AREA)
+	for column in heights.size():
+		heights[column] = maxi(sample.lod_solid_y[column], sample.lod_water_y[column])
+	return heights
 
 
 func _compute_sky_light(volume: LightVolume) -> void:

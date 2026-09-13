@@ -3,10 +3,12 @@ extends Node3D
 
 const SPAWN_RADIUS := 1
 const SPAWN_SEARCH_RADIUS := 12
-## Four full light-volume builds saturate the tested desktop without starving
-## the render/main thread; higher counts increased wall-time variance and made
-## initial streaming less responsive despite no throughput gain.
-const MAX_ACTIVE_JOBS := 4
+## Half the logical cores, capped at 8. Measured on a 16-thread desktop: 8
+## concurrent chunk jobs stream ~40% faster than 4, while 16 adds only ~10%
+## more and risks starving the main thread on smaller machines.
+const MIN_ACTIVE_JOBS := 4
+const MAX_ACTIVE_JOBS := 8
+const MAX_FULL_DETAIL_DISTANCE := 6
 const COMMIT_BUDGET_MS := 5
 const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4]
 const WATER_TICK_INTERVAL := 0.25
@@ -43,6 +45,7 @@ var _water_queued: Dictionary = {}
 var _water_head := 0
 var _water_accum := 0.0
 var _worldgen_revision := 0
+var _max_active_jobs := MIN_ACTIVE_JOBS
 var _full_jobs_measured := 0
 var _lod_jobs_measured := 0
 var _generation_ema_ms := 0.0
@@ -58,6 +61,11 @@ var _debug_cache: Dictionary = {}
 class Chunk:
 	var data := PackedByteArray()
 	var heights := PackedInt32Array()
+	var lod_solid_y := PackedInt32Array()
+	var lod_solid_id := PackedByteArray()
+	var lod_sub_id := PackedByteArray()
+	var lod_water_y := PackedInt32Array()
+	var lod_water_level := PackedByteArray()
 	var max_y := 0
 	var mask := 0
 	var lod := false
@@ -94,6 +102,7 @@ func _ready() -> void:
 	_blocks = BlockRegistry.new()
 	_generator = TerrainGenerator.new()
 	_mesher = ChunkMesher.new(_blocks)
+	_max_active_jobs = clampi(OS.get_processor_count() / 2, MIN_ACTIVE_JOBS, MAX_ACTIVE_JOBS)
 
 
 func _process(delta: float) -> void:
@@ -120,7 +129,7 @@ func _exit_tree() -> void:
 ## in flight: recreating the noise set invalidates running workers.
 func configure(world_config: Dictionary, render_distance_chunks: int) -> void:
 	render_distance = maxi(render_distance_chunks, 1)
-	lod_distance = maxi(3, render_distance / 3)
+	lod_distance = clampi(render_distance / 3, 3, MAX_FULL_DETAIL_DISTANCE)
 	unload_radius = render_distance + 2
 	_generator.configure(world_config)
 	_worldgen_revision += 1
@@ -128,7 +137,7 @@ func configure(world_config: Dictionary, render_distance_chunks: int) -> void:
 
 func set_render_distance(value: int) -> void:
 	render_distance = maxi(value, 1)
-	lod_distance = maxi(3, render_distance / 3)
+	lod_distance = clampi(render_distance / 3, 3, MAX_FULL_DETAIL_DISTANCE)
 	unload_radius = render_distance + 2
 	_rebuild_desired()
 
@@ -197,7 +206,7 @@ func _rebuild_desired() -> void:
 func _schedule_jobs() -> void:
 	if _gen_queue.is_empty():
 		return
-	while _pending.size() < MAX_ACTIVE_JOBS and not _gen_queue.is_empty():
+	while _pending.size() < _max_active_jobs and not _gen_queue.is_empty():
 		var pos: Vector2i = _gen_queue.pop_front()
 		_gen_queued.erase(pos)
 		if _pending.has(pos):
@@ -239,7 +248,7 @@ func _collect_jobs() -> void:
 			continue
 		WorkerThreadPool.wait_for_task_completion(job.task)
 		_pending.erase(pos)
-		if job.slot.has("result"):
+		if job.slot.has("result") and job.slot["result"] != null:
 			_record_job_metrics(job.slot, job.lod)
 			_commit_queue.append(CommitItem.new(pos, job.slot["result"], job.version, job.config_revision, job.lod))
 
@@ -250,7 +259,7 @@ func _run_chunk_job(chunk_pos: Vector2i, edits: Dictionary, neighbors, slot: Dic
 	var generated := _generator.generate_data(chunk_pos, edits, lod)
 	var mesh_start := Time.get_ticks_usec()
 	if lod:
-		slot["result"] = _mesher.build_lod(generated.data, generated.max_y, generated.heights, generated.foliage_tints, generated.water_tints, neighbors)
+		slot["result"] = _mesher.build_lod(generated.lod_solid_y, generated.lod_solid_id, generated.lod_sub_id, generated.lod_water_y, generated.lod_water_level, generated.max_y, generated.foliage_tints, generated.water_tints, neighbors)
 	else:
 		slot["result"] = _mesher.build(generated.data, generated.max_y, generated.heights, generated.foliage_tints, generated.water_tints, neighbors)
 	slot["timings"] = generated.timings
@@ -310,6 +319,10 @@ func _build_lod_edge(chunk: Chunk, direction: Vector2i) -> ChunkMesher.LodEdge:
 		var local_x := index if direction.y != 0 else (0 if direction.x > 0 else VoxelDefs.CHUNK_SIZE - 1)
 		var local_z := index if direction.x != 0 else (0 if direction.y > 0 else VoxelDefs.CHUNK_SIZE - 1)
 		var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
+		if chunk.lod:
+			edge.solid[index] = chunk.lod_solid_y[column]
+			edge.water[index] = chunk.lod_water_y[column]
+			continue
 		var solid := ChunkMesher.LOD_NONE
 		var water := ChunkMesher.LOD_NONE
 		for y in range(chunk.max_y, -1, -1):
@@ -336,7 +349,12 @@ func _gather_neighbors(pos: Vector2i) -> ChunkMesher.NeighborSet:
 		var chunk: Chunk = _chunks.get(pos + direction)
 		if chunk == null:
 			continue
-		out.samples[direction] = ChunkMesher.NeighborSample.new(chunk.data.duplicate(), chunk.max_y, chunk.heights.duplicate())
+		if chunk.lod:
+			out.samples[direction] = ChunkMesher.NeighborSample.from_lod(
+				chunk.lod_solid_y.duplicate(), chunk.lod_solid_id.duplicate(),
+				chunk.lod_sub_id.duplicate(), chunk.lod_water_y.duplicate())
+		else:
+			out.samples[direction] = ChunkMesher.NeighborSample.new(chunk.data.duplicate(), chunk.max_y, chunk.heights.duplicate())
 		if index < 4:
 			out.mask |= (1 << index)
 	return out
@@ -350,6 +368,11 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> voi
 	chunk.lod = lod
 	chunk.data = res.data
 	chunk.heights = res.heights
+	chunk.lod_solid_y = res.lod_solid_y
+	chunk.lod_solid_id = res.lod_solid_id
+	chunk.lod_sub_id = res.lod_sub_id
+	chunk.lod_water_y = res.lod_water_y
+	chunk.lod_water_level = res.lod_water_level
 	chunk.max_y = res.max_y
 	chunk.mask = res.mask
 	chunk.mesh.mesh = ChunkMesher.arrays_to_mesh(res.verts, res.normals, res.uvs, res.colors, res.indices, _blocks.material, res.light, res.layers)
@@ -449,7 +472,7 @@ func _data_index(block_position: Vector3i) -> int:
 
 func get_block_world(block_position: Vector3i) -> int:
 	var chunk := _loaded_chunk_for(block_position)
-	if chunk == null:
+	if chunk == null or chunk.lod:
 		return BlockRegistry.BLOCK_AIR
 	return chunk.data[_data_index(block_position)]
 
@@ -463,7 +486,7 @@ func break_block(block_position: Vector3i) -> int:
 		return BlockRegistry.BLOCK_AIR
 	var chunk_position := _chunk_for_block(block_position)
 	var chunk: Chunk = _chunks.get(chunk_position)
-	if chunk == null:
+	if chunk == null or chunk.lod:
 		return BlockRegistry.BLOCK_AIR
 	var index := _data_index(block_position)
 	var block_id: int = chunk.data[index]
@@ -483,7 +506,7 @@ func place_block(block_position: Vector3i, block_id: int) -> bool:
 		return false
 	var chunk_position := _chunk_for_block(block_position)
 	var chunk: Chunk = _chunks.get(chunk_position)
-	if chunk == null:
+	if chunk == null or chunk.lod:
 		return false
 	var index := _data_index(block_position)
 	var existing: int = chunk.data[index]
@@ -585,7 +608,7 @@ func _update_water_cell(position: Vector3i) -> void:
 
 func _water_place(position: Vector3i, block_id: int) -> void:
 	var chunk := _loaded_chunk_for(position)
-	if chunk == null:
+	if chunk == null or chunk.lod:
 		return
 	var index := _data_index(position)
 	if chunk.data[index] == block_id:

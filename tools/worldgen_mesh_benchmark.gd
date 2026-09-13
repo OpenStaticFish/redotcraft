@@ -16,7 +16,7 @@ func _initialize() -> void:
 		var full_ms := float(Time.get_ticks_usec() - start) / 1000.0
 		var lod := generator.generate_data(position, {}, true)
 		start = Time.get_ticks_usec()
-		var lod_mesh := mesher.build_lod(lod.data, lod.max_y, lod.heights, lod.foliage_tints, lod.water_tints, ChunkMesher.LodNeighbors.new())
+		var lod_mesh := mesher.build_lod(lod.lod_solid_y, lod.lod_solid_id, lod.lod_sub_id, lod.lod_water_y, lod.lod_water_level, lod.max_y, lod.foliage_tints, lod.water_tints, ChunkMesher.LodNeighbors.new())
 		var lod_ms := float(Time.get_ticks_usec() - start) / 1000.0
 		full_total += full_ms
 		lod_total += lod_ms

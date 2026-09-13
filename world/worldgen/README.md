@@ -20,6 +20,12 @@ catalogs/samplers used by worker jobs. A chunk then runs these ordered stages:
    deterministic dithering varies decoration choices (not snow/sand coverage).
 5. `VoxelPopulator.populate()` fills strata, carves caves, adds liquids and ore
    veins, stamps global-cell decorations, then applies player edits last.
+6. `VoxelPopulator.populate_lod()` handles distance chunks: it writes compact
+   per-column top/sub/water arrays instead of a full voxel volume and skips
+   caves, ores, and decorations. `ChunkMesher.build_lod()` consumes those
+   arrays directly, and full chunks expand compact neighbors on the worker
+   thread. Keep the compact and full surface choices in sync: both come from
+   `_surface_rule_values()`.
 
 All coordinates are global and all generation state is read-only after
 configuration. Do not add mutable sampler caches or scene-tree access to worker
@@ -93,9 +99,15 @@ to review it; an already-running world retains its configured sampler and chunks
   checks spruce taper/tips and repeatable, bounded broadleaf/spruce geometry
   across chunk edges. The main verifier also checks nonzero local detail and
   its amplitude budget, to guard against both flattening and runaway roughness.
+- `redot --headless --path . --script res://tools/worldgen_lod_verify.gd`
+  checks compact LOD columns against a decoration-free full chunk, distance-
+  mesh top geometry, and full chunks meshing against compact neighbors.
+- `redot --headless --path . --script res://tools/worldgen_stream_benchmark.gd`
+  records ring-load wall time and throughput at render distances 10/16/32 and
+  several job-concurrency levels.
 
-The pinned normal-generation sample currently averages about 30-33 ms for full
-voxel generation and 25 ms for LOD data on the development machine. Full mesh
-CPU remains much more expensive because it builds a 3x3 light volume, floods sky
-and RGB light, computes AO, and emits collision triangles; keep that work on
-workers and compare total chunk throughput when changing concurrency.
+The pinned normal-generation sample currently averages about 40 ms for full
+voxel generation and 12 ms for compact LOD data on the development machine.
+Full mesh CPU remains much more expensive because it builds a 3x3 light volume,
+floods sky and RGB light, computes AO, and emits collision triangles; keep that
+work on workers and compare total chunk throughput when changing concurrency.

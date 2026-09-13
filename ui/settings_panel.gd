@@ -5,7 +5,7 @@ signal closed
 signal setting_changed(key: String, value: Variant)
 
 const SLIDERS := [
-	{"label": "Render Distance", "key": "render_distance", "minimum": 4.0, "maximum": 16.0, "step": 1.0, "format": "%d chunks"},
+	{"label": "Render Distance", "key": "render_distance", "minimum": 4.0, "maximum": 32.0, "step": 1.0, "format": "%d chunks"},
 	{"label": "Field of View", "key": "fov", "minimum": 60.0, "maximum": 100.0, "step": 1.0, "format": "%d"},
 	{"label": "Mouse Sensitivity", "key": "mouse_sensitivity", "minimum": 0.0005, "maximum": 0.005, "step": 0.0001, "format": "%.4f"},
 ]

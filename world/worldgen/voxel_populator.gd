@@ -61,6 +61,58 @@ func populate(chunk_pos: Vector2i, field: ChunkTerrainData, edits: Dictionary, f
 	return {"data": data, "max_y": _actual_max_y(data, max_y)}
 
 
+## Compact LOD population: the distance mesh only needs each column's top/sub
+## block and water surface, so no 192-block data array is allocated and caves,
+## ores, and decorations are skipped. Far chunks cost kilobytes instead of
+## ~50 KB and stream several times faster. Player edits are intentionally
+## ignored here: LOD chunks are beyond interaction range and become full detail
+## before the player can reach them.
+func populate_lod(chunk_pos: Vector2i, field: ChunkTerrainData) -> Dictionary:
+	var solid_y := PackedInt32Array()
+	var solid_id := PackedByteArray()
+	var sub_id := PackedByteArray()
+	var water_y := PackedInt32Array()
+	var water_level := PackedByteArray()
+	solid_y.resize(VoxelDefsScript.CHUNK_AREA)
+	solid_id.resize(VoxelDefsScript.CHUNK_AREA)
+	sub_id.resize(VoxelDefsScript.CHUNK_AREA)
+	water_y.resize(VoxelDefsScript.CHUNK_AREA)
+	water_level.resize(VoxelDefsScript.CHUNK_AREA)
+	solid_y.fill(-1)
+	water_y.fill(-1)
+	var max_y := 0
+	for local_z in VoxelDefsScript.CHUNK_SIZE:
+		for local_x in VoxelDefsScript.CHUNK_SIZE:
+			var field_index: int = ChunkTerrainDataScript.cell_index(local_x, local_z)
+			var column: int = local_x + local_z * VoxelDefsScript.DATA_STRIDE_Z
+			var surface_y: int = _surface_height(field, field_index)
+			var river: float = field.river[field_index]
+			var is_river: bool = config.world_type != WorldGenConfigScript.WORLD_TYPE_FLAT \
+				and river >= 0.62 and surface_y < VoxelDefsScript.SEA_LEVEL
+			var column_water_y := -1
+			if surface_y < VoxelDefsScript.SEA_LEVEL:
+				column_water_y = VoxelDefsScript.SEA_LEVEL
+			var values := _surface_rule_values(field, field_index, surface_y, column_water_y, is_river,
+				field.world_x(local_x), field.world_z(local_z))
+			solid_y[column] = surface_y
+			solid_id[column] = values.x
+			sub_id[column] = values.y
+			if column_water_y >= 0:
+				water_y[column] = column_water_y
+				water_level[column] = 8
+				max_y = maxi(max_y, column_water_y)
+			else:
+				max_y = maxi(max_y, surface_y)
+	return {
+		"solid_y": solid_y,
+		"solid_id": solid_id,
+		"sub_id": sub_id,
+		"water_y": water_y,
+		"water_level": water_level,
+		"max_y": max_y,
+	}
+
+
 func _fill_base_and_surface(data: PackedByteArray, field: ChunkTerrainData) -> int:
 	var max_y := 0
 	for local_z in VoxelDefsScript.CHUNK_SIZE:
@@ -92,8 +144,26 @@ func _fill_base_and_surface(data: PackedByteArray, field: ChunkTerrainData) -> i
 
 func _apply_surface_rule(data: PackedByteArray, field: ChunkTerrainData, local_x: int, local_z: int, surface_y: int, water_y: int, is_river: bool) -> void:
 	var field_index: int = ChunkTerrainDataScript.cell_index(local_x, local_z)
-	# Surface blankets must be coherent. Per-column biome dithering is useful
-	# for vegetation variety, but creates checkerboards of snow/sand/grass.
+	var world_x := field.world_x(local_x)
+	var world_z := field.world_z(local_z)
+	var values := _surface_rule_values(field, field_index, surface_y, water_y, is_river, world_x, world_z)
+	var biome: int = int(field.biome_id[field_index])
+	var top: int = values.x
+	var sub: int = values.y
+	var depth: int = values.z
+	if biome == BiomeCatalogScript.BADLANDS:
+		# Horizontal terracotta/red-sand bands keep cliffs recognisable after erosion.
+		for y in range(maxi(1, surface_y - depth + 1), surface_y + 1):
+			data[_index(local_x, y, local_z)] = _badlands_stratum(world_x, y, world_z)
+		return
+	for y in range(maxi(1, surface_y - depth + 1), surface_y + 1):
+		data[_index(local_x, y, local_z)] = top if y == surface_y else sub
+
+
+## Surface blankets must be coherent. Per-column biome dithering is useful for
+## vegetation variety, but creates checkerboards of snow/sand/grass. Shared by
+## the full fill and the compact LOD path so both place identical blocks.
+func _surface_rule_values(field: ChunkTerrainData, field_index: int, surface_y: int, water_y: int, is_river: bool, world_x: int, world_z: int) -> Vector3i:
 	var biome: int = int(field.biome_id[field_index])
 	var slope: float = field.slope[field_index]
 	var top: int = biomes.surface_block(biome)
@@ -121,12 +191,9 @@ func _apply_surface_rule(data: PackedByteArray, field: ChunkTerrainData, local_x
 		if surface_y >= 104:
 			sub = BlockRegistryScript.BLOCK_STONE
 	if biome == BiomeCatalogScript.BADLANDS:
-		# Horizontal terracotta/red-sand bands keep cliffs recognisable after erosion.
-		for y in range(maxi(1, surface_y - depth + 1), surface_y + 1):
-			data[_index(local_x, y, local_z)] = _badlands_stratum(field.world_x(local_x), y, field.world_z(local_z))
-		return
-	for y in range(maxi(1, surface_y - depth + 1), surface_y + 1):
-		data[_index(local_x, y, local_z)] = top if y == surface_y else sub
+		top = _badlands_stratum(world_x, surface_y, world_z)
+		sub = _badlands_stratum(world_x, maxi(1, surface_y - 1), world_z)
+	return Vector3i(top, sub, depth)
 
 
 func _badlands_stratum(world_x: int, y: int, world_z: int) -> int:

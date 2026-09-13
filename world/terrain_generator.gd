@@ -12,6 +12,11 @@ class GenResult:
 	var foliage_tints: PackedColorArray
 	var water_tints: PackedColorArray
 	var timings: Dictionary
+	var lod_solid_y := PackedInt32Array()
+	var lod_solid_id := PackedByteArray()
+	var lod_sub_id := PackedByteArray()
+	var lod_water_y := PackedInt32Array()
+	var lod_water_level := PackedByteArray()
 
 	func _init(p_data: PackedByteArray, p_max_y: int, p_heights: PackedInt32Array, p_foliage_tints: PackedColorArray, p_water_tints: PackedColorArray, p_timings: Dictionary) -> void:
 		data = p_data
@@ -46,7 +51,26 @@ func generate_data(chunk_pos: Vector2i, edits: Dictionary, lod: bool = false) ->
 	var field: ChunkTerrainData = _sampler.build_field(chunk_pos)
 	var terrain_us := Time.get_ticks_usec() - terrain_start
 	var populate_start := Time.get_ticks_usec()
-	var populated: Dictionary = _populator.populate(chunk_pos, field, edits, not lod)
+	if lod:
+		var compact: Dictionary = _populator.populate_lod(chunk_pos, field)
+		var populate_us := Time.get_ticks_usec() - populate_start
+		var heights_start := Time.get_ticks_usec()
+		var lod_heights := _build_lod_heights(compact["solid_y"], compact["water_y"])
+		var heights_us := Time.get_ticks_usec() - heights_start
+		var result := GenResult.new(PackedByteArray(), int(compact["max_y"]), lod_heights,
+			_build_foliage_tints(field), _build_water_tints(field), {
+				"terrain_us": terrain_us,
+				"populate_us": populate_us,
+				"heightmap_us": heights_us,
+				"generation_us": Time.get_ticks_usec() - total_start,
+			})
+		result.lod_solid_y = compact["solid_y"]
+		result.lod_solid_id = compact["solid_id"]
+		result.lod_sub_id = compact["sub_id"]
+		result.lod_water_y = compact["water_y"]
+		result.lod_water_level = compact["water_level"]
+		return result
+	var populated: Dictionary = _populator.populate(chunk_pos, field, edits, true)
 	var populate_us := Time.get_ticks_usec() - populate_start
 	var data: PackedByteArray = populated["data"]
 	var max_y: int = populated["max_y"]
@@ -235,6 +259,14 @@ func _build_heights(data: PackedByteArray, max_y: int) -> PackedInt32Array:
 				if data[column + y * VoxelDefs.DATA_STRIDE_Y] != BlockRegistry.BLOCK_AIR:
 					heights[column] = y
 					break
+	return heights
+
+
+func _build_lod_heights(solid_y: PackedInt32Array, water_y: PackedInt32Array) -> PackedInt32Array:
+	var heights := PackedInt32Array()
+	heights.resize(VoxelDefs.CHUNK_AREA)
+	for column in heights.size():
+		heights[column] = maxi(solid_y[column], water_y[column])
 	return heights
 
 
