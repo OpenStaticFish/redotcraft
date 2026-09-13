@@ -1,0 +1,269 @@
+extends Node
+
+## Central audio service: buses, small player pools, and a stream registry keyed
+## by block material. Gameplay code names a material or UI cue, never a file.
+## Every cue is a recorded CC0 sample under assets/audio; there is no
+## synthesized bank. Missing files warn once and play silence.
+##
+## GameConfig is looked up through the scene tree instead of by autoload name so
+## this script also compiles in headless verification scripts with no autoloads.
+
+const BUS_MASTER := "Master"
+const BUS_SFX := "SFX"
+const BUS_AMBIENT := "Ambient"
+
+const SFX_DIR := "res://assets/audio/sfx"
+const AMBIENT_DIR := "res://assets/audio/ambient"
+
+const MATERIALS: PackedStringArray = ["grass", "dirt", "stone", "sand", "snow", "gravel", "wood", "water"]
+const FOOTSTEP_VARIATIONS := 3
+const BREAK_VARIATIONS := 2
+const PLACE_VARIATIONS := 2
+const UI_SOUNDS: PackedStringArray = ["click", "hover", "confirm", "cancel"]
+
+const SFX_POOL_SIZE := 10
+const UI_POOL_SIZE := 4
+const WORLD_POOL_SIZE := 12
+const FOOTSTEP_DB := -13.0
+const BREAK_DB := -9.0
+const PLACE_DB := -11.0
+const RAIN_DB := -20.0
+const SILENT_DB := -80.0
+
+var _sfx_pool: Array[AudioStreamPlayer] = []
+var _ui_pool: Array[AudioStreamPlayer] = []
+var _world_pool: Array[AudioStreamPlayer3D] = []
+var _streams := {}
+var _missing := {}
+var _block_materials := {}
+var _pool_cursor := 0
+var _rain_player: AudioStreamPlayer
+var _rain_tween: Tween
+var _rng := RandomNumberGenerator.new()
+
+
+## Buses and the material table need no scene tree, so they are ready even in
+## headless verification scripts that never attach the manager to a scene.
+func _init() -> void:
+	_rng.randomize()
+	_ensure_buses()
+	_build_block_materials()
+
+
+func _ready() -> void:
+	_build_pools()
+	apply_volumes()
+	# Loading the small bank up front avoids a first-use hitch when the player
+	# breaks the first block; deferred so startup never blocks a frame.
+	_preload_streams.call_deferred()
+
+
+func _preload_streams() -> void:
+	var total := 0
+	for material in MATERIALS:
+		for variation in FOOTSTEP_VARIATIONS:
+			total += 1
+			_get_stream("%s/footstep_%s_%d.ogg" % [SFX_DIR, material, variation + 1])
+	for variation in BREAK_VARIATIONS:
+		total += 1
+		_get_stream("%s/block_break_%d.ogg" % [SFX_DIR, variation + 1])
+	for variation in PLACE_VARIATIONS:
+		total += 1
+		_get_stream("%s/block_place_%d.ogg" % [SFX_DIR, variation + 1])
+	for kind in UI_SOUNDS:
+		total += 1
+		_get_stream("%s/ui_%s.ogg" % [SFX_DIR, kind])
+	total += 1
+	_get_stream("%s/rain_loop.ogg" % AMBIENT_DIR)
+	print("AudioManager: %d recorded cues loaded" % total)
+
+
+## Builds the mapping from block ids to the eight material families. Leaf and
+## plant blocks reuse the grass set; glass and ores reuse stone; logs reuse wood.
+func _build_block_materials() -> void:
+	var groups := {
+		"grass": [BlockRegistry.BLOCK_GRASS, BlockRegistry.BLOCK_LEAVES, BlockRegistry.BLOCK_SPRUCE_LEAVES,
+			BlockRegistry.BLOCK_BIRCH_LEAVES, BlockRegistry.BLOCK_ACACIA_LEAVES, BlockRegistry.BLOCK_JUNGLE_LEAVES,
+			BlockRegistry.BLOCK_MANGROVE_LEAVES, BlockRegistry.BLOCK_TALL_GRASS, BlockRegistry.BLOCK_YELLOW_FLOWER,
+			BlockRegistry.BLOCK_RED_FLOWER, BlockRegistry.BLOCK_DEAD_BUSH, BlockRegistry.BLOCK_VINE,
+			BlockRegistry.BLOCK_BROWN_MUSHROOM, BlockRegistry.BLOCK_RED_MUSHROOM, BlockRegistry.BLOCK_MYCELIUM,
+			BlockRegistry.BLOCK_MELON],
+		"dirt": [BlockRegistry.BLOCK_DIRT, BlockRegistry.BLOCK_CLAY, BlockRegistry.BLOCK_MUD],
+		"stone": [BlockRegistry.BLOCK_STONE, BlockRegistry.BLOCK_COBBLESTONE, BlockRegistry.BLOCK_BEDROCK,
+			BlockRegistry.BLOCK_COAL_ORE, BlockRegistry.BLOCK_IRON_ORE, BlockRegistry.BLOCK_GOLD_ORE,
+			BlockRegistry.BLOCK_TERRACOTTA, BlockRegistry.BLOCK_GLOWSTONE, BlockRegistry.BLOCK_GLASS,
+			BlockRegistry.BLOCK_TORCH],
+		"sand": [BlockRegistry.BLOCK_SAND, BlockRegistry.BLOCK_RED_SAND],
+		"snow": [BlockRegistry.BLOCK_SNOW],
+		"gravel": [BlockRegistry.BLOCK_GRAVEL],
+		"wood": [BlockRegistry.BLOCK_LOG, BlockRegistry.BLOCK_BIRCH_LOG, BlockRegistry.BLOCK_SPRUCE_LOG,
+			BlockRegistry.BLOCK_JUNGLE_LOG, BlockRegistry.BLOCK_ACACIA_LOG, BlockRegistry.BLOCK_MANGROVE_LOG,
+			BlockRegistry.BLOCK_MANGROVE_ROOTS, BlockRegistry.BLOCK_BAMBOO, BlockRegistry.BLOCK_CACTUS],
+		"water": [BlockRegistry.BLOCK_WATER],
+	}
+	for material in groups.keys():
+		for block_id in groups[material]:
+			_block_materials[block_id] = material
+	for level in range(BlockRegistry.BLOCK_WATER_FLOW_7, BlockRegistry.BLOCK_WATER_FLOW_1 + 1):
+		_block_materials[level] = "water"
+
+
+func material_for_block(block_id: int) -> String:
+	return _block_materials.get(block_id, "stone")
+
+
+func play_footstep(material: String, world_position: Vector3) -> void:
+	var stream := _variation("footstep_%s" % material, FOOTSTEP_VARIATIONS)
+	if stream == null:
+		return
+	_play_3d(stream, world_position, _rng.randf_range(0.97, 1.03), FOOTSTEP_DB)
+
+
+## Breaking and placing use one subtle cue for every block type. The block id
+## is accepted only so call sites keep the material context for future use.
+func play_block_break(_block_id: int, world_position: Vector3) -> void:
+	var stream := _variation("block_break", BREAK_VARIATIONS)
+	if stream == null:
+		return
+	_play_3d(stream, world_position, _rng.randf_range(0.97, 1.01), BREAK_DB)
+
+
+func play_block_place(_block_id: int, world_position: Vector3) -> void:
+	var stream := _variation("block_place", PLACE_VARIATIONS)
+	if stream == null:
+		return
+	_play_3d(stream, world_position, _rng.randf_range(1.03, 1.07), PLACE_DB)
+
+
+func play_ui(kind: String) -> void:
+	var safe_kind := kind if kind in UI_SOUNDS else "click"
+	var stream := _get_stream("%s/ui_%s.ogg" % [SFX_DIR, safe_kind])
+	if stream == null:
+		return
+	_play_in_pool(_ui_pool, stream, 0.0)
+
+
+## Fades the rain bed in or out. The CC0 rain loop is an OGG, so looping is
+## enabled on the stream at first use.
+func set_rain(active: bool) -> void:
+	if _rain_player == null or not is_inside_tree():
+		return
+	var stream := _get_stream("%s/rain_loop.ogg" % AMBIENT_DIR)
+	if stream is AudioStreamOggVorbis:
+		stream.loop = true
+	_rain_player.stream = stream
+	if not _rain_player.playing:
+		_rain_player.volume_db = SILENT_DB
+		_rain_player.play()
+	if _rain_tween != null and _rain_tween.is_valid():
+		_rain_tween.kill()
+	_rain_tween = create_tween()
+	_rain_tween.tween_property(_rain_player, "volume_db", RAIN_DB if active else SILENT_DB, 1.5)
+
+
+func apply_volumes() -> void:
+	if not is_inside_tree():
+		return
+	var config: Variant = get_node_or_null("/root/GameConfig")
+	if config == null:
+		return
+	_set_bus_volume(BUS_MASTER, config.get_audio_volume("master_volume"))
+	_set_bus_volume(BUS_SFX, config.get_audio_volume("sfx_volume"))
+	_set_bus_volume(BUS_AMBIENT, config.get_audio_volume("ambient_volume"))
+
+
+func _ensure_buses() -> void:
+	for bus_name in [BUS_SFX, BUS_AMBIENT]:
+		if AudioServer.get_bus_index(bus_name) != -1:
+			continue
+		var index := AudioServer.bus_count
+		AudioServer.add_bus(index)
+		AudioServer.set_bus_name(index, bus_name)
+		AudioServer.set_bus_send(index, BUS_MASTER)
+
+
+func _set_bus_volume(bus_name: String, linear: float) -> void:
+	var index := AudioServer.get_bus_index(bus_name)
+	if index == -1:
+		return
+	AudioServer.set_bus_volume_db(index, SILENT_DB if linear <= 0.001 else linear_to_db(linear))
+
+
+func _build_pools() -> void:
+	for index in SFX_POOL_SIZE:
+		var player := AudioStreamPlayer.new()
+		player.bus = BUS_SFX
+		add_child(player)
+		_sfx_pool.append(player)
+	for index in UI_POOL_SIZE:
+		var player := AudioStreamPlayer.new()
+		player.bus = BUS_SFX
+		add_child(player)
+		_ui_pool.append(player)
+	_rain_player = AudioStreamPlayer.new()
+	_rain_player.bus = BUS_AMBIENT
+	_rain_player.volume_db = SILENT_DB
+	add_child(_rain_player)
+
+
+func _variation(prefix: String, variations: int) -> AudioStream:
+	return _get_stream("%s/%s_%d.ogg" % [SFX_DIR, prefix, _rng.randi_range(1, variations)])
+
+
+func _play_in_pool(pool: Array[AudioStreamPlayer], stream: AudioStream, volume_db: float) -> void:
+	if pool.is_empty():
+		return
+	var player := pool[_pool_cursor % pool.size()]
+	_pool_cursor += 1
+	player.stream = stream
+	player.volume_db = volume_db
+	player.play()
+
+
+## Reuses a small pool attached to the root viewport world instead of spawning
+## a node per cue: node creation showed up as a delay on the first footstep or
+## block action after a quiet moment.
+func _play_3d(stream: AudioStream, world_position: Vector3, pitch: float, volume_db: float) -> void:
+	if not is_inside_tree():
+		return
+	if _world_pool.is_empty():
+		_build_world_pool()
+	var player: AudioStreamPlayer3D = null
+	for candidate in _world_pool:
+		if not candidate.playing:
+			player = candidate
+			break
+	if player == null:
+		player = _world_pool[_pool_cursor % _world_pool.size()]
+		_pool_cursor += 1
+	player.stream = stream
+	player.pitch_scale = pitch
+	player.volume_db = volume_db
+	player.global_position = world_position
+	player.play()
+
+
+func _build_world_pool() -> void:
+	for index in WORLD_POOL_SIZE:
+		var player := AudioStreamPlayer3D.new()
+		player.bus = BUS_SFX
+		player.max_distance = 48.0
+		player.unit_size = 6.0
+		# Root viewport keeps the pool alive across scene changes and shares
+		# the same World3D as the gameplay scene.
+		get_tree().root.add_child(player)
+		_world_pool.append(player)
+
+
+func _get_stream(path: String) -> AudioStream:
+	if _streams.has(path):
+		return _streams[path]
+	if not ResourceLoader.exists(path):
+		if not _missing.has(path):
+			_missing[path] = true
+			push_warning("AudioManager: missing sound %s; playing silence" % path)
+		_streams[path] = null
+		return null
+	var stream := load(path) as AudioStream
+	_streams[path] = stream
+	return stream

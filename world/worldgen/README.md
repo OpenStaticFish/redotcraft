@@ -22,10 +22,12 @@ catalogs/samplers used by worker jobs. A chunk then runs these ordered stages:
    veins, stamps global-cell decorations, then applies player edits last.
 6. `VoxelPopulator.populate_lod()` handles distance chunks: it writes compact
    per-column top/sub/water arrays instead of a full voxel volume and skips
-   caves, ores, and decorations. `ChunkMesher.build_lod()` consumes those
-   arrays directly, and full chunks expand compact neighbors on the worker
-   thread. Keep the compact and full surface choices in sync: both come from
-   `_surface_rule_values()`.
+   caves, ores, and ground flora. Real tree crowns are baked in using in-field
+   anchors only and the shared stamp functions; site-validity probes are
+   skipped because they leave the padded field and cost nearly full
+   population. `ChunkMesher.build_lod()` consumes those arrays directly, and
+   full chunks expand compact neighbors on the worker thread. Keep the compact
+   and full surface choices in sync: both come from `_surface_rule_values()`.
 
 All coordinates are global and all generation state is read-only after
 configuration. Do not add mutable sampler caches or scene-tree access to worker
@@ -39,7 +41,8 @@ ranges live in `world_gen_config.gd`.
 
 - `terrain_scale`: multiplies local relief; Amplified applies an additional scale.
 - `macro_scale`: size of continents and broad terrain regions.
-- `biome_scale`: size of temperature/moisture regions, independent of landforms.
+- `biome_scale`: size of temperature/moisture regions, independent of landforms
+  (default 1792 blocks; larger values make biome territories broader).
 - `river_density`: controls channel-mask width and can disable rivers at zero.
 - `erosion_strength`: local talus smoothing and profile terracing.
 - `regional_erosion`: broad rainfall/transport erosion strength.
@@ -79,8 +82,15 @@ reeds and mangroves near wet ground, and shade plants inside grove cover.
   source at `surface_y + 1` in every river-mask column; it makes raised ribbons.
 - Surface snow uses the primary biome and a high-altitude cold band, never an
   independent random choice at every column. Alpine snow sits on stone.
+- Wetland basins are gated by the lowland profile weight. The river mask boosts
+  the shaping moisture, and a one-block channel-edge change without that gate
+  can pull a tall mountain column tens of blocks into a basin in one step.
 - Chunk fields and point/decoration queries classify climate at the same final
   height, so feature placement cannot disagree across chunk boundaries.
+- Local relief is dominated by 80-block shoulders with a smaller 32-block knoll
+  accent; the 13-block fine layer is a fraction of a block to two blocks. Keep
+  the talus weight (`smoothstep(0.6, 5.5, gradient) * 0.33`) and profile fine
+  amplitudes low or the surface reads as broken voxel steps.
 
 Terrain tuning changes the output for existing seeds. Restart into a fresh world
 to review it; an already-running world retains its configured sampler and chunks.
@@ -93,8 +103,9 @@ to review it; an already-running world retains its configured sampler and chunks
 - `redot --headless --path . --script res://tools/worldgen_verify.gd` checks
   deterministic output, neighboring seams, edit priority, concurrent generation,
   biome/river coverage, height limits, field/point parity, flat-world height,
-  coherent surface blankets, and adjacent height/slope limits near and far from
-  the origin. These are regression guardrails, not a substitute for visual review.
+  coherent surface blankets, and adjacent height/slope limits plus the share of
+  2-block steps (`rough_ratio`) near and far from the origin. These are
+  regression guardrails, not a substitute for visual review.
 - `redot --headless --path . --script res://tools/worldgen_benchmark.gd`
   records full and LOD voxel-generation time for pinned chunks.
 - `redot --headless --path . --script res://tools/worldgen_mesh_benchmark.gd`
@@ -104,14 +115,17 @@ to review it; an already-running world retains its configured sampler and chunks
   across chunk edges. The main verifier also checks nonzero local detail and
   its amplitude budget, to guard against both flattening and runaway roughness.
 - `redot --headless --path . --script res://tools/worldgen_biome_verify.gd`
-  checks broad forest/swamp/jungle/taiga interiors, signature vegetation density,
-  biome-neighbor coherence, and the absence of procedural cobblestone debris.
+  checks biome-neighbor coherence, contiguous forest/swamp/jungle/taiga territory
+  radius, signature vegetation density, and the absence of procedural
+  cobblestone debris.
 - `redot --headless --path . res://tools/player_target_verify.tscn`
   checks that voxel traversal skips water and selects breakable cross plants even
   though their meshes intentionally have no movement collision.
 - `redot --headless --path . --script res://tools/worldgen_lod_verify.gd`
   checks compact LOD columns against a decoration-free full chunk, distance-
-  mesh top geometry, and full chunks meshing against compact neighbors.
+  mesh top geometry, full chunks meshing against compact neighbors, baked tree
+  crowns over forest chunks (never open water), and LOD occlusion shading that
+  varies on hills while staying uniform on flat ground.
 - `redot --headless --path . --script res://tools/worldgen_stream_benchmark.gd`
   records ring-load wall time and throughput at render distances 10/16/32 and
   several job-concurrency levels.

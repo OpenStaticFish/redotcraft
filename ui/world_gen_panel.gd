@@ -51,8 +51,8 @@ func _ready() -> void:
 		terrain, "Landmass Scale", 192.0, 1024.0, 32.0,
 		float(GameConfig.world.get("macro_scale", 384.0)), "%d blocks", 1.0)
 	_biome_slider = UITheme.slider_row(
-		terrain, "Biome Scale", 384.0, 2048.0, 64.0,
-		float(GameConfig.world.get("biome_scale", 896.0)), "%d blocks", 1.0)
+		terrain, "Biome Scale", 384.0, 4096.0, 64.0,
+		float(GameConfig.world.get("biome_scale", 1792.0)), "%d blocks", 1.0)
 
 	var water := _section("WATER & EROSION")
 	_rivers_slider = UITheme.slider_row(

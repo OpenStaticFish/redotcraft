@@ -379,6 +379,7 @@ static func style_button_primary(button: Button) -> void:
 	button.add_theme_color_override("font_focus_color", EMBER_INK)
 	button.add_theme_font_override("font", font_semi())
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_connect_click(button)
 
 
 ## Quiet outline button for secondary actions.
@@ -403,6 +404,7 @@ static func style_button_ghost(button: Button) -> void:
 	button.add_theme_stylebox_override("pressed", pressed)
 	button.add_theme_font_override("font", font_semi())
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_connect_click(button)
 
 
 ## Flat inline button for segmented rows.
@@ -430,6 +432,23 @@ static func style_button_flat(button: Button) -> void:
 	button.add_theme_color_override("font_hover_color", EMBER_HI)
 	button.add_theme_color_override("font_pressed_color", EMBER_HI)
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_connect_click(button)
+
+
+## Every styled button gets one UI click. AudioManager is resolved through the
+## scene tree so the theme keeps no autoload compile dependency.
+static func _connect_click(button: Button) -> void:
+	if button.has_meta("ui_click_connected"):
+		return
+	button.set_meta("ui_click_connected", true)
+	button.pressed.connect(func() -> void:
+		var tree := Engine.get_main_loop() as SceneTree
+		if tree == null:
+			return
+		var audio := tree.root.get_node_or_null("AudioManager")
+		if audio != null:
+			audio.play_ui("click")
+	)
 
 
 # ----------------------------------------------------------- label factory --

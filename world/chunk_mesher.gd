@@ -222,7 +222,16 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, fo
 ## Distance mesh: one textured top quad per column plus vertical runs of side
 ## quads on exposed edges. No light volume, AO, collision, or cross blocks;
 ## the surface height matches the full mesh so chunk seams stay closed.
+## Cheap occlusion supplies the lighting cues the missing AO/block-light volume
+## would otherwise provide: top faces darken under taller neighbors, cliff
+## sides darken with depth, and sides below the soil layer become stone.
 ## Thread-safe: only reads immutable block tables and the passed-in columns.
+const LOD_AO_PER_BLOCK: float = 0.14
+const LOD_MIN_TOP_AO: float = 0.52
+const LOD_SOIL_DEPTH: int = 3
+const LOD_DEPTH_DARKEN: float = 0.055
+const LOD_MIN_SIDE_SHADE: float = 0.5
+
 func build_lod(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: PackedByteArray, water_y: PackedInt32Array, water_level: PackedByteArray, data_max_y: int, foliage_tints: PackedColorArray, water_tints: PackedColorArray, neighbors: LodNeighbors) -> MeshResult:
 	var result := MeshResult.new()
 	result.mask = neighbors.mask
@@ -238,8 +247,11 @@ func build_lod(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: Pac
 			var top_solid := solid_y[column]
 			var top_water := water_y[column]
 			var level := int(water_level[column])
+			var neighbor_top := _lod_max_neighbor_top(x, z, solid_y, neighbors)
+			var exposure := maxi(neighbor_top - top_solid, 0)
+			var top_ambient: float = clampf(1.0 - float(exposure) * LOD_AO_PER_BLOCK, LOD_MIN_TOP_AO, 1.0)
 			if top_solid >= 0:
-				_append_lod_block_face(0, x, top_solid, z, solid_id[column], _tint_for(solid_id[column], column, foliage_tints), result)
+				_append_lod_block_face(0, x, top_solid, z, solid_id[column], _tint_for(solid_id[column], column, foliage_tints), result, top_ambient)
 			if top_water >= 0 and level > 0:
 				_append_lod_water_face(0, x, top_water, z, _water_top(level), level < 8, _column_tint(column, water_tints), result)
 			for index in VoxelDefs.DIRS_4.size():
@@ -261,24 +273,46 @@ func build_lod(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: Pac
 				var face: int = LOD_SIDE_FACES[index]
 				var exposed_from := maxi(neighbor_solid, neighbor_water) + 1
 				var top := maxi(top_solid, top_water)
+				var leaves := solid_id[column] >= 0 and _leaves[solid_id[column]] == 1
 				for y in range(exposed_from, top + 1):
 					if y > top_solid:
 						if level > 0 and y > neighbor_water:
 							var above_water := y + 1 <= top_water
 							_append_lod_water_face(face, x, y, z, 1.0 if above_water else _water_top(level), level < 8, _column_tint(column, water_tints), result)
 					else:
-						var id := solid_id[column] if y == top_solid else sub_id[column]
-						_append_lod_block_face(face, x, y, z, id, _tint_for(id, column, foliage_tints), result)
+						var depth := top_solid - y
+						var id := solid_id[column] if depth == 0 else (sub_id[column] if (depth <= LOD_SOIL_DEPTH or leaves) else BlockRegistry.BLOCK_STONE)
+						var side_ambient: float = clampf(1.0 - float(depth) * LOD_DEPTH_DARKEN, LOD_MIN_SIDE_SHADE, 1.0)
+						side_ambient *= 1.0 - (1.0 - top_ambient) * 0.6
+						_append_lod_block_face(face, x, y, z, id, _tint_for(id, column, foliage_tints), result, side_ambient)
 	return result
 
 
-func _append_lod_block_face(face: int, x: int, y: int, z: int, block_id: int, tint: Color, result: MeshResult) -> void:
+## Occlusion source for a top face: the tallest cardinal neighbor (ground or
+## canopy). Higher neighbors darken this column, approximating contact shadow.
+func _lod_max_neighbor_top(x: int, z: int, solid_y: PackedInt32Array, neighbors: LodNeighbors) -> int:
+	var max_top := -1
+	for index in VoxelDefs.DIRS_4.size():
+		var direction: Vector2i = VoxelDefs.DIRS_4[index]
+		var neighbor_x := x + direction.x
+		var neighbor_z := z + direction.y
+		if neighbor_x >= 0 and neighbor_x < VoxelDefs.CHUNK_SIZE and neighbor_z >= 0 and neighbor_z < VoxelDefs.CHUNK_SIZE:
+			max_top = maxi(max_top, solid_y[neighbor_x + neighbor_z * VoxelDefs.DATA_STRIDE_Z])
+		else:
+			var edge := neighbors.get_edge(direction)
+			if edge != null:
+				var edge_index := z if direction.x != 0 else x
+				max_top = maxi(max_top, edge.solid[edge_index])
+	return max_top
+
+
+func _append_lod_block_face(face: int, x: int, y: int, z: int, block_id: int, tint: Color, result: MeshResult, ambient: float = 1.0) -> void:
 	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
 	var layer := _layer_for(block_id, face)
 	var base := result.verts.size()
 	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
 	var face_uvs: Array = VoxelDefs.FACE_UVS[face]
-	var shade: float = VoxelDefs.FACE_SHADE[face]
+	var shade: float = VoxelDefs.FACE_SHADE[face] * ambient
 	for corner in 4:
 		var offset: Vector3i = face_verts[corner]
 		result.verts.append(Vector3(x + offset.x, y + offset.y, z + offset.z))

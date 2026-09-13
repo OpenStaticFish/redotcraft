@@ -3,7 +3,7 @@
 class_name WorldGenConfig
 extends RefCounted
 
-const CURRENT_VERSION: int = 2
+const CURRENT_VERSION: int = 3
 
 const WORLD_TYPE_NORMAL: int = 0
 const WORLD_TYPE_FLAT: int = 1
@@ -14,7 +14,7 @@ const DEFAULT_WORLD_TYPE: int = WORLD_TYPE_NORMAL
 const DEFAULT_TERRAIN_SCALE: float = 1.0
 const DEFAULT_TREE_DENSITY: float = 1.0
 const DEFAULT_MACRO_SCALE: float = 384.0
-const DEFAULT_BIOME_SCALE: float = 896.0
+const DEFAULT_BIOME_SCALE: float = 1792.0
 const DEFAULT_RIVER_DENSITY: float = 1.0
 const DEFAULT_EROSION_STRENGTH: float = 0.55
 const DEFAULT_REGIONAL_EROSION: float = 0.5

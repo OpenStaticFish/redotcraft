@@ -62,11 +62,13 @@ func populate(chunk_pos: Vector2i, field: ChunkTerrainData, edits: Dictionary, f
 
 
 ## Compact LOD population: the distance mesh only needs each column's top/sub
-## block and water surface, so no 192-block data array is allocated and caves,
-## ores, and decorations are skipped. Far chunks cost kilobytes instead of
-## ~50 KB and stream several times faster. Player edits are intentionally
-## ignored here: LOD chunks are beyond interaction range and become full detail
-## before the player can reach them.
+## block and water surface, so no 192-block data array is allocated; caves,
+## ores, and ground flora are skipped. Real tree crowns from in-field anchors
+## are baked into the compact columns so forests do not vanish past the
+## full-detail ring. Far chunks cost kilobytes instead of ~50 KB and stream
+## several times faster. Player edits are intentionally ignored here: LOD
+## chunks are beyond interaction range and become full detail before the
+## player can reach them.
 func populate_lod(chunk_pos: Vector2i, field: ChunkTerrainData) -> Dictionary:
 	var solid_y := PackedInt32Array()
 	var solid_id := PackedByteArray()
@@ -80,6 +82,8 @@ func populate_lod(chunk_pos: Vector2i, field: ChunkTerrainData) -> Dictionary:
 	water_level.resize(VoxelDefsScript.CHUNK_AREA)
 	solid_y.fill(-1)
 	water_y.fill(-1)
+	var origin_x: int = chunk_pos.x * VoxelDefsScript.CHUNK_SIZE
+	var origin_z: int = chunk_pos.y * VoxelDefsScript.CHUNK_SIZE
 	var max_y := 0
 	for local_z in VoxelDefsScript.CHUNK_SIZE:
 		for local_x in VoxelDefsScript.CHUNK_SIZE:
@@ -103,6 +107,7 @@ func populate_lod(chunk_pos: Vector2i, field: ChunkTerrainData) -> Dictionary:
 				max_y = maxi(max_y, column_water_y)
 			else:
 				max_y = maxi(max_y, surface_y)
+	max_y = maxi(max_y, _apply_lod_canopies(solid_y, solid_id, sub_id, water_y, field, origin_x, origin_z))
 	return {
 		"solid_y": solid_y,
 		"solid_id": solid_id,
@@ -111,6 +116,50 @@ func populate_lod(chunk_pos: Vector2i, field: ChunkTerrainData) -> Dictionary:
 		"water_level": water_level,
 		"max_y": max_y,
 	}
+
+
+## Bakes real tree crowns into compact columns using only anchors inside the
+## padded field, so distance chunks show actual trees. Shapes come from the
+## same stamp functions as full chunks; only the expensive site-validity probes
+## are relaxed, since they leave the field and re-enter the sampler. The top
+## two tree blocks become the column's solid/sub pair so side faces read as
+## foliage instead of dirt.
+func _apply_lod_canopies(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: PackedByteArray, water_y: PackedInt32Array, field: ChunkTerrainData, origin_x: int, origin_z: int) -> int:
+	var trees: Array = _collect_trees(field, origin_x, origin_z, {}, true)
+	if trees.is_empty():
+		return 0
+	var buffer := PackedByteArray()
+	buffer.resize(VoxelDefsScript.CHUNK_AREA * VoxelDefsScript.WORLD_HEIGHT)
+	var tree_max_y := 0
+	for tree in trees:
+		tree_max_y = maxi(tree_max_y, _stamp_feature(
+			buffer, origin_x, origin_z, int(tree[1]), int(tree[2]), int(tree[3]), int(tree[0]), int(tree[4])))
+	var top_y := PackedInt32Array()
+	var top_id := PackedByteArray()
+	var second_id := PackedByteArray()
+	top_y.resize(VoxelDefsScript.CHUNK_AREA)
+	top_id.resize(VoxelDefsScript.CHUNK_AREA)
+	second_id.resize(VoxelDefsScript.CHUNK_AREA)
+	top_y.fill(-1)
+	var stride_y: int = VoxelDefsScript.DATA_STRIDE_Y
+	for y in range(tree_max_y + 1):
+		var base: int = y * stride_y
+		for column in VoxelDefsScript.CHUNK_AREA:
+			var block_id: int = buffer[base + column]
+			if block_id == BlockRegistryScript.BLOCK_AIR:
+				continue
+			second_id[column] = top_id[column]
+			top_id[column] = block_id
+			top_y[column] = y
+	var max_y := 0
+	for column in VoxelDefsScript.CHUNK_AREA:
+		if top_y[column] <= solid_y[column] or top_y[column] <= water_y[column]:
+			continue
+		solid_y[column] = top_y[column]
+		solid_id[column] = top_id[column]
+		sub_id[column] = second_id[column] if second_id[column] != BlockRegistryScript.BLOCK_AIR else top_id[column]
+		max_y = maxi(max_y, top_y[column])
+	return max_y
 
 
 func _fill_base_and_surface(data: PackedByteArray, field: ChunkTerrainData) -> int:
@@ -461,9 +510,10 @@ func _decorate(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, or
 	# This cache is strictly per populate() call. It avoids repeatedly resolving
 	# expensive immutable sampler queries without introducing worker-shared state.
 	var tree_ground_cache: Dictionary = {}
-	# Dense-biome trees have a dedicated clustered pass. Ground flora and sparse
-	# biome trees use the regular deterministic feature lattice below.
-	max_y = maxi(max_y, _decorate_tree_groves(data, field, origin_x, origin_z, tree_ground_cache))
+	# Dense-biome groves plus the sparse tree lottery are collected once; the
+	# lattice pass below then only has to place non-tree features.
+	for tree in _collect_trees(field, origin_x, origin_z, tree_ground_cache):
+		max_y = maxi(max_y, _stamp_feature(data, origin_x, origin_z, int(tree[1]), int(tree[2]), int(tree[3]), int(tree[0]), int(tree[4])))
 	var first_x: int = WorldGenHashScript.floor_div(origin_x - FEATURE_HALO, FEATURE_CELL_SIZE)
 	var last_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + FEATURE_HALO, FEATURE_CELL_SIZE)
 	var first_z: int = WorldGenHashScript.floor_div(origin_z - FEATURE_HALO, FEATURE_CELL_SIZE)
@@ -484,49 +534,50 @@ func _decorate(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, or
 				continue
 			var feature: int = int(entry[0])
 			var flags: int = int(entry[3])
-			var probability: float = float(entry[2]) * config.decoration_density
+			# Trees were already stamped by the shared pass above.
 			if (flags & DecorationCatalog.FLAG_TREE) != 0:
-				probability *= config.tree_density
+				continue
+			var probability: float = float(entry[2]) * config.decoration_density
 			if WorldGenHashScript.float_01_2d(config.seed + 1129, cell_x, cell_z) >= minf(0.94, probability):
 				continue
 			if not _feature_site_is_valid(field, tree_ground_cache, world_x, ground.x, world_z, flags):
 				continue
-			if (flags & DecorationCatalog.FLAG_TREE) != 0 and feature != DecorationCatalog.FEATURE_MANGROVE:
-				if not _tree_site_is_safe(field, tree_ground_cache, world_x, ground.x, world_z, _tree_footprint_for(feature), _tree_top_offset_for(feature, hash_value)):
-					continue
 			max_y = maxi(max_y, _stamp_feature(data, origin_x, origin_z, world_x, ground.x, world_z, feature, hash_value))
 	max_y = maxi(max_y, _decorate_ground_cover(data, field, origin_x, origin_z))
 	return max_y
 
 
-## Forest, taiga, and jungle trees use a separate global lattice rather than
-## the one-decoration-per-cell lottery. Broad, hash-anchored discs create dense
-## groves with genuine clearings, and every query is based solely on immutable
-## world coordinates (never on resident chunks or feature placement order).
-func _decorate_tree_groves(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int, ground_cache: Dictionary) -> int:
+## Single acceptance pass for every tree: dense-biome groves (forest, taiga,
+## jungle, swamp) plus the sparse non-grove tree lottery. Each entry is
+## [feature, world_x, ground_y, world_z, hash_value]. In `lod` mode the pass
+## only considers anchors inside the padded field and skips site-validity
+## probes: those probes leave the field and cost nearly a full population, and
+## a distant crown on an occasional rejected site is invisible at that range.
+func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int, ground_cache: Dictionary, lod: bool = false) -> Array:
+	var trees: Array = []
 	if config.tree_density <= 0.0 or config.decoration_density <= 0.0:
-		return 0
-	var max_y := 0
-	var first_x: int = WorldGenHashScript.floor_div(origin_x - TREE_FOOTPRINT_RADIUS, TREE_CELL_SIZE)
-	var last_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + TREE_FOOTPRINT_RADIUS, TREE_CELL_SIZE)
-	var first_z: int = WorldGenHashScript.floor_div(origin_z - TREE_FOOTPRINT_RADIUS, TREE_CELL_SIZE)
-	var last_z: int = WorldGenHashScript.floor_div(origin_z + VoxelDefsScript.CHUNK_SIZE - 1 + TREE_FOOTPRINT_RADIUS, TREE_CELL_SIZE)
-	for cell_z in range(first_z, last_z + 1):
-		for cell_x in range(first_x, last_x + 1):
+		return trees
+	var first_grove_x: int = WorldGenHashScript.floor_div(origin_x - TREE_FOOTPRINT_RADIUS, TREE_CELL_SIZE)
+	var last_grove_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + TREE_FOOTPRINT_RADIUS, TREE_CELL_SIZE)
+	var first_grove_z: int = WorldGenHashScript.floor_div(origin_z - TREE_FOOTPRINT_RADIUS, TREE_CELL_SIZE)
+	var last_grove_z: int = WorldGenHashScript.floor_div(origin_z + VoxelDefsScript.CHUNK_SIZE - 1 + TREE_FOOTPRINT_RADIUS, TREE_CELL_SIZE)
+	for cell_z in range(first_grove_z, last_grove_z + 1):
+		for cell_x in range(first_grove_x, last_grove_x + 1):
 			var anchor_hash: int = WorldGenHashScript.hash_2d(config.seed + 1223, cell_x, cell_z)
 			# Keep anchors at least five blocks apart, even across cell boundaries.
 			# This permits overlapping crowns but prevents one candidate's foliage
 			# from occupying another candidate's root/trunk volume.
 			var world_x: int = cell_x * TREE_CELL_SIZE + 2 + anchor_hash % 2
 			var world_z: int = cell_z * TREE_CELL_SIZE + 2 + (anchor_hash / 23) % 2
+			if lod and not ChunkTerrainDataScript.is_valid_local(world_x - origin_x, world_z - origin_z):
+				continue
 			var ground := _cached_decoration_ground(field, world_x, world_z, ground_cache)
 			if ground.x < VoxelDefsScript.SEA_LEVEL - 3:
 				continue
 			var decoration_set: int = biomes.decoration_set(ground.y)
 			if not _uses_grove_trees(decoration_set):
 				continue
-			var grove_strength: float = _tree_grove_strength(world_x, world_z)
-			var probability: float = _grove_tree_probability(decoration_set, grove_strength)
+			var probability: float = _grove_tree_probability(decoration_set, _tree_grove_strength(world_x, world_z))
 			if WorldGenHashScript.float_01_2d(config.seed + 1237, cell_x, cell_z) >= probability:
 				continue
 			var feature_hash: int = WorldGenHashScript.hash_2d(config.seed + 1249, cell_x, cell_z)
@@ -534,16 +585,50 @@ func _decorate_tree_groves(data: PackedByteArray, field: ChunkTerrainData, origi
 			if entry.is_empty():
 				continue
 			var feature: int = int(entry[0])
-			var footprint: int = _tree_footprint_for(feature)
-			var top_offset: int = _tree_top_offset_for(feature, feature_hash)
-			var flags: int = int(entry[3])
-			if not _feature_site_is_valid(field, ground_cache, world_x, ground.x, world_z, flags):
-				continue
-			if feature != DecorationCatalog.FEATURE_MANGROVE:
-				if not _tree_site_is_safe(field, ground_cache, world_x, ground.x, world_z, footprint, top_offset):
+			if not lod:
+				if not _feature_site_is_valid(field, ground_cache, world_x, ground.x, world_z, int(entry[3])):
 					continue
-			max_y = maxi(max_y, _stamp_feature(data, origin_x, origin_z, world_x, ground.x, world_z, feature, feature_hash))
-	return max_y
+				if feature != DecorationCatalog.FEATURE_MANGROVE:
+					if not _tree_site_is_safe(field, ground_cache, world_x, ground.x, world_z, _tree_footprint_for(feature), _tree_top_offset_for(feature, feature_hash)):
+						continue
+			trees.append([feature, world_x, ground.x, world_z, feature_hash])
+	# Sparse tree lottery for biomes without grove trees (plains oak, savanna
+	# acacia, cold spruce, ...). Grove biomes use choose_non_tree above, so the
+	# two sources never overlap.
+	var first_x: int = WorldGenHashScript.floor_div(origin_x - FEATURE_HALO, FEATURE_CELL_SIZE)
+	var last_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + FEATURE_HALO, FEATURE_CELL_SIZE)
+	var first_z: int = WorldGenHashScript.floor_div(origin_z - FEATURE_HALO, FEATURE_CELL_SIZE)
+	var last_z: int = WorldGenHashScript.floor_div(origin_z + VoxelDefsScript.CHUNK_SIZE - 1 + FEATURE_HALO, FEATURE_CELL_SIZE)
+	for cell_z in range(first_z, last_z + 1):
+		for cell_x in range(first_x, last_x + 1):
+			var hash_value: int = WorldGenHashScript.hash_2d(config.seed + 1103, cell_x, cell_z)
+			var world_x: int = cell_x * FEATURE_CELL_SIZE + 1 + hash_value % (FEATURE_CELL_SIZE - 2)
+			var world_z: int = cell_z * FEATURE_CELL_SIZE + 1 + (hash_value / 31) % (FEATURE_CELL_SIZE - 2)
+			if lod and not ChunkTerrainDataScript.is_valid_local(world_x - origin_x, world_z - origin_z):
+				continue
+			var ground := _cached_decoration_ground(field, world_x, world_z, ground_cache)
+			if ground.x < 0:
+				continue
+			var decoration_set: int = biomes.decoration_set(ground.y)
+			var selector: float = WorldGenHashScript.float_01_2d(config.seed + 1117, cell_x, cell_z)
+			var entry: Array = decorations.choose_non_tree(decoration_set, selector) if _uses_grove_trees(decoration_set) else decorations.choose(decoration_set, selector)
+			if entry.is_empty():
+				continue
+			var feature: int = int(entry[0])
+			var flags: int = int(entry[3])
+			if (flags & DecorationCatalog.FLAG_TREE) == 0:
+				continue
+			var probability: float = float(entry[2]) * config.decoration_density * config.tree_density
+			if WorldGenHashScript.float_01_2d(config.seed + 1129, cell_x, cell_z) >= minf(0.94, probability):
+				continue
+			if not lod:
+				if not _feature_site_is_valid(field, ground_cache, world_x, ground.x, world_z, flags):
+					continue
+				if feature != DecorationCatalog.FEATURE_MANGROVE:
+					if not _tree_site_is_safe(field, ground_cache, world_x, ground.x, world_z, _tree_footprint_for(feature), _tree_top_offset_for(feature, hash_value)):
+						continue
+			trees.append([feature, world_x, ground.x, world_z, hash_value])
+	return trees
 
 
 func _uses_grove_trees(decoration_set: int) -> bool:

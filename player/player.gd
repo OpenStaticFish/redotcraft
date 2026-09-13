@@ -17,10 +17,13 @@ const AIR_ACCEL := 16.0
 const REACH := 6.0
 const FLY_SPEED := 11.0
 const FLY_ACCEL := 45.0
+const FLY_BOOST_MULTIPLIER := 5.0
 const DOUBLE_TAP_TIME := 0.32
 const FALL_RESET_Y := -20.0
 const SPRINT_FOV_BOOST := 6.0
 const FOV_LERP_SPEED := 8.0
+const FOOTSTEP_STRIDE := 1.7
+const FOOTSTEP_MIN_SPEED := 0.6
 
 var world: VoxelWorld
 var can_place_check: Callable = Callable()
@@ -33,6 +36,7 @@ var flying := false
 var base_fov := 76.0
 var pitch_limit := deg_to_rad(85.0)
 var _last_jump_time := -10.0
+var _footstep_distance := 0.0
 var _highlight: MeshInstance3D
 var _held_block: MeshInstance3D
 
@@ -117,9 +121,12 @@ func _physics_process(delta: float) -> void:
 	var sprinting := false
 	if flying:
 		var vertical := Input.get_action_strength("fly_up") - Input.get_action_strength("fly_down")
-		velocity.x = move_toward(velocity.x, direction.x * FLY_SPEED, FLY_ACCEL * delta)
-		velocity.y = move_toward(velocity.y, vertical * FLY_SPEED, FLY_ACCEL * delta)
-		velocity.z = move_toward(velocity.z, direction.z * FLY_SPEED, FLY_ACCEL * delta)
+		var boost := FLY_BOOST_MULTIPLIER if Input.is_action_pressed("fly_boost") else 1.0
+		var fly_speed := FLY_SPEED * boost
+		var fly_accel := FLY_ACCEL * boost
+		velocity.x = move_toward(velocity.x, direction.x * fly_speed, fly_accel * delta)
+		velocity.y = move_toward(velocity.y, vertical * fly_speed, fly_accel * delta)
+		velocity.z = move_toward(velocity.z, direction.z * fly_speed, fly_accel * delta)
 	else:
 		sprinting = Input.is_action_pressed("sprint") and input_vector.length_squared() > 0.01
 		var speed := SPRINT_SPEED if sprinting else WALK_SPEED
@@ -140,6 +147,38 @@ func _physics_process(delta: float) -> void:
 		var target_fov := base_fov + SPRINT_FOV_BOOST if sprinting and direction.length_squared() > 0.0 else base_fov
 		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * FOV_LERP_SPEED, 0.0, 1.0))
 	_update_target()
+	_update_footsteps(delta)
+
+
+## Distance-based footsteps pick a material from the block under the player.
+## The half-stride reset after landing or takeoff stops steps from bunching.
+func _update_footsteps(delta: float) -> void:
+	if world == null or not is_on_floor():
+		_footstep_distance = FOOTSTEP_STRIDE * 0.5
+		return
+	var speed := Vector2(velocity.x, velocity.z).length()
+	if speed < FOOTSTEP_MIN_SPEED:
+		return
+	_footstep_distance += speed * delta
+	if _footstep_distance < FOOTSTEP_STRIDE:
+		return
+	_footstep_distance = 0.0
+	var block := _ground_block_below()
+	if block == BlockRegistry.BLOCK_AIR:
+		return
+	AudioManager.play_footstep(AudioManager.material_for_block(block),
+		Vector3(global_position.x, global_position.y - 0.2, global_position.z))
+
+
+func _ground_block_below() -> int:
+	var x := floori(global_position.x)
+	var z := floori(global_position.z)
+	var y := floori(global_position.y - 0.1)
+	for probe in range(2):
+		var block := world.get_block_world(Vector3i(x, y - probe, z))
+		if block != BlockRegistry.BLOCK_AIR:
+			return block
+	return BlockRegistry.BLOCK_AIR
 
 
 func _update_target() -> void:
@@ -207,6 +246,7 @@ func _break_target() -> void:
 	var removed := world.break_block(target_block)
 	if removed != BlockRegistry.BLOCK_AIR:
 		block_broken.emit(removed)
+		AudioManager.play_block_break(removed, Vector3(target_block) + Vector3(0.5, 0.5, 0.5))
 
 
 func _place_target() -> void:
@@ -220,6 +260,7 @@ func _place_target() -> void:
 		return
 	if world.place_block(place_position, selected_block):
 		block_placed.emit(selected_block)
+		AudioManager.play_block_place(selected_block, Vector3(place_position) + Vector3(0.5, 0.5, 0.5))
 
 
 func _handle_double_tap_jump() -> void:

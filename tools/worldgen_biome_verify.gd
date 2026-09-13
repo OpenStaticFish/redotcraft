@@ -18,7 +18,7 @@ func _init() -> void:
 	var generator := TerrainGenerator.new()
 	generator.configure({
 		"seed": SEED,
-		"biome_scale": 896.0,
+		"biome_scale": 1792.0,
 		"tree_density": 1.0,
 		"decoration_density": 1.0,
 	})
@@ -29,7 +29,7 @@ func _init() -> void:
 		for x in range(-SAMPLE_RADIUS, SAMPLE_RADIUS + 1, SAMPLE_STEP):
 			var sample: Dictionary = generator.sample_point(x, z)
 			samples[Vector2i(x, z)] = int(sample["dominant_biome_id"])
-	var centers := _find_interior_centers(samples)
+	var centers := _find_interior_centers(generator, samples)
 	for position: Vector2i in samples:
 		for offset in [Vector2i(SAMPLE_STEP, 0), Vector2i(0, SAMPLE_STEP)]:
 			if samples.has(position + offset):
@@ -41,6 +41,7 @@ func _init() -> void:
 	for biome in TARGETS:
 		_check(centers.has(biome), "could not find interior for %s" % BiomeCatalog.new().name_for(biome))
 	if centers.size() == TARGETS.size():
+		_verify_region_sizes(generator, samples, centers)
 		_verify_vegetation(generator, centers)
 	if _failed:
 		quit(1)
@@ -49,26 +50,76 @@ func _init() -> void:
 	quit(0)
 
 
-func _find_interior_centers(samples: Dictionary) -> Dictionary:
+func _find_interior_centers(generator: TerrainGenerator, samples: Dictionary) -> Dictionary:
 	var centers := {}
 	var best_scores := {}
 	for position: Vector2i in samples:
 		var biome: int = samples[position]
 		if biome not in TARGETS:
 			continue
-		var score := 0
-		for dz in range(-2, 3):
-			for dx in range(-2, 3):
-				if samples.get(position + Vector2i(dx * SAMPLE_STEP, dz * SAMPLE_STEP), -1) == biome:
-					score += 1
+		var score := _interior_score(generator, samples, position, biome)
 		if score > int(best_scores.get(biome, -1)):
 			best_scores[biome] = score
 			centers[biome] = position
+	# The coarse 32-block lattice can place the best sample on a bent biome
+	# boundary. Refine locally so density checks sample a genuine interior
+	# instead of an ill-placed edge that depends on the sampling grid.
+	for biome in TARGETS:
+		if not centers.has(biome):
+			continue
+		var best_position: Vector2i = centers[biome]
+		var best_score: int = int(best_scores[biome])
+		for dz in range(-4, 5):
+			for dx in range(-4, 5):
+				var candidate: Vector2i = centers[biome] + Vector2i(dx, dz) * 16
+				var candidate_score := _interior_score(generator, samples, candidate, biome)
+				if candidate_score > best_score:
+					best_score = candidate_score
+					best_position = candidate
+		centers[biome] = best_position
+		best_scores[biome] = best_score
 	_check(int(best_scores.get(BiomeCatalog.FOREST, 0)) >= 12, "forest no longer forms a broad interior")
 	_check(int(best_scores.get(BiomeCatalog.SWAMP, 0)) >= 12, "swamp no longer forms a broad interior")
 	_check(int(best_scores.get(BiomeCatalog.JUNGLE, 0)) >= 20, "jungle no longer forms a broad interior")
 	_check(int(best_scores.get(BiomeCatalog.TAIGA, 0)) >= 20, "taiga no longer forms a broad interior")
 	return centers
+
+
+func _interior_score(generator: TerrainGenerator, samples: Dictionary, center: Vector2i, biome: int) -> int:
+	var score := 0
+	for dz in range(-2, 3):
+		for dx in range(-2, 3):
+			var position := center + Vector2i(dx * SAMPLE_STEP, dz * SAMPLE_STEP)
+			if not samples.has(position):
+				samples[position] = int(generator.sample_point(position.x, position.y)["dominant_biome_id"])
+			if samples[position] == biome:
+				score += 1
+	return score
+
+
+## A biome can score full marks on a 5x5 lattice while still being a narrow
+## ribbon. Walk outward from the interior until the dominant biome changes so
+## the regression tracks territory size rather than just local coherence.
+func _verify_region_sizes(generator: TerrainGenerator, samples: Dictionary, centers: Dictionary) -> void:
+	var radius_total := 0
+	var direction_count := 4 * TARGETS.size()
+	for biome in TARGETS:
+		var center: Vector2i = centers[biome]
+		for direction in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var distance := 0
+			while distance < 1024:
+				distance += 16
+				var position: Vector2i = center + direction * distance
+				if not samples.has(position):
+					samples[position] = int(generator.sample_point(position.x, position.y)["dominant_biome_id"])
+				if samples[position] != biome:
+					break
+			radius_total += distance - 16
+	var average_radius := radius_total / direction_count
+	# Measured 72 blocks at the old 896 scale and 115 at 1792; 96 keeps the
+	# larger-region guarantee while allowing ordinary boundary variation.
+	_check(average_radius >= 96, "biome territories collapsed into patches (average radius %d blocks)" % average_radius)
+	print("WORLDGEN BIOME REGIONS: average_radius=%d blocks" % average_radius)
 
 
 func _verify_vegetation(generator: TerrainGenerator, centers: Dictionary) -> void:
@@ -95,6 +146,13 @@ func _verify_vegetation(generator: TerrainGenerator, centers: Dictionary) -> voi
 	_check(int(jungle.get(BlockRegistry.BLOCK_JUNGLE_LOG, 0)) >= 150, "jungle interior is missing dense jungle trees")
 	_check(int(jungle.get(BlockRegistry.BLOCK_VINE, 0)) >= 20, "jungle interior is missing vines")
 	_check(int(taiga.get(BlockRegistry.BLOCK_SPRUCE_LOG, 0)) >= 150, "taiga interior is missing dense spruce vegetation")
+	print("WORLDGEN BIOME DENSITY: forest_oak=%d swamp_mangrove=%d swamp_vine=%d jungle_log=%d jungle_vine=%d taiga_spruce=%d" % [
+		int(forest.get(BlockRegistry.BLOCK_LOG, 0)),
+		int(swamp.get(BlockRegistry.BLOCK_MANGROVE_LOG, 0)),
+		int(swamp.get(BlockRegistry.BLOCK_VINE, 0)),
+		int(jungle.get(BlockRegistry.BLOCK_JUNGLE_LOG, 0)),
+		int(jungle.get(BlockRegistry.BLOCK_VINE, 0)),
+		int(taiga.get(BlockRegistry.BLOCK_SPRUCE_LOG, 0))])
 
 
 func _check(condition: bool, message: String) -> void:

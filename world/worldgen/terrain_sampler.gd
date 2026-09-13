@@ -459,17 +459,19 @@ func _local_landform_detail(warped: Vector2, profile: int, next_profile: int, bl
 	var fine_strength := lerpf(
 		_profile_value(profile, TerrainProfileCatalog.FIELD_SURFACE_DETAIL),
 		_profile_value(next_profile, TerrainProfileCatalog.FIELD_SURFACE_DETAIL), blend)
+	# Broader shoulders carry most of the local relief so land rolls instead of
+	# stepping; knolls stay as a small secondary accent at a longer wavelength.
 	var shoulders := _noises[CHANNEL_DETAIL].get_noise_2d(
-		(warped.x + 173.0) / 64.0, (warped.y - 291.0) / 64.0)
+		(warped.x + 173.0) / 80.0, (warped.y - 291.0) / 80.0)
 	var knolls := _noises[CHANNEL_DETAIL].get_noise_2d(
-		(warped.x - 419.0) / 24.0, (warped.y + 137.0) / 24.0)
+		(warped.x - 419.0) / 32.0, (warped.y + 137.0) / 32.0)
 	var gully_noise := absf(_noises[CHANNEL_RIDGE].get_noise_2d(
-		(warped.x + 631.0) / 48.0, (warped.y + 853.0) / 48.0))
+		(warped.x + 631.0) / 52.0, (warped.y + 853.0) / 52.0))
 	var gullies := 1.0 - _smoothstep(0.03, 0.32, gully_noise)
 	var upland := _smoothstep(0.7, 3.0, float(profile) + blend)
 	var fine := _noises[CHANNEL_DETAIL].get_noise_2d(
-		(warped.x - 967.0) / 10.0, (warped.y - 541.0) / 10.0)
-	return strength * (shoulders * 0.65 + knolls * 0.35 - gullies * upland * 0.25) + fine * fine_strength
+		(warped.x - 967.0) / 13.0, (warped.y - 541.0) / 13.0)
+	return strength * (shoulders * 0.85 + knolls * 0.15 - gullies * upland * 0.18) + fine * fine_strength
 
 
 ## Climate modifies profile output with smooth weights rather than replacing it:
@@ -481,7 +483,7 @@ func _apply_climate_terrain_shape(height: float, profile_position: float, gradie
 	var lowland := 1.0 - _smoothstep(1.6, 2.8, profile_position)
 	var wetland_weight := _smoothstep(0.32, 0.42, temperature) \
 		* (1.0 - _smoothstep(0.68, 0.76, temperature)) \
-		* _smoothstep(0.64, 0.72, moisture)
+		* _smoothstep(0.64, 0.72, moisture) * lowland
 	var basin_height := minf(height, float(VoxelDefsScript.SEA_LEVEL) + 3.0)
 	height = lerpf(height, basin_height, wetland_weight * 0.86)
 	var dry_weight := _smoothstep(0.66, 0.82, temperature) * (1.0 - _smoothstep(0.25, 0.48, moisture))
@@ -539,15 +541,15 @@ func _final_from_raw_neighborhood(x: int, z: int, raw: float, west: float, east:
 		return raw
 	var gradient: float = sqrt((east - west) * (east - west) + (south - north) * (south - north)) * 0.5
 	var mean: float = (west + east + north + south) * 0.25
-	var talus_weight: float = _smoothstep(1.2, 7.0, gradient) * _config.erosion_strength
-	var talus: float = lerpf(raw, mean, talus_weight * 0.18)
+	var talus_weight: float = _smoothstep(0.6, 5.5, gradient) * _config.erosion_strength
+	var talus: float = lerpf(raw, mean, talus_weight * 0.33)
 	var continental: float = _continentalness_at(x, z)
 	var profile_position: float = _profile_position_at(x, z, continental)
 	# Terracing belongs on plateaus, not every hillside and mountain flank.
 	var terrace_weight: float = maxf(1.0 - absf(profile_position - 2.0) * 2.0, 0.0) * _smoothstep(0.2, 2.0, gradient) * _config.erosion_strength
 	var step: float = 2.0 + profile_position * 0.25
 	var terraced: float = floorf(talus / step + 0.5) * step
-	return clampf(lerpf(talus, terraced, terrace_weight * 0.38), MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
+	return clampf(lerpf(talus, terraced, terrace_weight * 0.22), MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
 
 
 func _slope_at(x: int, z: int) -> float:

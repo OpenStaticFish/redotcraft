@@ -18,6 +18,8 @@ var _failures := PackedStringArray()
 const FIELD_POINT_TOLERANCE: float = 0.001
 const MAX_ADJACENT_HEIGHT_JUMP: float = 8.0
 const MAX_FIELD_SLOPE: float = 8.0
+# Share of 1-block steps above 2 blocks; guards against a broken-up surface.
+const MAX_ROUGH_RATIO: float = 0.06
 
 
 func _initialize() -> void:
@@ -138,6 +140,7 @@ func _verify_terrain_continuity() -> void:
 	var max_slope := 0.0
 	var jump_total := 0.0
 	var jump_samples := 0
+	var rough_samples := 0
 	for seed in seeds:
 		var config: Dictionary = TEST_CONFIG.duplicate()
 		config["seed"] = seed
@@ -154,17 +157,23 @@ func _verify_terrain_continuity() -> void:
 						max_jump = maxf(max_jump, east_jump)
 						jump_total += east_jump
 						jump_samples += 1
+						if east_jump > 2.0:
+							rough_samples += 1
 					if local_z + 1 < VoxelDefs.CHUNK_SIZE:
 						var south_index := ChunkTerrainData.cell_index(local_x, local_z + 1)
 						var south_jump := absf(float(field.final_height[index]) - float(field.final_height[south_index]))
 						max_jump = maxf(max_jump, south_jump)
 						jump_total += south_jump
 						jump_samples += 1
+						if south_jump > 2.0:
+							rough_samples += 1
 	var mean_jump := jump_total / maxf(float(jump_samples), 1.0)
-	print("WORLDGEN TERRAIN CONTINUITY: seeds=%d chunks=%d adjacent_samples=%d max_jump=%.3f mean_jump=%.3f max_slope=%.3f" % [seeds.size(), chunks.size(), jump_samples, max_jump, mean_jump, max_slope])
+	var rough_ratio := float(rough_samples) / maxf(float(jump_samples), 1.0)
+	print("WORLDGEN TERRAIN CONTINUITY: seeds=%d chunks=%d adjacent_samples=%d max_jump=%.3f mean_jump=%.3f max_slope=%.3f rough_ratio=%.4f" % [seeds.size(), chunks.size(), jump_samples, max_jump, mean_jump, max_slope, rough_ratio])
 	_expect(max_jump <= MAX_ADJACENT_HEIGHT_JUMP, "terrain adjacent height jump %.3f exceeded generous limit %.3f" % [max_jump, MAX_ADJACENT_HEIGHT_JUMP])
 	_expect(max_slope <= MAX_FIELD_SLOPE, "terrain slope %.3f exceeded generous limit %.3f" % [max_slope, MAX_FIELD_SLOPE])
 	_expect(mean_jump <= 1.0, "normal terrain is too rough on average (adjacent delta %.3f)" % mean_jump)
+	_expect(rough_ratio <= MAX_ROUGH_RATIO, "terrain surface is too broken up (%.2f%% of adjacent steps exceed 2 blocks)" % (rough_ratio * 100.0))
 
 
 func _verify_local_detail() -> void:

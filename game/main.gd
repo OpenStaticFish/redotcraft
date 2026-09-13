@@ -442,6 +442,7 @@ func _on_weather_toggled() -> void:
 
 func _on_weather_changed(state: int) -> void:
 	set_status("Weather: %s" % ("Rain" if state == WeatherSystem.State.RAIN else "Sunny"))
+	AudioManager.set_rain(state == WeatherSystem.State.RAIN)
 
 
 func _on_setting_changed(key: String, value: Variant) -> void:

@@ -9,6 +9,11 @@ const SLIDERS := [
 	{"label": "Field of View", "key": "fov", "minimum": 60.0, "maximum": 100.0, "step": 1.0, "format": "%d"},
 	{"label": "Mouse Sensitivity", "key": "mouse_sensitivity", "minimum": 0.0005, "maximum": 0.005, "step": 0.0001, "format": "%.2fx", "display_scale": 1000.0},
 ]
+const VOLUME_SLIDERS := [
+	{"label": "Master Volume", "key": "master_volume", "minimum": 0.0, "maximum": 1.0, "step": 0.05, "format": "%d%%", "display_scale": 100.0},
+	{"label": "Sound Effects", "key": "sfx_volume", "minimum": 0.0, "maximum": 1.0, "step": 0.05, "format": "%d%%", "display_scale": 100.0},
+	{"label": "Ambience", "key": "ambient_volume", "minimum": 0.0, "maximum": 1.0, "step": 0.05, "format": "%d%%", "display_scale": 100.0},
+]
 const RENDER_DISTANCE_MAX := 32.0
 const RENDER_DISTANCE_EXTREME_MAX := 100.0
 const EXTREME_WARNING := "Warning: extreme render distance can take minutes to load and use several GB of memory."
@@ -41,6 +46,9 @@ func _ready() -> void:
 	_add_check("Fullscreen", "fullscreen", true)
 	_add_section("GRAPHICS")
 	_add_option("Graphics Preset", "graphics_preset", GameConfig.PRESET_NAMES)
+	_add_section("SOUND")
+	for entry in VOLUME_SLIDERS:
+		_add_slider(entry)
 	_done_button.pressed.connect(close_panel)
 	_advanced_button.pressed.connect(func() -> void: _graphics_panel.open_panel())
 	_graphics_panel.graphics_changed.connect(func() -> void: setting_changed.emit("graphics", null))
@@ -171,6 +179,8 @@ func _add_slider(entry: Dictionary) -> void:
 		entry.get("display_scale", 1.0))
 	slider.value_changed.connect(func(value: float) -> void:
 		GameConfig.set_setting(key, value)
+		if key.ends_with("_volume"):
+			AudioManager.apply_volumes()
 		setting_changed.emit(key, value)
 	)
 

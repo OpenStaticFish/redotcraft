@@ -9,6 +9,9 @@ const DEFAULT_SETTINGS := {
 	"mouse_sensitivity": 0.0022,
 	"fullscreen": false,
 	"graphics_preset": 1,
+	"master_volume": 0.9,
+	"sfx_volume": 1.0,
+	"ambient_volume": 0.8,
 }
 
 const PRESET_LOW := 0
@@ -89,9 +92,9 @@ const DEFAULT_WORLD := {
 	"world_type": 0,
 	"terrain_scale": 1.0,
 	"tree_density": 1.0,
-	"worldgen_version": 2,
+	"worldgen_version": 3,
 	"macro_scale": 384.0,
-	"biome_scale": 896.0,
+	"biome_scale": 1792.0,
 	"river_density": 1.0,
 	"erosion_strength": 0.55,
 	"regional_erosion": 0.5,
@@ -172,6 +175,10 @@ func is_fullscreen() -> bool:
 
 func get_graphics_preset() -> int:
 	return clampi(int(settings.get("graphics_preset", DEFAULT_SETTINGS["graphics_preset"])), 0, PRESET_NAMES.size() - 1)
+
+
+func get_audio_volume(key: String) -> float:
+	return clampf(float(settings.get(key, 1.0)), 0.0, 1.0)
 
 
 func get_graphics() -> Dictionary:
