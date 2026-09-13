@@ -12,6 +12,13 @@ const CROSS_UVS := [Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vec
 var _blocks: BlockRegistry
 var _face_ao_offsets: Array = []
 var _opacity: PackedByteArray = PackedByteArray()
+var _cross: PackedByteArray = PackedByteArray()
+var _leaves: PackedByteArray = PackedByteArray()
+var _tinted: PackedByteArray = PackedByteArray()
+var _water_level: PackedByteArray = PackedByteArray()
+var _layer_top: PackedInt32Array = PackedInt32Array()
+var _layer_bottom: PackedInt32Array = PackedInt32Array()
+var _layer_side: PackedInt32Array = PackedInt32Array()
 var _emission_r: PackedByteArray = PackedByteArray()
 var _emission_g: PackedByteArray = PackedByteArray()
 var _emission_b: PackedByteArray = PackedByteArray()
@@ -19,7 +26,7 @@ var _emission_b: PackedByteArray = PackedByteArray()
 
 class MeshResult:
 	var data := PackedByteArray()
-	var heights := PackedByteArray()
+	var heights := PackedInt32Array()
 	var max_y := 0
 	var mask := 0
 	var verts := PackedVector3Array()
@@ -44,7 +51,7 @@ class LightVolume:
 	var d := 0
 	var h := 0
 	var blocks := PackedByteArray()
-	var heights := PackedByteArray()
+	var heights := PackedInt32Array()
 	var sky := PackedByteArray()
 	var block_r := PackedByteArray()
 	var block_g := PackedByteArray()
@@ -54,9 +61,9 @@ class LightVolume:
 class NeighborSample:
 	var data := PackedByteArray()
 	var max_y := 0
-	var heights := PackedByteArray()
+	var heights := PackedInt32Array()
 
-	func _init(p_data: PackedByteArray, p_max_y: int, p_heights: PackedByteArray) -> void:
+	func _init(p_data: PackedByteArray, p_max_y: int, p_heights: PackedInt32Array) -> void:
 		data = p_data
 		max_y = p_max_y
 		heights = p_heights
@@ -70,13 +77,13 @@ class NeighborSet:
 		return samples.get(direction)
 
 
-const LOD_NONE := 255
+const LOD_NONE := -1
 const LOD_SIDE_FACES := [4, 5, 2, 3]
 
 
 class LodEdge:
-	var solid := PackedByteArray()
-	var water := PackedByteArray()
+	var solid := PackedInt32Array()
+	var water := PackedInt32Array()
 
 
 class LodNeighbors:
@@ -94,12 +101,12 @@ func _init(blocks: BlockRegistry) -> void:
 
 
 ## Thread-safe: only reads immutable block tables once constructed.
-func build(data: PackedByteArray, data_max_y: int, heights: PackedByteArray, neighbors: NeighborSet) -> MeshResult:
+func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, foliage_tints: PackedColorArray, water_tints: PackedColorArray, neighbors: NeighborSet) -> MeshResult:
 	var result := MeshResult.new()
 	result.data = data
 	result.heights = heights
 	result.mask = neighbors.mask
-	var max_y := clampi(data_max_y + 1, 1, VoxelDefs.WORLD_HEIGHT - 2)
+	var max_y := clampi(data_max_y + 1, 1, VoxelDefs.WORLD_HEIGHT - 1)
 	result.max_y = max_y
 	var light_volume := _assemble_light_volume(data, data_max_y, heights, neighbors)
 	_compute_sky_light(light_volume)
@@ -138,14 +145,15 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedByteArray, nei
 	for y in range(0, max_y + 1):
 		for local_z in VoxelDefs.CHUNK_SIZE:
 			for local_x in VoxelDefs.CHUNK_SIZE:
+				var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
 				var pad_index := (local_x + 1) + (local_z + 1) * VoxelDefs.PAD_STRIDE_Z + (y + 1) * VoxelDefs.PAD_STRIDE_Y
 				var id := padded[pad_index]
 				if id == BlockRegistry.BLOCK_AIR:
 					continue
-				if _blocks.is_water_id(id):
-					_append_water_block(padded, pad_index, local_x, y, local_z, result)
+				if _water_level[id] > 0:
+					_append_water_block(padded, pad_index, local_x, y, local_z, _column_tint(column, water_tints), result)
 					continue
-				if _blocks.has_flag(id, BlockRegistry.FLAG_CROSS):
+				if _cross[id] == 1:
 					var volume: LightVolume = result.light_volume
 					var light_index := (y * volume.d + local_z + LIGHT_PAD) * volume.w + local_x + LIGHT_PAD
 					var sky_light := float(volume.sky[light_index]) / float(MAX_LEVEL)
@@ -155,18 +163,19 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedByteArray, nei
 							float(volume.block_r[light_index]) / float(MAX_LEVEL),
 							float(volume.block_g[light_index]) / float(MAX_LEVEL),
 							float(volume.block_b[light_index]) / float(MAX_LEVEL))
-					_append_cross_block(Vector3(local_x, y, local_z), id, block_light, sky_light, result)
+					_append_cross_block(Vector3(local_x, y, local_z), id, block_light, sky_light, _tint_for(id, column, foliage_tints), result)
 					continue
-				var is_opaque := _blocks.is_opaque(id)
+				var is_opaque := _opacity[id] >= MAX_LEVEL
+				var tint := _tint_for(id, column, foliage_tints)
 				for face in 6:
 					var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
 					var neighbor_index := pad_index + normal.x + normal.z * VoxelDefs.PAD_STRIDE_Z + normal.y * VoxelDefs.PAD_STRIDE_Y
 					var neighbor_id := padded[neighbor_index]
-					if _blocks.is_opaque(neighbor_id):
+					if _opacity[neighbor_id] >= MAX_LEVEL:
 						continue
-					if not is_opaque and neighbor_id == id and not _blocks.has_flag(id, BlockRegistry.FLAG_LEAVES):
+					if not is_opaque and neighbor_id == id and _leaves[id] == 0:
 						continue
-					_append_face(face, pad_index, local_x, y, local_z, id, padded, result)
+					_append_face(face, pad_index, local_x, y, local_z, id, padded, tint, result)
 	result.light_volume = null
 	return result
 
@@ -175,15 +184,15 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedByteArray, nei
 ## quads on exposed edges. No light volume, AO, collision, or cross blocks;
 ## the surface height matches the full mesh so chunk seams stay closed.
 ## Thread-safe: only reads immutable block tables and the passed-in data.
-func build_lod(data: PackedByteArray, data_max_y: int, heights: PackedByteArray, neighbors: LodNeighbors) -> MeshResult:
+func build_lod(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, foliage_tints: PackedColorArray, water_tints: PackedColorArray, neighbors: LodNeighbors) -> MeshResult:
 	var result := MeshResult.new()
 	result.data = data
 	result.heights = heights
 	result.mask = neighbors.mask
 	result.max_y = data_max_y
-	var solid_y := PackedByteArray()
+	var solid_y := PackedInt32Array()
 	var solid_id := PackedByteArray()
-	var water_y := PackedByteArray()
+	var water_y := PackedInt32Array()
 	var water_id := PackedByteArray()
 	solid_y.resize(VoxelDefs.CHUNK_AREA)
 	solid_id.resize(VoxelDefs.CHUNK_AREA)
@@ -198,12 +207,12 @@ func build_lod(data: PackedByteArray, data_max_y: int, heights: PackedByteArray,
 				var id := data[column + y * VoxelDefs.DATA_STRIDE_Y]
 				if id == BlockRegistry.BLOCK_AIR:
 					continue
-				if _blocks.is_water_id(id):
+				if _water_level[id] > 0:
 					if water_y[column] == LOD_NONE:
 						water_y[column] = y
 						water_id[column] = id
 					continue
-				if _blocks.has_flag(id, BlockRegistry.FLAG_CROSS):
+				if _cross[id] == 1:
 					continue
 				solid_y[column] = y
 				solid_id[column] = id
@@ -211,17 +220,17 @@ func build_lod(data: PackedByteArray, data_max_y: int, heights: PackedByteArray,
 	for z in VoxelDefs.CHUNK_SIZE:
 		for x in VoxelDefs.CHUNK_SIZE:
 			var column := x + z * VoxelDefs.DATA_STRIDE_Z
-			var top_solid := -1 if solid_y[column] == LOD_NONE else int(solid_y[column])
-			var top_water := -1 if water_y[column] == LOD_NONE else int(water_y[column])
+			var top_solid := solid_y[column]
+			var top_water := water_y[column]
 			if top_solid >= 0:
-				_append_lod_block_face(0, x, top_solid, z, solid_id[column], result)
+				_append_lod_block_face(0, x, top_solid, z, solid_id[column], _tint_for(solid_id[column], column, foliage_tints), result)
 			if top_water >= 0:
 				var above := BlockRegistry.BLOCK_AIR
 				if top_water + 1 <= data_max_y:
 					above = data[column + (top_water + 1) * VoxelDefs.DATA_STRIDE_Y]
-				if not _blocks.is_water_id(above) and not _blocks.is_opaque(above):
-					var water_level := _blocks.water_level(water_id[column])
-					_append_lod_water_face(0, x, top_water, z, _water_top(water_level), water_level < 8, result)
+				if _water_level[above] == 0 and _opacity[above] < MAX_LEVEL:
+					var water_level := _water_level[water_id[column]]
+					_append_lod_water_face(0, x, top_water, z, _water_top(water_level), water_level < 8, _column_tint(column, water_tints), result)
 			for index in VoxelDefs.DIRS_4.size():
 				var direction: Vector2i = VoxelDefs.DIRS_4[index]
 				var neighbor_solid := -1
@@ -230,36 +239,36 @@ func build_lod(data: PackedByteArray, data_max_y: int, heights: PackedByteArray,
 				var neighbor_z := z + direction.y
 				if neighbor_x >= 0 and neighbor_x < VoxelDefs.CHUNK_SIZE and neighbor_z >= 0 and neighbor_z < VoxelDefs.CHUNK_SIZE:
 					var neighbor_column := neighbor_x + neighbor_z * VoxelDefs.DATA_STRIDE_Z
-					neighbor_solid = -1 if solid_y[neighbor_column] == LOD_NONE else int(solid_y[neighbor_column])
-					neighbor_water = -1 if water_y[neighbor_column] == LOD_NONE else int(water_y[neighbor_column])
+					neighbor_solid = solid_y[neighbor_column]
+					neighbor_water = water_y[neighbor_column]
 				else:
 					var edge := neighbors.get_edge(direction)
 					if edge != null:
 						var edge_index := z if direction.x != 0 else x
-						neighbor_solid = -1 if edge.solid[edge_index] == LOD_NONE else int(edge.solid[edge_index])
-						neighbor_water = -1 if edge.water[edge_index] == LOD_NONE else int(edge.water[edge_index])
+						neighbor_solid = edge.solid[edge_index]
+						neighbor_water = edge.water[edge_index]
 				var face: int = LOD_SIDE_FACES[index]
 				var exposed_from := maxi(neighbor_solid, neighbor_water) + 1
 				for y in range(exposed_from, maxi(top_solid, top_water) + 1):
 					var id := data[column + y * VoxelDefs.DATA_STRIDE_Y]
-					if id == BlockRegistry.BLOCK_AIR or _blocks.has_flag(id, BlockRegistry.FLAG_CROSS):
+					if id == BlockRegistry.BLOCK_AIR or _cross[id] == 1:
 						continue
-					if _blocks.is_water_id(id):
+					if _water_level[id] > 0:
 						if y > neighbor_water:
-							var level := _blocks.water_level(id)
+							var level := _water_level[id]
 							var above_water := false
 							if y + 1 <= data_max_y:
-								above_water = _blocks.is_water_id(data[column + (y + 1) * VoxelDefs.DATA_STRIDE_Y])
+								above_water = _water_level[data[column + (y + 1) * VoxelDefs.DATA_STRIDE_Y]] > 0
 							var top := 1.0 if above_water else _water_top(level)
-							_append_lod_water_face(face, x, y, z, top, level < 8, result)
+							_append_lod_water_face(face, x, y, z, top, level < 8, _column_tint(column, water_tints), result)
 					elif y <= top_solid:
-						_append_lod_block_face(face, x, y, z, id, result)
+						_append_lod_block_face(face, x, y, z, id, _tint_for(id, column, foliage_tints), result)
 	return result
 
 
-func _append_lod_block_face(face: int, x: int, y: int, z: int, block_id: int, result: MeshResult) -> void:
+func _append_lod_block_face(face: int, x: int, y: int, z: int, block_id: int, tint: Color, result: MeshResult) -> void:
 	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
-	var layer := _blocks.layer_for(block_id, face)
+	var layer := _layer_for(block_id, face)
 	var base := result.verts.size()
 	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
 	var face_uvs: Array = VoxelDefs.FACE_UVS[face]
@@ -269,13 +278,13 @@ func _append_lod_block_face(face: int, x: int, y: int, z: int, block_id: int, re
 		result.verts.append(Vector3(x + offset.x, y + offset.y, z + offset.z))
 		result.normals.append(Vector3(normal))
 		result.uvs.append(face_uvs[corner])
-		result.colors.append(Color(shade, shade, shade, 1.0))
+		result.colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, 1.0))
 		result.layers.push_back(float(layer))
 		result.light.append_array(PackedFloat32Array([0.0, 0.0, 0.0, 1.0]))
 	result.indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
 
 
-func _append_lod_water_face(face: int, x: int, y: int, z: int, top: float, flowing: bool, result: MeshResult) -> void:
+func _append_lod_water_face(face: int, x: int, y: int, z: int, top: float, flowing: bool, tint: Color, result: MeshResult) -> void:
 	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
 	var base := result.water_verts.size()
 	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
@@ -286,7 +295,7 @@ func _append_lod_water_face(face: int, x: int, y: int, z: int, top: float, flowi
 		result.water_verts.append(Vector3(x + offset.x, y + (top if offset.y == 1 else 0.0), z + offset.z))
 		result.water_normals.append(Vector3(normal))
 		result.water_uvs.append(Vector2(x + offset.x, z + offset.z))
-		result.water_colors.append(Color(shade, shade, shade, flow_alpha))
+		result.water_colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, flow_alpha))
 		result.water_light.append_array(PackedFloat32Array([0.0, 0.0, 0.0, 1.0]))
 	result.water_indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
 
@@ -294,9 +303,9 @@ func _append_lod_water_face(face: int, x: int, y: int, z: int, top: float, flowi
 func make_block_mesh(block_id: int) -> ArrayMesh:
 	if not _blocks.is_valid_id(block_id):
 		block_id = BlockRegistry.BLOCK_GRASS
-	if _blocks.has_flag(block_id, BlockRegistry.FLAG_CROSS):
+	if _cross[block_id] == 1:
 		var cross := MeshResult.new()
-		_append_cross_block(Vector3(-0.5, -0.5, -0.5), block_id, Color.BLACK, 1.0, cross)
+		_append_cross_block(Vector3(-0.5, -0.5, -0.5), block_id, Color.BLACK, 1.0, Color.WHITE, cross)
 		return arrays_to_mesh(cross.verts, cross.normals, cross.uvs, cross.colors, cross.indices, _blocks.material, cross.light, cross.layers)
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
@@ -307,7 +316,7 @@ func make_block_mesh(block_id: int) -> ArrayMesh:
 	var indices := PackedInt32Array()
 	for face in 6:
 		var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
-		var layer := _blocks.layer_for(block_id, face)
+		var layer := _layer_for(block_id, face)
 		var base := verts.size()
 		var face_verts: Array = VoxelDefs.FACE_VERTS[face]
 		var face_uvs: Array = VoxelDefs.FACE_UVS[face]
@@ -349,11 +358,26 @@ static func arrays_to_mesh(verts: PackedVector3Array, normals: PackedVector3Arra
 
 func _build_light_tables() -> void:
 	_opacity.resize(256)
+	_cross.resize(256)
+	_leaves.resize(256)
+	_tinted.resize(256)
+	_water_level.resize(256)
+	_layer_top.resize(256)
+	_layer_bottom.resize(256)
+	_layer_side.resize(256)
 	_emission_r.resize(256)
 	_emission_g.resize(256)
 	_emission_b.resize(256)
 	for id in 256:
 		_opacity[id] = _blocks.light_attenuation(id)
+		_cross[id] = 1 if _blocks.has_flag(id, BlockRegistry.FLAG_CROSS) else 0
+		_leaves[id] = 1 if _blocks.has_flag(id, BlockRegistry.FLAG_LEAVES) else 0
+		_tinted[id] = 1 if _blocks.has_flag(id, BlockRegistry.FLAG_TINTED) else 0
+		_water_level[id] = _blocks.water_level(id)
+		if id == BlockRegistry.BLOCK_AIR or _blocks.is_valid_id(id):
+			_layer_top[id] = _blocks.layer_for(id, 0)
+			_layer_bottom[id] = _blocks.layer_for(id, 1)
+			_layer_side[id] = _blocks.layer_for(id, 2)
 		var color := _blocks.emission_color(id)
 		if color == Color.BLACK:
 			continue
@@ -364,13 +388,13 @@ func _build_light_tables() -> void:
 
 ## Assembles a 3x3 chunk footprint of block IDs so light from emitters and sky
 ## openings up to 15 blocks outside the chunk is accounted for.
-func _assemble_light_volume(data: PackedByteArray, data_max_y: int, data_heights: PackedByteArray, neighbors: NeighborSet) -> LightVolume:
+func _assemble_light_volume(data: PackedByteArray, data_max_y: int, data_heights: PackedInt32Array, neighbors: NeighborSet) -> LightVolume:
 	var volume := LightVolume.new()
 	volume.w = VoxelDefs.CHUNK_SIZE * 3
 	volume.d = VoxelDefs.CHUNK_SIZE * 3
 	var tiles: Array[PackedByteArray] = []
 	tiles.resize(9)
-	var tile_heights: Array[PackedByteArray] = []
+	var tile_heights: Array[PackedInt32Array] = []
 	tile_heights.resize(9)
 	var tile_max := PackedInt32Array()
 	tile_max.resize(9)
@@ -718,10 +742,10 @@ func _build_ao_offsets() -> void:
 		_face_ao_offsets.append(corners)
 
 
-func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int, block_id: int, padded: PackedByteArray, result: MeshResult) -> void:
+func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int, block_id: int, padded: PackedByteArray, tint: Color, result: MeshResult) -> void:
 	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
 	var shade: float = VoxelDefs.FACE_SHADE[face]
-	var layer := _blocks.layer_for(block_id, face)
+	var layer := _layer_for(block_id, face)
 	var base := result.verts.size()
 	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
 	var face_uvs: Array = VoxelDefs.FACE_UVS[face]
@@ -757,7 +781,7 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 		for sample in samples:
 			var sample_offset: Vector3i = sample
 			var sample_index := pad_index + sample_offset.x + sample_offset.z * VoxelDefs.PAD_STRIDE_Z + sample_offset.y * VoxelDefs.PAD_STRIDE_Y
-			if _blocks.is_opaque(padded[sample_index]):
+			if _opacity[padded[sample_index]] >= MAX_LEVEL:
 				occlusion += 1
 				continue
 			var sample_x := local_x + LIGHT_PAD + sample_offset.x
@@ -773,7 +797,7 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 				g_sum += int(volume.block_g[light_index])
 				b_sum += int(volume.block_b[light_index])
 		var light := shade * float(VoxelDefs.AO_LEVELS[3 - occlusion])
-		result.colors.append(Color(light, light, light, 1.0))
+		result.colors.append(Color(light * tint.r, light * tint.g, light * tint.b, 1.0))
 		var inverse := 1.0 / (float(maxi(light_count, 1)) * float(MAX_LEVEL))
 		result.light.push_back(float(r_sum) * inverse)
 		result.light.push_back(float(g_sum) * inverse)
@@ -787,8 +811,8 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 	result.collision.append_array(PackedVector3Array([p0, p2, p1, p0, p3, p2]))
 
 
-func _append_cross_block(origin: Vector3, block_id: int, block_light: Color, sky_light: float, result: MeshResult) -> void:
-	var layer := _blocks.layer_for(block_id, 2)
+func _append_cross_block(origin: Vector3, block_id: int, block_light: Color, sky_light: float, tint: Color, result: MeshResult) -> void:
+	var layer := _layer_side[block_id]
 	var shade := 0.96
 	for plane in CROSS_PLANES:
 		var base := result.verts.size()
@@ -797,7 +821,7 @@ func _append_cross_block(origin: Vector3, block_id: int, block_light: Color, sky
 			result.verts.append(origin + offset)
 			result.normals.append(Vector3.UP)
 			result.uvs.append(CROSS_UVS[corner])
-			result.colors.append(Color(shade, shade, shade, 1.0))
+			result.colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, 1.0))
 			result.layers.push_back(float(layer))
 			result.light.push_back(block_light.r)
 			result.light.push_back(block_light.g)
@@ -805,7 +829,24 @@ func _append_cross_block(origin: Vector3, block_id: int, block_light: Color, sky
 			result.light.push_back(sky_light)
 		result.indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
 		result.indices.append_array(PackedInt32Array([base, base + 1, base + 2, base, base + 2, base + 3]))
-	_append_cross_collision(origin, result)
+
+
+func _tint_for(block_id: int, column: int, foliage_tints: PackedColorArray) -> Color:
+	if _tinted[block_id] == 0 or column < 0 or column >= foliage_tints.size():
+		return Color.WHITE
+	return foliage_tints[column]
+
+
+func _layer_for(block_id: int, face: int) -> int:
+	if face == 0:
+		return _layer_top[block_id]
+	if face == 1:
+		return _layer_bottom[block_id]
+	return _layer_side[block_id]
+
+
+func _column_tint(column: int, tints: PackedColorArray) -> Color:
+	return tints[column] if column >= 0 and column < tints.size() else Color.WHITE
 
 
 func _append_cross_collision(origin: Vector3, result: MeshResult) -> void:
@@ -831,26 +872,26 @@ func _water_top(level: int) -> float:
 	return 0.9 * (0.35 + 0.65 * float(level) / 8.0)
 
 
-func _append_water_block(padded: PackedByteArray, pad_index: int, local_x: int, y: int, local_z: int, result: MeshResult) -> void:
-	var level := _blocks.water_level(padded[pad_index])
+func _append_water_block(padded: PackedByteArray, pad_index: int, local_x: int, y: int, local_z: int, tint: Color, result: MeshResult) -> void:
+	var level := _water_level[padded[pad_index]]
 	var above := padded[pad_index + VoxelDefs.PAD_STRIDE_Y]
-	var above_water := _blocks.is_water_id(above)
+	var above_water := _water_level[above] > 0
 	var top := 1.0 if above_water else _water_top(level)
 	var flowing := level < 8
-	if not above_water and not _blocks.is_opaque(above):
-		_append_water_face(0, local_x, y, local_z, top, flowing, result)
+	if not above_water and _opacity[above] < MAX_LEVEL:
+		_append_water_face(0, local_x, y, local_z, top, flowing, tint, result)
 	for face in range(2, 6):
 		var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
 		var neighbor_index := pad_index + normal.x + normal.z * VoxelDefs.PAD_STRIDE_Z + normal.y * VoxelDefs.PAD_STRIDE_Y
 		var neighbor := padded[neighbor_index]
-		if _blocks.is_opaque(neighbor):
+		if _opacity[neighbor] >= MAX_LEVEL:
 			continue
-		if _blocks.is_water_id(neighbor) and _blocks.water_level(neighbor) >= level:
+		if _water_level[neighbor] >= level and _water_level[neighbor] > 0:
 			continue
-		_append_water_face(face, local_x, y, local_z, top, flowing, result)
+		_append_water_face(face, local_x, y, local_z, top, flowing, tint, result)
 
 
-func _append_water_face(face: int, local_x: int, y: int, local_z: int, top: float, flowing: bool, result: MeshResult) -> void:
+func _append_water_face(face: int, local_x: int, y: int, local_z: int, top: float, flowing: bool, tint: Color, result: MeshResult) -> void:
 	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
 	var base := result.water_verts.size()
 	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
@@ -861,7 +902,7 @@ func _append_water_face(face: int, local_x: int, y: int, local_z: int, top: floa
 		result.water_verts.append(Vector3(local_x + offset.x, y + (top if offset.y == 1 else 0.0), local_z + offset.z))
 		result.water_normals.append(Vector3(normal))
 		result.water_uvs.append(Vector2(local_x + offset.x, local_z + offset.z))
-		result.water_colors.append(Color(shade, shade, shade, flow_alpha))
+		result.water_colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, flow_alpha))
 		var light := _sample_water_light(result.light_volume, local_x, y, local_z, face, corner)
 		result.water_light.push_back(light.r)
 		result.water_light.push_back(light.g)
@@ -896,7 +937,7 @@ func _sample_water_light(volume: LightVolume, local_x: int, y: int, local_z: int
 		if sample_x < 0 or sample_x >= volume.w or sample_z < 0 or sample_z >= volume.d or sample_y < 0 or sample_y >= volume.h:
 			continue
 		var index := (sample_y * volume.d + sample_z) * volume.w + sample_x
-		if _blocks.is_opaque(volume.blocks[index]):
+		if _opacity[volume.blocks[index]] >= MAX_LEVEL:
 			continue
 		sky_sum += int(volume.sky[index])
 		count += 1

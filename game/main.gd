@@ -3,6 +3,7 @@ extends Node3D
 
 const PauseMenuScene := preload("res://ui/pause_menu.tscn")
 const ShadowCaptureScript := preload("res://game/shadow_capture.gd")
+const WorldgenOverlayScene := preload("res://ui/worldgen_overlay.tscn")
 
 const HOTBAR: Array[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 27]
 const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32, 27: 32}
@@ -33,6 +34,7 @@ var status_time := 6.0
 var inventory: Dictionary = INITIAL_INVENTORY.duplicate()
 var _pause_menu: PauseMenu
 var _stats_time := 0.0
+var _worldgen_overlay: WorldgenOverlay
 
 
 func _ready() -> void:
@@ -52,6 +54,10 @@ func _ready() -> void:
 	player.global_position = spawn
 	player.spawn_position = spawn
 	player.setup_world(world)
+	_worldgen_overlay = WorldgenOverlayScene.instantiate() as WorldgenOverlay
+	add_child(_worldgen_overlay)
+	_worldgen_overlay.initialize(world, player)
+	_worldgen_overlay.status_requested.connect(set_status)
 	_weather.setup(player.camera, _day_night)
 	_weather.weather_changed.connect(_on_weather_changed)
 	_inventory_overlay.weather_toggled.connect(_on_weather_toggled)
@@ -94,11 +100,27 @@ func _get_shadow_capture_state() -> Dictionary:
 		"ssr": _environment.ssr_enabled,
 		"volumetric_fog": _environment.volumetric_fog_enabled,
 		"graphics_config": GameConfig.get_graphics().duplicate(true),
+		"worldgen_stats": world.get_worldgen_stats(),
+		"worldgen_overlay": {
+			"overlay_visible": _worldgen_overlay != null and _worldgen_overlay.visible,
+			"map_mode": _worldgen_overlay.get_mode() if _worldgen_overlay != null else "",
+		},
 	}
 
 
 func _exit_tree() -> void:
 	get_tree().paused = false
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("debug_worldgen"):
+		get_viewport().set_input_as_handled()
+		if _worldgen_overlay != null:
+			_worldgen_overlay.toggle()
+	elif event.is_action_pressed("debug_worldgen_mode"):
+		get_viewport().set_input_as_handled()
+		if _worldgen_overlay != null:
+			_worldgen_overlay.cycle_mode()
 
 
 func _process(delta: float) -> void:

@@ -36,6 +36,23 @@ const BLOCK_WATER_FLOW_4 := 31
 const BLOCK_WATER_FLOW_3 := 32
 const BLOCK_WATER_FLOW_2 := 33
 const BLOCK_WATER_FLOW_1 := 34
+const BLOCK_TALL_GRASS := 35
+const BLOCK_YELLOW_FLOWER := 36
+const BLOCK_RED_FLOWER := 37
+const BLOCK_DEAD_BUSH := 38
+const BLOCK_BAMBOO := 39
+const BLOCK_VINE := 40
+const BLOCK_ACACIA_LOG := 41
+const BLOCK_ACACIA_LEAVES := 42
+const BLOCK_JUNGLE_LOG := 43
+const BLOCK_JUNGLE_LEAVES := 44
+const BLOCK_MANGROVE_LOG := 45
+const BLOCK_MANGROVE_LEAVES := 46
+const BLOCK_MANGROVE_ROOTS := 47
+const BLOCK_LAVA := 48
+const BLOCK_BROWN_MUSHROOM := 49
+const BLOCK_RED_MUSHROOM := 50
+const BLOCK_MELON := 51
 
 const FLAG_OPAQUE := 1
 const FLAG_CUTOUT := 2
@@ -43,15 +60,16 @@ const FLAG_UNBREAKABLE := 4
 const FLAG_LEAVES := 8
 const FLAG_EMISSIVE := 16
 const FLAG_CROSS := 32
+const FLAG_TINTED := 64
 
 const BLOCK_DEFS := [
 	[0, "AIR", "", "", "", 0],
-	[1, "GRASS", "grass_top.png", "grass_side.png", "dirt.png", FLAG_OPAQUE],
+	[1, "GRASS", "grass_top.png", "grass_side.png", "dirt.png", FLAG_OPAQUE | FLAG_TINTED],
 	[2, "DIRT", "dirt.png", "dirt.png", "dirt.png", FLAG_OPAQUE],
 	[3, "STONE", "stone.png", "stone.png", "stone.png", FLAG_OPAQUE],
 	[4, "COBBLESTONE", "cobblestone.png", "cobblestone.png", "cobblestone.png", FLAG_OPAQUE],
 	[5, "OAK LOG", "wood_top.png", "wood_side.png", "wood_top.png", FLAG_OPAQUE],
-	[6, "OAK LEAVES", "leaves.png", "leaves.png", "leaves.png", FLAG_CUTOUT | FLAG_LEAVES],
+	[6, "OAK LEAVES", "leaves.png", "leaves.png", "leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
 	[7, "SAND", "sand.png", "sand.png", "sand.png", FLAG_OPAQUE],
 	[8, "GLASS", "glass.png", "glass.png", "glass.png", FLAG_CUTOUT],
 	[9, "GLOWSTONE", "glowstone.png", "glowstone.png", "glowstone.png", FLAG_OPAQUE | FLAG_EMISSIVE],
@@ -67,9 +85,9 @@ const BLOCK_DEFS := [
 	[19, "RED SAND", "red_sand.png", "red_sand.png", "red_sand.png", FLAG_OPAQUE],
 	[20, "CACTUS", "cactus_top.png", "cactus_side.png", "cactus_top.png", FLAG_OPAQUE],
 	[21, "SPRUCE LOG", "spruce_log_top.png", "spruce_log_side.png", "spruce_log_top.png", FLAG_OPAQUE],
-	[22, "SPRUCE LEAVES", "spruce_leaves.png", "spruce_leaves.png", "spruce_leaves.png", FLAG_CUTOUT | FLAG_LEAVES],
+	[22, "SPRUCE LEAVES", "spruce_leaves.png", "spruce_leaves.png", "spruce_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
 	[23, "BIRCH LOG", "birch_log_top.png", "birch_log_side.png", "birch_log_top.png", FLAG_OPAQUE],
-	[24, "BIRCH LEAVES", "birch_leaves.png", "birch_leaves.png", "birch_leaves.png", FLAG_CUTOUT | FLAG_LEAVES],
+	[24, "BIRCH LEAVES", "birch_leaves.png", "birch_leaves.png", "birch_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
 	[25, "TERRACOTTA", "terracotta.png", "terracotta.png", "terracotta.png", FLAG_OPAQUE],
 	[26, "MYCELIUM", "mycelium_top.png", "mycelium_side.png", "dirt.png", FLAG_OPAQUE],
 	[27, "TORCH", "torch.png", "torch.png", "torch.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE],
@@ -80,6 +98,23 @@ const BLOCK_DEFS := [
 	[32, "WATER FLOW 3", "water.png", "water.png", "water.png", 0],
 	[33, "WATER FLOW 2", "water.png", "water.png", "water.png", 0],
 	[34, "WATER FLOW 1", "water.png", "water.png", "water.png", 0],
+	[35, "TALL GRASS", "tall_grass.png", "tall_grass.png", "tall_grass.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED],
+	[36, "YELLOW FLOWER", "flower_yellow.png", "flower_yellow.png", "flower_yellow.png", FLAG_CUTOUT | FLAG_CROSS],
+	[37, "RED FLOWER", "flower_red.png", "flower_red.png", "flower_red.png", FLAG_CUTOUT | FLAG_CROSS],
+	[38, "DEAD BUSH", "dead_bush.png", "dead_bush.png", "dead_bush.png", FLAG_CUTOUT | FLAG_CROSS],
+	[39, "BAMBOO", "bamboo.png", "bamboo.png", "bamboo.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED],
+	[40, "VINE", "vine.png", "vine.png", "vine.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED],
+	[41, "ACACIA LOG", "acacia_log_top.png", "acacia_log_side.png", "acacia_log_top.png", FLAG_OPAQUE],
+	[42, "ACACIA LEAVES", "acacia_leaves.png", "acacia_leaves.png", "acacia_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
+	[43, "JUNGLE LOG", "jungle_log_top.png", "jungle_log_side.png", "jungle_log_top.png", FLAG_OPAQUE],
+	[44, "JUNGLE LEAVES", "jungle_leaves.png", "jungle_leaves.png", "jungle_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
+	[45, "MANGROVE LOG", "mangrove_log_top.png", "mangrove_log_side.png", "mangrove_log_top.png", FLAG_OPAQUE],
+	[46, "MANGROVE LEAVES", "mangrove_leaves.png", "mangrove_leaves.png", "mangrove_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
+	[47, "MANGROVE ROOTS", "mangrove_roots.png", "mangrove_roots.png", "mangrove_roots.png", FLAG_OPAQUE],
+	[48, "LAVA", "lava.png", "lava.png", "lava.png", FLAG_OPAQUE | FLAG_EMISSIVE],
+	[49, "BROWN MUSHROOM", "brown_mushroom_block.png", "brown_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS],
+	[50, "RED MUSHROOM", "red_mushroom_block.png", "red_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS],
+	[51, "MELON", "melon_top.png", "melon_side.png", "melon_side.png", FLAG_OPAQUE],
 ]
 
 const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
@@ -87,10 +122,18 @@ const WATER_TEXTURE_PATH := TEXTURE_ROOT + "water.png"
 const WATER_SHADER_PATH := "res://assets/placeholders/zigcraft/water.gdshader"
 const BLOCK_SHADER_PATH := "res://world/block.gdshader"
 const TILE_PX := 64
+# These placeholder images include transparent margins for an inset cactus
+# model. Our cactus is an opaque cube: map its solid body across each face,
+# otherwise the shared cutout shader opens slits along every cube edge.
+const SOLID_TEXTURE_REGIONS := {
+	"cactus_side.png": Rect2i(4, 0, 56, 64),
+	"cactus_top.png": Rect2i(4, 4, 56, 56),
+}
 const MAX_LIGHT_LEVEL := 15
 const EMISSIVE_COLORS := {
 	BLOCK_GLOWSTONE: Color(1.0, 0.78, 0.52),
 	BLOCK_TORCH: Color(0.93, 0.68, 0.44),
+	BLOCK_LAVA: Color(1.0, 0.3, 0.06),
 }
 const ATTENUATION_LEAVES := 3
 const ATTENUATION_WATER := 2
@@ -99,6 +142,11 @@ const TEXTURE_TINTS := {
 	"leaves.png": Color(0.62, 1.15, 0.5),
 	"spruce_leaves.png": Color(0.5, 1.05, 0.6),
 	"birch_leaves.png": Color(0.78, 1.3, 0.55),
+	"tall_grass.png": Color(0.5, 0.95, 0.38),
+	"vine.png": Color(0.45, 0.9, 0.36),
+	"acacia_leaves.png": Color(0.8, 1.12, 0.5),
+	"jungle_leaves.png": Color(0.52, 1.08, 0.45),
+	"mangrove_leaves.png": Color(0.55, 0.9, 0.48),
 	"mycelium_top.png": Color(0.82, 0.68, 0.9),
 	"sand.png": Color(0.98, 0.9, 0.64),
 	"red_sand.png": Color(1.0, 0.84, 0.72),
@@ -207,6 +255,7 @@ func _build_texture_array() -> Dictionary:
 	for index in texture_names.size():
 		var texture_name := texture_names[index]
 		var image := _load_image(TEXTURE_ROOT + texture_name)
+		image = _prepare_solid_texture(image, texture_name)
 		if image.get_width() != TILE_PX or image.get_height() != TILE_PX:
 			image.resize(TILE_PX, TILE_PX, Image.INTERPOLATE_NEAREST)
 		if TEXTURE_TINTS.has(texture_name):
@@ -219,6 +268,12 @@ func _build_texture_array() -> Dictionary:
 	texture_array.create_from_images(images)
 	_build_material(texture_array, images[0] if not images.is_empty() else null)
 	return tile_lookup
+
+
+func _prepare_solid_texture(image: Image, texture_name: String) -> Image:
+	if SOLID_TEXTURE_REGIONS.has(texture_name):
+		return image.get_region(SOLID_TEXTURE_REGIONS[texture_name])
+	return image
 
 
 func _build_material(array_texture: Texture2DArray, fallback_image: Image) -> void:

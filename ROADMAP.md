@@ -16,6 +16,15 @@ Property names and file references are included so each item is easy to find.
 - [x] Per-option overrides on top of a preset with "Custom" indicator + "Reset to Preset"
 - [x] Graphics settings persist to `user://settings.cfg` (`[graphics] values` dictionary)
 
+## Shadows
+- [x] Near-shadow resolution — `Main.NEAR_SHADOW_DISTANCE` reserves the first cascade for 6 m around the player, keeping close-up shadow texels dense enough to stop edge crawl (user-confirmed fixed)
+- [x] Directional atlas 4096 -> 8192 -> 16384 — `rendering/lights_and_shadows/directional_shadow/size` in `project.godot`; `Main._apply_graphics()` scales the narrow PCF blur by atlas resolution so its world-space width stays constant. Distant pulsation measured ~47% lower at 16384 (costs ~384 MiB VRAM), pending in-game confirmation
+- [x] Narrow PCF on hard shadows — Medium directional filter at half blur width (`RenderingServer.directional_soft_shadow_filter_set_quality`) when `soft_shadows` is off; the soft-shadow toggle keeps its contact-hardening path
+- [x] F9 shadow capture tool — `game/shadow_capture.gd` + `Main._get_shadow_capture_state()` save 30 lossless frames and per-frame camera/sun/time/pause/edits state to `user://shadow_captures/`, so reported artifacts can be replayed deterministically
+- [ ] Residual angle-dependent edge aliasing on direct sun shadows — try `alpha_hash` for leaves, or shadow-only proxy geometry for solid canopy shadows (changes the dappled leaf-shadow look)
+- [ ] Tune cascade split ratios (`directional_shadow_split_1..3`) if the 16384 atlas still leaves distant pulsation; 32-bit shadow depth and extra PCF samples measured no benefit
+- [ ] Isolate volumetric fog and SSIL/SSAO in a controlled A/B (both are temporally reprojected; never tested for localized shimmer)
+
 ## Lighting
 - [x] Block-light propagation — mesh-time BFS over a 3x3 chunk light volume in `ChunkMesher` (sky column pass + lateral flood, plus RGB block light seeded from emissive blocks); per-vertex light joined with AO and packed into `ARRAY_CUSTOM0`, baked by `world/block.gdshader` (sky occlusion in albedo, warm block light as emission). Runs on chunk worker threads; supersedes the old pooled `OmniLight3D` glowstone lights (removed)
 - [x] Sky-light pass optimization — `TerrainGenerator` now outputs a per-column top-block heightmap (`GenResult.heights`), threaded through `VoxelWorld` into the mesher's light volume; the sky pass starts at each column's top instead of walking from volume height. Measured chunk build 50.7 ms -> 33.3 ms (1.5x); baked light is unchanged apart from a 3-level approximation at some overhang faces
@@ -46,5 +55,53 @@ Property names and file references are included so each item is easy to find.
 ## Audio
 - [ ] Audio pass — footsteps, block break/place, UI clicks, and rain ambience (needs audio assets)
 
+## World generation overhaul
+Current state: the TerraForged-inspired staged pipeline is live under `world/worldgen/`. It builds immutable padded terrain fields, domain-warped continents and blended profiles, analytic erosion and optional cached hydraulic erosion, river/coast masks, climate-selected biomes, data-driven surfaces, caves/ores, and deterministic cross-chunk decoration. `TerrainGenerator` remains an immutable worker-safe facade. The world is 192 blocks high with sea level 48; generation verification and live F3/F4 diagnostics are available for tuning.
+
+### Research / decisions (do first)
+- [x] Choose the world-gen reference model — use a custom RedotCraft pipeline inspired by TerraForged 0.3.x, not a literal port. TerraForged's useful pattern is staged data generation (continent/terrain profiles -> erosion/rivers -> climate/biomes -> voxel fill -> surfaces/caves/decorations), but the archived project depends on an unavailable `Engine` module and Minecraft-specific chunk, registry, structure, and decoration APIs. Reimplement the ideas with `FastNoiseLite`, immutable GDScript data, and Redot's worker pool; do not target seed- or output-compatibility.
+- [x] Define the first architecture — generate one padded 18x18 `ChunkTerrainData` field per chunk (one-cell border for gradients) containing height, base height, slope, continentalness, river mask, temperature, moisture, terrain profile, and biome. Consume that same snapshot in ordered passes: macro geography and blended terrain profiles; cheap erosion/slope shaping and river carving; voxel fill; surface/subsurface rules; caves/ores; deterministic vegetation. Keep it local to the worker job initially; only add a bounded `(seed, config revision, chunk)` cache if profiling shows repeated sampling is material.
+- [x] Decide the vertical range — use 192 blocks with sea level 48. Heightmaps now use `PackedInt32Array` and `ChunkMesher.LOD_NONE = -1`, removing the old byte sentinel conflict. A 256-block range was unnecessary after sampled peaks stayed below the 192-block cap. Normal full generation averages ~30 ms over the pinned benchmark chunks; LOD generation averages ~25 ms.
+- [x] Define the biome set and layers — 15 biomes now provide climate centers, surface/subsurface/underwater blocks, soil depth, foliage and water tint, and weighted decoration sets; smooth profile/climate fields plus deterministic dithering avoid hard block-border transitions.
+
+### TerraForged-inspired implementation phases
+- [x] Phase 0 — worldgen diagnostics: F3 opens an asynchronous metrics/map overlay and F4 cycles biome, final/raw height, slope, temperature, moisture, continentalness, river, and profile maps. Generation reports terrain/population timings and `VoxelWorld` tracks generation/mesh EMAs.
+- [x] Phase 1 — macro terrain: the 18x18 field separates continent/ocean/coast level from relief and smoothly blends plains, hills, plateau, mountain, and ridged-mountain profiles across domain-warped regions.
+- [x] Phase 2 — rivers and analytic erosion: padded gradients drive talus smoothing and terracing, regional rainfall/transport modifiers shape slopes, and continuous river masks carve valleys before surface filling. River water is limited to lowland channels to avoid isolated mountaintop ribbons.
+- [x] Phase 3 — climate and biome layers: large-scale warped temperature/moisture fields select and blend climate biomes, with explicit ocean, deep-ocean, beach, river, and highland overrides.
+- [x] Phase 4 — surfaces and decoration: biome catalogs own layer/tint/feature rules, and global hash-cell origins let trees and larger decorations cross chunk edges independently of generation order.
+- [x] Phase 5 — cave regions: deterministic worm segments, bounded caverns, rare multi-lobed mega-caves, aquifers/lava, ore veins, and sparse cave decoration run after surface fill with surface/river protection.
+- [x] Phase 6 — optional regional hydraulic erosion: deterministic 64x64 droplet tiles are cached by immutable worldgen configuration and sampled seam-safely. It remains off by default because a cold tile solve is intentionally a high-quality/slower option.
+
+### Terrain and biomes
+- [x] Vertical limit fix — 192-block storage, typed heights, profile-specific relief, and sampled cap verification remove the old flat-topped 104-block limit.
+- [x] Continentalness/ocean/coast system — separate continent, ocean/deep-ocean, beach, and lowland river fields plus deterministic coarse-to-fine spawn search.
+- [x] Climate-driven biomes with smooth transitions — warped temperature/moisture fields, secondary-biome blend weights, deterministic dithering, and live debug maps.
+- [x] Per-biome terrain shaping — smooth climate weights add wetland basins, dry dunes/terraces, tropical relief, and sharper cold highlands on top of blended terrain profiles.
+- [x] Expanded biome list — plains, forest, desert, snow, swamp, ocean, deep ocean, beach, river, jungle, savanna, taiga, badlands, meadow, and highlands, each with layers, tint, and vegetation metadata.
+- [x] Surface/subsurface rules — biome topsoil depths, stone/gravel/clay and badlands strata, snow bands, cliff exposure, and underwater materials.
+
+### Vegetation and ground cover
+- [x] Ground-cover system — tinted grasses/flowers, mushrooms, reeds, vines, bamboo, bushes, cacti, and biome-specific small plants use cutout/cross meshes without collision.
+- [x] Deterministic per-chunk scatter — global hash-cell placement and neighboring-origin evaluation keep decoration seam-safe and worker-order independent.
+- [x] Vegetation density and variety pass — oak, birch, spruce, acacia, jungle, and mangrove forms plus bushes, fallen logs, boulders, melons, bamboo, and cacti; `tree_density` and `decoration_density` remain configurable.
+- [x] Foliage colour variation — per-column biome tints are carried into full and LOD mesh vertex colors; water has independent biome tinting.
+
+### Caves and underground
+- [x] Phase 1 — wormhole tunnels: connected cell-anchored tunnel segments and sparse seam-safe diagonal surface entrances replace the old per-voxel threshold caves.
+- [x] Phase 2 — large caverns: cell-anchored varied caverns and rare mega-caves, lava lakes, aquifers, damp floor patches, and ceiling/floor stone formations.
+- [x] Phase 3 — underground features: deep cobblestone variation, damp mud/mycelium cave patches, depth-banded ore veins, aquifers, lava pockets, and stone formations. Mineshafts/ruins remain separate future structure work.
+- [ ] Cave-aware lighting and meshing — verify sky-light flood fill around large openings, that caves stay dark, and that `ChunkMesher` light-volume bounds hold for big caverns.
+- [x] Ore distribution overhaul — deterministic cell-anchored coal, iron, and gold vein segments use depth bands and replace stone after caves are carved.
+- [x] Cave performance guardrails — cell-anchored carving replaces full-height 3D cave scans; clipped ellipsoids hoist column limits, aquifer decisions are chunk-local, and normal full generation averages ~30 ms in the pinned CLI benchmark.
+
+### Verification
+- [x] Tree integrity / groves / cactus closure — fuller connected broadleaf crowns cover limb ends; immutable tree-site decisions and overlap regressions prevent chunk-owner/canopy disagreements. Forest, taiga, and jungle use a dedicated deterministic grove field with denser patches and clearings while respecting density controls. Cactus placeholder margins are cropped in runtime texture preparation to close cube edges/caps; opacity and stacked-mesh tests pass. Forward+ grove and cactus captures inspected.
+- [x] Grass/shore material cleanup — foliage tint blends climate colors instead of per-column biome dithering; sparse independently scattered crossed-quad grass grows only on exposed grass soil. Shallow seabeds retain thicker sand shelves before deep gravel. Water uses sharp, weak refraction without chromatic separation, faint foam, and depth-dependent absorption rather than vivid surface patterns. Generation regressions and Forward+ close-up captures checked.
+- [x] Restore detail between large landforms and individual blocks — profile-tuned 24/64-block knolls/shoulders, shallow upland gullies, and low-amplitude 10-block surface variation preserve broad terrain without returning to needles. Spruce now has tapered whorls; broadleaf crowns have bounded hash-directed limbs. Added detail-amplitude and tree-boundary regressions.
+- [x] Correct the first overhaul's visual regressions — decouple broad mountain regions from fine ridge detail, blend fixed-frequency noise outputs, restrict beaches to the waterline, replace dithered surface snow with coherent blankets, and keep river carving/water in lowlands. Added field/point parity, flat-world, surface-blanket, and multi-seed near/far roughness checks. Pinned-seed Forward+ mountain/lowland captures were inspected; this does not imply final art direction or performance acceptance.
+- [x] Seeded worldgen verification — `tools/worldgen_verify.gd` checks repeatability, seams, edits, concurrency, biome distribution, rivers, and height caps; F9 capture metadata includes worldgen parameters and the F3/F4 overlay supports pinned-seed visual tours.
+- [ ] Perf budget — record chunk build time, memory, and draw calls at render distance 16 across the full biome set; mesher work must stay worker-thread safe and deterministic per seed.
+
 ## World / simulation
-- [x] Water polish — flowing water levels (IDs 28-34) with a 4 Hz cellular spill/dry sim seeded by edits, falling cascades, settled state persisted through `_edited_blocks`; the mesher renders `_water_top(level)` surfaces with a flowing vertex-color flag, and `water.gdshader` adds screen-space refraction (wave-distorted `hint_screen_texture` with a faint chromatic split and depth-based blue absorption) plus depth-texture shore foam and calmer, faster-scrolling flow waves
+- [x] Water polish — flowing water levels (IDs 28-34) with a 4 Hz cellular spill/dry sim seeded by edits, falling cascades, settled state persisted through `_edited_blocks`; the mesher renders `_water_top(level)` surfaces with a flowing vertex-color flag. `water.gdshader` uses sharp, gently distorted scene refraction with chromatic split disabled, progressive depth absorption, and faint narrow shore foam.

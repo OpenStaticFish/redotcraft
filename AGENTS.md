@@ -11,7 +11,7 @@ RedotCraft: a Minecraft-like voxel sandbox built with **Redot Engine** (Godot 4 
 - `redot_code_intel validate` is a parse check only: it does not resolve unknown enum constants (e.g. `Viewport.SCALING_3D_MODE_OFF` passes but fails at runtime) and does not work on `.gdshader`. Shader compile errors appear in `output` after `run`.
 - `redot_scene_action` can rewrite a `.tscn` lossily (it has dropped node script `ExtResource`s and added `= null` shader params). For isolated property changes prefer a targeted text edit; if you use it, review `git diff` and restore from git when it drops anything.
 - A game-only `run` does not import new `.png` assets. Call `redot_project_config open_editor` once to trigger import; until then `inspect_asset` reports "not imported".
-- `bug.md` documents the open shadow/texture shimmer issue with measured A/B evidence and ruled-out causes; `ROADMAP.md` is the single feature list.
+- `ROADMAP.md` is the single feature list. Press **F9** in-game to save a shadow-capture bundle (`game/shadow_capture.gd` -> `user://shadow_captures/`); `ROADMAP.md` records the measured shadow findings and ruled-out mitigations.
 
 ## Entry points
 

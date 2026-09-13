@@ -2,7 +2,7 @@ class_name CloudField
 extends Node3D
 
 const CELL_SIZE := 12.0
-const CLOUD_HEIGHT := 118.0
+const CLOUD_HEIGHT := 180.0
 const CLOUD_THICKNESS := 4.0
 const REGION_CELLS := 16
 const VIEW_REGIONS := 3

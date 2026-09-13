@@ -88,6 +88,14 @@ const DEFAULT_WORLD := {
 	"world_type": 0,
 	"terrain_scale": 1.0,
 	"tree_density": 1.0,
+	"worldgen_version": 1,
+	"macro_scale": 384.0,
+	"river_density": 1.0,
+	"erosion_strength": 0.55,
+	"regional_erosion": 0.5,
+	"hydraulic_erosion": false,
+	"cave_density": 1.0,
+	"decoration_density": 1.0,
 }
 
 var settings: Dictionary = DEFAULT_SETTINGS.duplicate()

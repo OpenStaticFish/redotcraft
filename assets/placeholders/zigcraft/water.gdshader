@@ -4,17 +4,19 @@ render_mode blend_mix, cull_disabled, depth_draw_opaque, diffuse_burley;
 
 uniform sampler2D water_texture : filter_linear_mipmap, repeat_enable;
 uniform sampler2D depth_texture : hint_depth_texture;
-uniform sampler2D screen_texture : hint_screen_texture, filter_linear_mipmap;
-uniform vec4 water_color : source_color = vec4(0.10, 0.50, 0.88, 1.0);
-uniform vec3 foam_color : source_color = vec3(0.90, 0.96, 1.0);
-uniform vec3 sky_reflection : source_color = vec3(0.62, 0.78, 0.98);
-uniform float wave_amplitude = 0.12;
-uniform float wave_speed = 0.12;
-uniform float depth_fade = 1.5;
-uniform float foam_amount = 0.4;
-uniform float refraction_strength = 1.0;
-uniform float refraction_mix = 0.85;
-uniform float chromatic_strength = 0.0015;
+// Refraction samples the current scene at native detail; mipped screen samples
+// made even a very small UV offset look smeared at grazing angles.
+uniform sampler2D screen_texture : hint_screen_texture, filter_linear;
+uniform vec4 water_color : source_color = vec4(0.16, 0.42, 0.62, 1.0);
+uniform vec3 foam_color : source_color = vec3(0.90, 0.94, 0.93);
+uniform vec3 sky_reflection : source_color = vec3(0.58, 0.70, 0.80);
+uniform float wave_amplitude = 0.025;
+uniform float wave_speed = 0.05;
+uniform float depth_fade = 2.4;
+uniform float foam_amount = 0.025;
+uniform float refraction_strength = 0.28;
+uniform float refraction_mix = 0.48;
+uniform float chromatic_strength = 0.0;
 
 varying vec2 world_xz;
 varying float face_up;
@@ -93,10 +95,10 @@ void fragment() {
 		vec2 gradient = wave_noise(wave_pos, TIME * wave_speed);
 		vec3 world_normal = normalize(vec3(0.0, 1.0, 0.0) + vec3(gradient.x, 0.0, gradient.y) * 0.35);
 		NORMAL = normalize((VIEW_MATRIX * MODEL_MATRIX * vec4(world_normal, 0.0)).xyz);
-		distortion = gradient * 0.022 * (1.0 - 0.6 * flow);
+		distortion = gradient * 0.004 * (1.0 - 0.6 * flow);
 	} else {
 		float side_noise = snoise(vec3(world_xz.x * 0.25, world_xz.y * 0.25, TIME * 0.15)) - 0.5;
-		distortion = vec2(side_noise) * 0.012;
+		distortion = vec2(side_noise) * 0.003;
 	}
 	float proximity = clamp(24.0 / max(-VERTEX.z, 1.0), 0.0, 1.0);
 	distortion *= refraction_strength * proximity;
@@ -110,23 +112,30 @@ void fragment() {
 	vec4 scene_view = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, scene_depth, 1.0);
 	scene_view.xyz /= scene_view.w;
 	float thickness = max(-scene_view.z - (-VERTEX.z), 0.0);
-	float shallow = 1.0 - clamp(thickness / depth_fade, 0.0, 1.0);
-	float foam = 1.0 - smoothstep(0.0, 0.45, thickness);
+	// A narrow, faint band starts just inside shallow water. The previous
+	// zero-depth ramp was solid white at every shore intersection.
+	float foam = smoothstep(0.02, 0.12, thickness) * (1.0 - smoothstep(0.18, 0.45, thickness));
+	foam *= face_up;
 
 	float ndv = clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0);
 	float fresnel = pow(1.0 - ndv, 5.0);
 	vec3 block_light = light_data.rgb;
-	vec3 tint = water_color.rgb * (0.94 + pattern * 0.12) * COLOR.rgb;
-	vec3 water_filter = tint * tint * 1.6;
-	float tint_amount = mix(0.85, 0.4, shallow);
-	vec3 surface = refracted * mix(vec3(1.0), water_filter, tint_amount);
-	surface += tint * (0.12 + fresnel * 0.15);
-	surface += sky_reflection * fresnel * 0.12 * light_data.a;
+	vec3 tint = water_color.rgb * (0.98 + pattern * 0.035) * COLOR.rgb;
+	// Keep the sandy shallows readable, but absorb the seabed progressively
+	// with depth instead of showing distant gravel through glass-clear ocean.
+	vec3 transmission = exp(-vec3(0.18, 0.09, 0.045) * thickness);
+	vec3 surface = refracted * transmission;
+	surface += tint * (vec3(1.0) - transmission) * max(light_data.a, 0.05);
+	surface += tint * (0.06 + fresnel * 0.10);
+	surface += sky_reflection * fresnel * 0.08 * light_data.a;
 	surface += foam_color * foam * foam_amount * max(light_data.a, 0.05);
 	surface += water_color.rgb * block_light * 0.35;
-	float alpha = clamp(refraction_mix + fresnel * 0.12 + shallow * 0.08, 0.0, 1.0);
+	float deep = 1.0 - exp(-thickness / max(depth_fade, 0.01) * 0.288);
+	float alpha = clamp(mix(refraction_mix, 0.96, deep) + fresnel * 0.04, 0.0, 1.0);
 	ALBEDO = vec3(0.0);
-	EMISSION = surface * alpha;
+	// blend_mix applies ALPHA during compositing; multiplying here as well
+	// would darken the refracted scene twice as transparency increases.
+	EMISSION = surface;
 	ALPHA = alpha;
 	ROUGHNESS = 0.22;
 	SPECULAR = 0.35;

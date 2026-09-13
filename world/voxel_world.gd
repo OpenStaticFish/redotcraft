@@ -3,7 +3,10 @@ extends Node3D
 
 const SPAWN_RADIUS := 1
 const SPAWN_SEARCH_RADIUS := 12
-const MAX_ACTIVE_JOBS := 12
+## Four full light-volume builds saturate the tested desktop without starving
+## the render/main thread; higher counts increased wall-time variance and made
+## initial streaming less responsive despite no throughput gain.
+const MAX_ACTIVE_JOBS := 4
 const COMMIT_BUDGET_MS := 5
 const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4]
 const WATER_TICK_INTERVAL := 0.25
@@ -39,11 +42,22 @@ var _water_queue: Array[Vector3i] = []
 var _water_queued: Dictionary = {}
 var _water_head := 0
 var _water_accum := 0.0
+var _worldgen_revision := 0
+var _full_jobs_measured := 0
+var _lod_jobs_measured := 0
+var _generation_ema_ms := 0.0
+var _mesh_ema_ms := 0.0
+var _terrain_ema_ms := 0.0
+var _populate_ema_ms := 0.0
+var _debug_task := -1
+var _debug_slot: Dictionary = {}
+var _debug_key := ""
+var _debug_cache: Dictionary = {}
 
 
 class Chunk:
 	var data := PackedByteArray()
-	var heights := PackedByteArray()
+	var heights := PackedInt32Array()
 	var max_y := 0
 	var mask := 0
 	var lod := false
@@ -56,6 +70,7 @@ class Chunk:
 class PendingJob:
 	var task := -1
 	var version := 0
+	var config_revision := 0
 	var lod := false
 	var slot: Dictionary = {}
 
@@ -64,12 +79,14 @@ class CommitItem:
 	var pos := Vector2i.ZERO
 	var result: ChunkMesher.MeshResult
 	var version := 0
+	var config_revision := 0
 	var lod := false
 
-	func _init(p_pos: Vector2i, p_result: ChunkMesher.MeshResult, p_version: int, p_lod: bool) -> void:
+	func _init(p_pos: Vector2i, p_result: ChunkMesher.MeshResult, p_version: int, p_config_revision: int, p_lod: bool) -> void:
 		pos = p_pos
 		result = p_result
 		version = p_version
+		config_revision = p_config_revision
 		lod = p_lod
 
 
@@ -80,6 +97,7 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	_collect_debug_map()
 	if _player == null:
 		return
 	_stream_tick()
@@ -93,20 +111,24 @@ func _exit_tree() -> void:
 	for pos in _pending.keys():
 		WorkerThreadPool.wait_for_task_completion((_pending[pos] as PendingJob).task)
 	_pending.clear()
+	if _debug_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_debug_task)
+		_debug_task = -1
 
 
 ## Must run before setup_player() and must not be called while chunk jobs are
 ## in flight: recreating the noise set invalidates running workers.
 func configure(world_config: Dictionary, render_distance_chunks: int) -> void:
 	render_distance = maxi(render_distance_chunks, 1)
-	lod_distance = maxi(3, render_distance / 2)
+	lod_distance = maxi(3, render_distance / 3)
 	unload_radius = render_distance + 2
 	_generator.configure(world_config)
+	_worldgen_revision += 1
 
 
 func set_render_distance(value: int) -> void:
 	render_distance = maxi(value, 1)
-	lod_distance = maxi(3, render_distance / 2)
+	lod_distance = maxi(3, render_distance / 3)
 	unload_radius = render_distance + 2
 	_rebuild_desired()
 
@@ -142,6 +164,7 @@ func _generate_spawn_area() -> void:
 				var slot: Dictionary = {}
 				_run_chunk_job(pos, _chunk_edits_for(pos), _gather_neighbors(pos), slot, false)
 				if slot.has("result"):
+					_record_job_metrics(slot, false)
 					_commit_chunk(pos, slot["result"], false)
 
 
@@ -185,6 +208,7 @@ func _schedule_jobs() -> void:
 		var lod := _chunk_uses_lod(pos)
 		var job := PendingJob.new()
 		job.version = _chunk_edit_version.get(pos, 0)
+		job.config_revision = _worldgen_revision
 		job.lod = lod
 		job.slot = {}
 		job.task = WorkerThreadPool.add_task(
@@ -200,7 +224,7 @@ func _process_commit_queue() -> void:
 		var item: CommitItem = _commit_queue.pop_front()
 		if not _desired.has(item.pos):
 			continue
-		if item.version != _chunk_edit_version.get(item.pos, 0) or item.lod != _chunk_uses_lod(item.pos):
+		if item.version != _chunk_edit_version.get(item.pos, 0) or item.config_revision != _worldgen_revision or item.lod != _chunk_uses_lod(item.pos):
 			_queue_rebuild(item.pos)
 			continue
 		_commit_chunk(item.pos, item.result, item.lod)
@@ -216,17 +240,44 @@ func _collect_jobs() -> void:
 		WorkerThreadPool.wait_for_task_completion(job.task)
 		_pending.erase(pos)
 		if job.slot.has("result"):
-			_commit_queue.append(CommitItem.new(pos, job.slot["result"], job.version, job.lod))
+			_record_job_metrics(job.slot, job.lod)
+			_commit_queue.append(CommitItem.new(pos, job.slot["result"], job.version, job.config_revision, job.lod))
 
 
 ## Worker-thread entry point. Only reads state that is immutable while jobs
 ## are in flight (generator noise set, mesher tables, block registry).
 func _run_chunk_job(chunk_pos: Vector2i, edits: Dictionary, neighbors, slot: Dictionary, lod: bool) -> void:
-	var generated := _generator.generate_data(chunk_pos, edits)
+	var generated := _generator.generate_data(chunk_pos, edits, lod)
+	var mesh_start := Time.get_ticks_usec()
 	if lod:
-		slot["result"] = _mesher.build_lod(generated.data, generated.max_y, generated.heights, neighbors)
+		slot["result"] = _mesher.build_lod(generated.data, generated.max_y, generated.heights, generated.foliage_tints, generated.water_tints, neighbors)
 	else:
-		slot["result"] = _mesher.build(generated.data, generated.max_y, generated.heights, neighbors)
+		slot["result"] = _mesher.build(generated.data, generated.max_y, generated.heights, generated.foliage_tints, generated.water_tints, neighbors)
+	slot["timings"] = generated.timings
+	slot["mesh_us"] = Time.get_ticks_usec() - mesh_start
+
+
+func _record_job_metrics(slot: Dictionary, lod: bool) -> void:
+	var timings: Dictionary = slot.get("timings", {})
+	var alpha := 0.12
+	var generation_ms := float(timings.get("generation_us", 0)) / 1000.0
+	var mesh_ms := float(slot.get("mesh_us", 0)) / 1000.0
+	var terrain_ms := float(timings.get("terrain_us", 0)) / 1000.0
+	var populate_ms := float(timings.get("populate_us", 0)) / 1000.0
+	if _full_jobs_measured + _lod_jobs_measured == 0:
+		_generation_ema_ms = generation_ms
+		_mesh_ema_ms = mesh_ms
+		_terrain_ema_ms = terrain_ms
+		_populate_ema_ms = populate_ms
+	else:
+		_generation_ema_ms = lerpf(_generation_ema_ms, generation_ms, alpha)
+		_mesh_ema_ms = lerpf(_mesh_ema_ms, mesh_ms, alpha)
+		_terrain_ema_ms = lerpf(_terrain_ema_ms, terrain_ms, alpha)
+		_populate_ema_ms = lerpf(_populate_ema_ms, populate_ms, alpha)
+	if lod:
+		_lod_jobs_measured += 1
+	else:
+		_full_jobs_measured += 1
 
 
 func _chunk_uses_lod(pos: Vector2i) -> bool:
@@ -604,6 +655,65 @@ func get_block_name(block_id: int) -> String:
 
 func get_biome_name(world_position: Vector3) -> String:
 	return _generator.biome_name(world_position)
+
+
+func get_worldgen_stats() -> Dictionary:
+	var full_chunks := 0
+	var lod_chunks := 0
+	for chunk_value in _chunks.values():
+		if (chunk_value as Chunk).lod:
+			lod_chunks += 1
+		else:
+			full_chunks += 1
+	return {
+		"chunks": "%d full / %d lod" % [full_chunks, lod_chunks],
+		"pending": _pending.size(),
+		"queued": _gen_queue.size(),
+		"commits": _commit_queue.size(),
+		"gen ms ema": _generation_ema_ms,
+		"terrain ms": _terrain_ema_ms,
+		"populate ms": _populate_ema_ms,
+		"mesh ms ema": _mesh_ema_ms,
+		"revision": _worldgen_revision,
+	}
+
+
+## Starts or polls an asynchronous diagnostic-map request. The expensive noise
+## sampling never blocks the main thread; callers receive `pending = true`
+## until the immutable worker result is available.
+func request_debug_map(mode: String, center: Vector2i, sample_size: int, stride: int) -> Dictionary:
+	_collect_debug_map()
+	var resolution := clampi(sample_size, 16, 32)
+	var resolution_scale := maxi(1, ceili(float(sample_size) / float(resolution)))
+	var safe_stride := clampi(stride * resolution_scale, 1, 32)
+	var key := "%s:%d:%d:%d:%d:%d" % [mode, center.x, center.y, resolution, safe_stride, _worldgen_revision]
+	if _debug_cache.has(key):
+		return _debug_cache[key]
+	if _debug_task < 0:
+		_debug_key = key
+		_debug_slot = {}
+		_debug_task = WorkerThreadPool.add_task(
+			_run_debug_map_job.bind(mode, center, resolution, safe_stride, _debug_slot),
+			true,
+			"worldgen_debug_map")
+	return {"pending": true, "width": resolution, "height": resolution}
+
+
+func _run_debug_map_job(mode: String, center: Vector2i, resolution: int, stride: int, slot: Dictionary) -> void:
+	slot["result"] = _generator.build_debug_map(mode, center, resolution, stride)
+
+
+func _collect_debug_map() -> void:
+	if _debug_task < 0 or not WorkerThreadPool.is_task_completed(_debug_task):
+		return
+	WorkerThreadPool.wait_for_task_completion(_debug_task)
+	if _debug_slot.has("result"):
+		_debug_cache[_debug_key] = _debug_slot["result"]
+		if _debug_cache.size() > 8:
+			_debug_cache.erase(_debug_cache.keys()[0])
+	_debug_task = -1
+	_debug_slot = {}
+	_debug_key = ""
 
 
 func get_loaded_chunk_count() -> int:

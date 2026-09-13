@@ -3,8 +3,8 @@ extends RefCounted
 
 const CHUNK_SIZE := 16
 const CHUNK_AREA := CHUNK_SIZE * CHUNK_SIZE
-const WORLD_HEIGHT := 128
-const SEA_LEVEL := 32
+const WORLD_HEIGHT := 192
+const SEA_LEVEL := 48
 const COLLISION_LAYER_WORLD := 1
 
 const PAD_W := CHUNK_SIZE + 2

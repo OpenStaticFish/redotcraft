@@ -32,7 +32,7 @@ custom_minimum_size = Vector2(580, 0)
 
 [node name="Box" type="VBoxContainer" parent="Center/Panel"]
 layout_mode = 2
-theme_override_constants/separation = 14
+theme_override_constants/separation = 10
 
 [node name="Heading" type="Label" parent="Center/Panel/Box"]
 layout_mode = 2
@@ -79,7 +79,7 @@ size_flags_horizontal = 3
 
 [node name="RowsBox" type="VBoxContainer" parent="Center/Panel/Box"]
 layout_mode = 2
-theme_override_constants/separation = 14
+theme_override_constants/separation = 9
 
 [node name="Footer" type="HBoxContainer" parent="Center/Panel/Box"]
 layout_mode = 2
