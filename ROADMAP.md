@@ -109,7 +109,7 @@ Current state: the TerraForged-inspired staged pipeline is live under `world/wor
 - [x] Pinned benchmarks — `tools/worldgen_benchmark.gd` and `tools/worldgen_mesh_benchmark.gd` record full/LOD generation and mesh CPU times for fixed chunks.
 - [x] LOD seam verification — `tools/worldgen_lod_verify.gd` compares compact columns against a decoration-free full chunk (top/sub/water, height map), checks distance-mesh top-face geometry, and meshes a full chunk against compact neighbor samples.
 - [x] Streaming benchmark — `tools/worldgen_stream_benchmark.gd` records ring-load wall time and throughput at render distances 10/16/32 with 4/8/16 concurrent jobs.
-- [ ] Perf budget — record memory and draw calls at render distance 32 across the full biome set; pinned generation/mesh/streaming benchmarks and F3 EMAs cover CPU cost, and mesher work must stay worker-thread safe and deterministic per seed.
+- [x] Perf budget — recorded at render distance 32 across six representative biomes plus spawn (ocean, snow, jungle, forest, badlands, desert): max ~3.8k draw calls, ~3.1M primitives, ~286 MB process memory, ~1.28 GB VRAM at 60 FPS (2048 test shadow atlas; the production 16384 atlas adds ~0.5 GB). Pinned generation/mesh/streaming benchmarks and F3 EMAs cover CPU cost, and mesher work stays worker-thread safe and deterministic per seed.
 
 ## World / simulation
 - [x] Water polish — flowing water levels (IDs 28-34) with a 4 Hz cellular spill/dry sim seeded by edits, falling cascades, settled state persisted through `_edited_blocks`; the mesher renders `_water_top(level)` surfaces with a flowing vertex-color flag. `water.gdshader` uses sharp, gently distorted scene refraction with chromatic split disabled, progressive depth absorption, and faint narrow shore foam.
