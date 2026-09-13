@@ -140,6 +140,7 @@ func set_render_distance(value: int) -> void:
 	lod_distance = clampi(render_distance / 3, 3, MAX_FULL_DETAIL_DISTANCE)
 	unload_radius = render_distance + 2
 	_rebuild_desired()
+	_unload_far()
 
 
 func setup_player(player_node: Node3D) -> void:
@@ -155,10 +156,10 @@ func _stream_tick() -> void:
 	if center != _stream_center:
 		_stream_center = center
 		_rebuild_desired()
+		_unload_far()
 	_collect_jobs()
 	_process_commit_queue()
 	_schedule_jobs()
-	_unload_far()
 
 
 func _generate_spawn_area() -> void:

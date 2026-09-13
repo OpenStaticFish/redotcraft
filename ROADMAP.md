@@ -15,7 +15,7 @@ Property names and file references are included so each item is easy to find.
 - [x] Full per-option menu — `ui/graphics_panel.tscn` ("Advanced Graphics..." in Settings); sections: Lighting, Shadows, Sky & Atmosphere, Post-Processing, Performance
 - [x] Per-option overrides on top of a preset with "Custom" indicator + "Reset to Preset"
 - [x] Graphics settings persist to `user://settings.cfg` (`[graphics] values` dictionary)
-- [x] Render distance slider 4-32 chunks — `ui/settings_panel.gd` raises the cap from 16; full detail stays within 6 chunks (`VoxelWorld.MAX_FULL_DETAIL_DISTANCE`) and everything farther streams as compact LOD. Measured RD 32 ring (4225 chunks) drains in ~80 s in-game at 60 FPS on the test desktop
+- [x] Render distance slider 4-32 chunks — `ui/settings_panel.gd` raises the cap from 16; full detail stays within 6 chunks (`VoxelWorld.MAX_FULL_DETAIL_DISTANCE`) and everything farther streams as compact LOD. An "Extreme" toggle to the right of the slider raises the cap to 100 chunks and shows an inline load-time/memory warning. Measured RD 32 ring (4225 chunks) drains in ~80 s in-game at 60 FPS on the test desktop
 
 ## Shadows
 - [x] Near-shadow resolution — `Main.NEAR_SHADOW_DISTANCE` reserves the first cascade for 6 m around the player, keeping close-up shadow texels dense enough to stop edge crawl (user-confirmed fixed)

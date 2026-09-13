@@ -4,6 +4,7 @@ const SETTINGS_PATH := "user://settings.cfg"
 
 const DEFAULT_SETTINGS := {
 	"render_distance": 10,
+	"extreme_render_distance": false,
 	"fov": 76.0,
 	"mouse_sensitivity": 0.0022,
 	"fullscreen": false,
