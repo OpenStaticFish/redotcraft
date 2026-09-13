@@ -175,6 +175,7 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 			var climate := _climate_at(world_x, world_z, height, source_river[source_index])
 			var temperature_value := climate.x
 			var moisture_value := climate.y
+			var climate_altitude := maxf(height - float(VoxelDefsScript.SEA_LEVEL), 0.0)
 			var west := raw_height[raw_index - 1]
 			var east := raw_height[raw_index + 1]
 			var north := raw_height[raw_index - RAW_SIDE]
@@ -183,7 +184,8 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 			var local_relief := absf(raw_height[raw_index] - (west + east + north + south) * 0.25)
 			final_height[final_index] = _apply_climate_terrain_shape(
 				height, source_profile[source_index], gradient, local_relief,
-				temperature_value, moisture_value)
+				temperature_value + climate_altitude * 0.0035,
+				moisture_value + climate_altitude * 0.0015)
 			# Point queries and chunk fields must classify the same final height.
 			climate = _climate_at(world_x, world_z, final_height[final_index], source_river[source_index])
 			final_temperature[final_index] = climate.x
@@ -221,8 +223,6 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 			var secondary: int = biome_choice.y if biome == biome_choice.x else biome
 			var biome_blend_value: int = biome_choice.z if biome == biome_choice.x else 0
 			var dominant := biome
-			if biome == biome_choice.x and WorldGenHash.float_01_2d(_config.seed + 1619, origin_x + local_x, world_z) < float(biome_blend_value) / 255.0:
-				dominant = secondary
 			field.continentalness[field_index] = continental
 			field.raw_height[field_index] = raw_height[raw_index]
 			field.base_height[field_index] = source_base[source_index]
@@ -260,8 +260,6 @@ func sample_point(x: int, z: int) -> Dictionary:
 	var secondary: int = choice.y if biome == choice.x else biome
 	var blend: int = choice.z if biome == choice.x else 0
 	var dominant := biome
-	if biome == choice.x and WorldGenHash.float_01_2d(_config.seed + 1619, x, z) < float(blend) / 255.0:
-		dominant = secondary
 	return {
 		"continentalness": continental,
 		"base_height": base,
@@ -294,8 +292,6 @@ func sample_decoration_ground(x: int, z: int) -> Vector2i:
 	var choice := _biome_choice(climate.x, climate.y)
 	var biome := _apply_biome_override(choice.x, continental, final_value, river_value, profile)
 	var dominant := biome
-	if biome == choice.x and WorldGenHash.float_01_2d(_config.seed + 1619, x, z) < float(choice.z) / 255.0:
-		dominant = choice.y
 	return Vector2i(clampi(roundi(final_value), 2, VoxelDefsScript.WORLD_HEIGHT - 2), dominant)
 
 
@@ -333,8 +329,6 @@ func sample_debug_point(mode: String, x: int, z: int) -> Dictionary:
 		return {"profile_id": profile}
 	var biome := _apply_biome_override(choice.x, continental, height, river_value, profile)
 	var dominant := biome
-	if biome == choice.x and WorldGenHash.float_01_2d(_config.seed + 1619, x, z) < float(choice.z) / 255.0:
-		dominant = choice.y
 	return {"dominant_biome_id": dominant}
 
 
@@ -360,8 +354,8 @@ func _make_noise_channels() -> Array[FastNoiseLite]:
 		[FastNoiseLite.TYPE_SIMPLEX, 1.0, 2, 503],
 		[FastNoiseLite.TYPE_SIMPLEX, 1.0, 3, 601],
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 701],
-		[FastNoiseLite.TYPE_PERLIN, 1.0, 3, 809],
-		[FastNoiseLite.TYPE_PERLIN, 1.0, 3, 907],
+		[FastNoiseLite.TYPE_PERLIN, 1.0, 2, 809],
+		[FastNoiseLite.TYPE_PERLIN, 1.0, 2, 907],
 	]
 	var result: Array[FastNoiseLite] = []
 	for definition in definitions:
@@ -485,9 +479,11 @@ func _apply_climate_terrain_shape(height: float, profile_position: float, gradie
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT:
 		return height
 	var lowland := 1.0 - _smoothstep(1.6, 2.8, profile_position)
-	var wetland_weight := _smoothstep(0.58, 0.76, temperature) * _smoothstep(0.72, 0.90, moisture) * lowland
-	var basin_height := minf(height, float(VoxelDefsScript.SEA_LEVEL) + 4.0)
-	height = lerpf(height, basin_height, wetland_weight * 0.72)
+	var wetland_weight := _smoothstep(0.32, 0.42, temperature) \
+		* (1.0 - _smoothstep(0.68, 0.76, temperature)) \
+		* _smoothstep(0.64, 0.72, moisture)
+	var basin_height := minf(height, float(VoxelDefsScript.SEA_LEVEL) + 3.0)
+	height = lerpf(height, basin_height, wetland_weight * 0.86)
 	var dry_weight := _smoothstep(0.66, 0.82, temperature) * (1.0 - _smoothstep(0.25, 0.48, moisture))
 	var dune := minf(local_relief * 1.8 + gradient * 0.22, 3.2)
 	height += dune * dry_weight * lowland
@@ -531,9 +527,11 @@ func _final_height_at(x: int, z: int) -> float:
 	var continental := _continentalness_at(x, z)
 	var river_value := _river_at(x, z, continental)
 	var climate := _climate_at(x, z, height, river_value)
+	var climate_altitude := maxf(height - float(VoxelDefsScript.SEA_LEVEL), 0.0)
 	return _apply_climate_terrain_shape(
 		height, _profile_position_at(x, z, continental), gradient, local_relief,
-		climate.x, climate.y)
+		climate.x + climate_altitude * 0.0035,
+		climate.y + climate_altitude * 0.0015)
 
 
 func _final_from_raw_neighborhood(x: int, z: int, raw: float, west: float, east: float, north: float, south: float) -> float:
@@ -585,18 +583,19 @@ func _river_at(x: int, z: int, continental: float) -> float:
 func _climate_at(x: int, z: int, height: float, river_value: float) -> Vector2:
 	var warped := _macro_warp(x, z)
 	var temperature_value: float = _noises[CHANNEL_TEMPERATURE].get_noise_2d(
-		warped.x / (_config.macro_scale * 1.45), warped.y / (_config.macro_scale * 1.45)) * 0.78 + 0.5
-	temperature_value -= maxf(height - float(VoxelDefsScript.SEA_LEVEL), 0.0) * 0.0075
+		warped.x / (_config.biome_scale * 1.08), warped.y / (_config.biome_scale * 1.08)) * 0.78 + 0.5
+	temperature_value -= maxf(height - float(VoxelDefsScript.SEA_LEVEL), 0.0) * 0.0035
 	var moisture_value: float = _noises[CHANNEL_MOISTURE].get_noise_2d(
-		warped.x / (_config.macro_scale * 1.10), warped.y / (_config.macro_scale * 1.10)) * 0.78 + 0.5
-	moisture_value += river_value * 0.24
-	moisture_value -= maxf(height - float(VoxelDefsScript.SEA_LEVEL), 0.0) * 0.003
+		warped.x / (_config.biome_scale * 0.92), warped.y / (_config.biome_scale * 0.92)) * 0.78 + 0.5
+	moisture_value += river_value * 0.14
+	moisture_value -= maxf(height - float(VoxelDefsScript.SEA_LEVEL), 0.0) * 0.0015
 	return Vector2(clampf(temperature_value, 0.0, 1.0), clampf(moisture_value, 0.0, 1.0))
 
 
 ## x=closest climate biome, y=second closest, z=blend weight toward y (0..255).
-## ChunkTerrainData stores both choices plus a deterministic dithered dominant
-## biome for block and decoration selection.
+## ChunkTerrainData stores both choices for continuous tint blending. Discrete
+## surfaces and decorations use the primary biome so borders form broad,
+## coherent ecotones instead of one-block checkerboards.
 func _biome_choice(temperature_value: float, moisture_value: float) -> Vector3i:
 	var first: int = BiomeCatalog.PLAINS
 	var second: int = BiomeCatalog.FOREST
@@ -630,6 +629,11 @@ func _apply_biome_override(climate_biome: int, continental: float, height: float
 		return BiomeCatalog.BEACH
 	if profile >= TerrainProfileCatalog.MOUNTAINS and height > float(VoxelDefsScript.SEA_LEVEL) + 29.0:
 		return BiomeCatalog.HIGHLANDS
+	# Wet climate on uplands is forest, not swamp. Keeping swamp classification
+	# near sea level gives its mud, shallow pools, reeds, and mangroves a coherent
+	# terrain identity instead of scattering the label across wet mountains.
+	if climate_biome == BiomeCatalog.SWAMP and height > float(VoxelDefsScript.SEA_LEVEL) + 10.0:
+		return BiomeCatalog.FOREST
 	return climate_biome
 
 

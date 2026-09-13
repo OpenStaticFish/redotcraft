@@ -203,9 +203,9 @@ func _evict_if_needed() -> void:
 func _make_cache_prefix(config: WorldGenConfig) -> String:
 	# Include every validated config value. Cache residency can vary with job order,
 	# but this key and the pure tile solve guarantee the returned terrain cannot.
-	return "%d|%d|%.9f|%.9f|%d|%.9f|%.9f|%.9f|%.9f|%s|%.9f|%.9f" % [
+	return "%d|%d|%.9f|%.9f|%d|%.9f|%.9f|%.9f|%.9f|%.9f|%s|%.9f|%.9f" % [
 		config.seed, config.world_type, config.terrain_scale, config.tree_density,
-		config.worldgen_version, config.macro_scale, config.river_density,
+		config.worldgen_version, config.macro_scale, config.biome_scale, config.river_density,
 		config.erosion_strength, config.regional_erosion, str(config.hydraulic_erosion),
 		config.cave_density, config.decoration_density,
 	]

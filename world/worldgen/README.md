@@ -16,8 +16,8 @@ catalogs/samplers used by worker jobs. A chunk then runs these ordered stages:
 3. Analytic erosion, optional cached hydraulic erosion, and river carving alter
    heights before climate and surface selection.
 4. Temperature/moisture choose primary and secondary biomes. Continuous fields
-   shape terrain; primary biomes choose coherent surface blankets and
-   deterministic dithering varies decoration choices (not snow/sand coverage).
+   shape terrain and tint foliage/water; primary biomes choose coherent surface
+   blankets and decoration profiles without per-block biome dithering.
 5. `VoxelPopulator.populate()` fills strata, carves caves, adds liquids and ore
    veins, stamps global-cell decorations, then applies player edits last.
 6. `VoxelPopulator.populate_lod()` handles distance chunks: it writes compact
@@ -38,7 +38,8 @@ Defaults and persisted values live in `autoload/game_config.gd`; validation and
 ranges live in `world_gen_config.gd`.
 
 - `terrain_scale`: multiplies local relief; Amplified applies an additional scale.
-- `macro_scale`: size of continents and broad climate regions.
+- `macro_scale`: size of continents and broad terrain regions.
+- `biome_scale`: size of temperature/moisture regions, independent of landforms.
 - `river_density`: controls channel-mask width and can disable rivers at zero.
 - `erosion_strength`: local talus smoothing and profile terracing.
 - `regional_erosion`: broad rainfall/transport erosion strength.
@@ -59,9 +60,12 @@ amplitudes in blocks, smoothly blended across profiles and faded near shores.
 Increase these rather than shortening the mountain-region wavelength. The fine
 layer is deliberately weakest in plains so walking terrain stays usable.
 
-Spruce crowns use tapered whorls and an exposed lower trunk; broadleaf crowns
-use short hash-directed limbs and asymmetric rounded layers. Their maximum
-horizontal reach stays at three blocks, within the six-block feature halo.
+Forest, jungle, taiga, and swamp trees use broad deterministic grove fields with
+dense interiors and open clearings. Spruce crowns use tapered whorls and an
+exposed lower trunk; broadleaf crowns use short hash-directed limbs and
+asymmetric rounded layers. Their maximum horizontal reach stays at three blocks,
+within the six-block feature halo. Ecological flags keep dry plants on sand,
+reeds and mangroves near wet ground, and shade plants inside grove cover.
 
 ### Terrain-shape guardrails
 
@@ -99,6 +103,12 @@ to review it; an already-running world retains its configured sampler and chunks
   checks spruce taper/tips and repeatable, bounded broadleaf/spruce geometry
   across chunk edges. The main verifier also checks nonzero local detail and
   its amplitude budget, to guard against both flattening and runaway roughness.
+- `redot --headless --path . --script res://tools/worldgen_biome_verify.gd`
+  checks broad forest/swamp/jungle/taiga interiors, signature vegetation density,
+  biome-neighbor coherence, and the absence of procedural cobblestone debris.
+- `redot --headless --path . res://tools/player_target_verify.tscn`
+  checks that voxel traversal skips water and selects breakable cross plants even
+  though their meshes intentionally have no movement collision.
 - `redot --headless --path . --script res://tools/worldgen_lod_verify.gd`
   checks compact LOD columns against a decoration-free full chunk, distance-
   mesh top geometry, and full chunks meshing against compact neighbors.

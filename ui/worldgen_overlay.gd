@@ -306,7 +306,7 @@ func _build_ui() -> void:
 	title.name = "Title"
 	title.text = "WORLDGEN"
 	title.add_theme_font_size_override("font_size", 14)
-	title.add_theme_color_override("font_color", UITheme.TEAL)
+	title.add_theme_color_override("font_color", UITheme.EMBER)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	_mode_label = Label.new()
@@ -347,7 +347,7 @@ func _build_ui() -> void:
 	_marker.name = "Marker"
 	_marker.text = "+"
 	_marker.add_theme_font_size_override("font_size", 20)
-	_marker.add_theme_color_override("font_color", UITheme.INK)
+	_marker.add_theme_color_override("font_color", UITheme.EMBER_HI)
 	_marker.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.85))
 	_marker.add_theme_constant_override("shadow_offset_x", 1)
 	_marker.add_theme_constant_override("shadow_offset_y", 1)

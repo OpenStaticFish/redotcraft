@@ -145,27 +145,60 @@ func _physics_process(delta: float) -> void:
 func _update_target() -> void:
 	if world == null:
 		return
-	var query := PhysicsRayQueryParameters3D.create(
-		camera.global_position,
-		camera.global_position - camera.global_transform.basis.z * REACH)
-	query.collision_mask = VoxelDefs.COLLISION_LAYER_WORLD
-	query.exclude = [self]
-	var result := get_world_3d().direct_space_state.intersect_ray(query)
 	has_target = false
+	var result := _voxel_raycast(camera.global_position, -camera.global_transform.basis.z, REACH)
 	if result.is_empty():
 		_highlight.visible = false
 		return
-	var hit: Vector3 = result.get("position", Vector3.ZERO)
-	var normal: Vector3 = result.get("normal", Vector3.UP)
-	target_normal = Vector3i(roundi(normal.x), roundi(normal.y), roundi(normal.z))
-	target_block = Vector3i(
-		floori(hit.x - normal.x * 0.5),
-		floori(hit.y - normal.y * 0.5),
-		floori(hit.z - normal.z * 0.5)
-	)
+	target_block = result["block"]
+	target_normal = result["normal"]
 	has_target = true
 	_highlight.global_position = Vector3(target_block) + Vector3(0.5, 0.5, 0.5)
 	_highlight.visible = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+
+
+## Grid traversal targets rendered voxels directly instead of depending on
+## collision geometry. Cross plants stay non-solid to movement but can still be
+## selected, broken, and used as the face reference for block placement.
+func _voxel_raycast(origin: Vector3, direction_value: Vector3, max_distance: float) -> Dictionary:
+	var direction := direction_value.normalized()
+	var cell := Vector3i(floori(origin.x), floori(origin.y), floori(origin.z))
+	var step := Vector3i(
+		1 if direction.x > 0.0 else (-1 if direction.x < 0.0 else 0),
+		1 if direction.y > 0.0 else (-1 if direction.y < 0.0 else 0),
+		1 if direction.z > 0.0 else (-1 if direction.z < 0.0 else 0))
+	var delta := Vector3(
+		absf(1.0 / direction.x) if step.x != 0 else INF,
+		absf(1.0 / direction.y) if step.y != 0 else INF,
+		absf(1.0 / direction.z) if step.z != 0 else INF)
+	var next := Vector3(
+		(float(cell.x + 1) - origin.x) / direction.x if step.x > 0 else ((origin.x - float(cell.x)) / -direction.x if step.x < 0 else INF),
+		(float(cell.y + 1) - origin.y) / direction.y if step.y > 0 else ((origin.y - float(cell.y)) / -direction.y if step.y < 0 else INF),
+		(float(cell.z + 1) - origin.z) / direction.z if step.z > 0 else ((origin.z - float(cell.z)) / -direction.z if step.z < 0 else INF))
+	var entered_from := Vector3i.ZERO
+	var distance := 0.0
+	while distance <= max_distance:
+		var block_id := world.get_block_world(cell)
+		var water: bool = block_id == BlockRegistry.BLOCK_WATER \
+			or (block_id >= BlockRegistry.BLOCK_WATER_FLOW_7 and block_id <= BlockRegistry.BLOCK_WATER_FLOW_1)
+		if block_id != BlockRegistry.BLOCK_AIR and not water:
+			return {"block": cell, "normal": entered_from}
+		if next.x <= next.y and next.x <= next.z:
+			cell.x += step.x
+			distance = next.x
+			next.x += delta.x
+			entered_from = Vector3i(-step.x, 0, 0)
+		elif next.y <= next.z:
+			cell.y += step.y
+			distance = next.y
+			next.y += delta.y
+			entered_from = Vector3i(0, -step.y, 0)
+		else:
+			cell.z += step.z
+			distance = next.z
+			next.z += delta.z
+			entered_from = Vector3i(0, 0, -step.z)
+	return {}
 
 
 func _break_target() -> void:

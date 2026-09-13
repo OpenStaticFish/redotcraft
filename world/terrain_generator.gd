@@ -93,10 +93,8 @@ func _build_foliage_tints(field: ChunkTerrainData) -> PackedColorArray:
 		for local_x in VoxelDefs.CHUNK_SIZE:
 			var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
 			var field_index := ChunkTerrainData.cell_index(local_x, local_z)
-			# dominant_biome is intentionally dithered for discrete generation
-			# choices. Using it for a per-vertex material multiplier turned the
-			# dither into a visible dark/light checkerboard on grass blocks. Blend
-			# the continuous climate pair instead; both values are shared by
+			# Discrete generation uses the primary biome. Blend the continuous
+			# climate pair for foliage tint; both values are shared by
 			# adjacent chunk fields, so this remains deterministic and seam-safe.
 			var primary := _biomes.foliage_color(int(field.biome_id[field_index]))
 			var secondary := _biomes.foliage_color(int(field.biome_secondary_id[field_index]))
@@ -116,7 +114,10 @@ func _build_water_tints(field: ChunkTerrainData) -> PackedColorArray:
 		for local_x in VoxelDefs.CHUNK_SIZE:
 			var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
 			var field_index := ChunkTerrainData.cell_index(local_x, local_z)
-			tints[column] = _biomes.water_tint(int(field.dominant_biome[field_index]))
+			var primary := _biomes.water_tint(int(field.biome_id[field_index]))
+			var secondary := _biomes.water_tint(int(field.biome_secondary_id[field_index]))
+			var blend := float(field.biome_blend[field_index]) / 255.0
+			tints[column] = primary.lerp(secondary, blend)
 	return tints
 
 

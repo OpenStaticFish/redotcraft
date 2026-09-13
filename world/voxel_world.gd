@@ -8,7 +8,7 @@ const SPAWN_SEARCH_RADIUS := 12
 ## more and risks starving the main thread on smaller machines.
 const MIN_ACTIVE_JOBS := 4
 const MAX_ACTIVE_JOBS := 8
-const MAX_FULL_DETAIL_DISTANCE := 6
+const MAX_FULL_DETAIL_DISTANCE := 8
 const COMMIT_BUDGET_MS := 5
 const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4]
 const WATER_TICK_INTERVAL := 0.25
@@ -129,7 +129,7 @@ func _exit_tree() -> void:
 ## in flight: recreating the noise set invalidates running workers.
 func configure(world_config: Dictionary, render_distance_chunks: int) -> void:
 	render_distance = maxi(render_distance_chunks, 1)
-	lod_distance = clampi(render_distance / 3, 3, MAX_FULL_DETAIL_DISTANCE)
+	lod_distance = clampi(render_distance / 2, 3, MAX_FULL_DETAIL_DISTANCE)
 	unload_radius = render_distance + 2
 	_generator.configure(world_config)
 	_worldgen_revision += 1
@@ -137,7 +137,7 @@ func configure(world_config: Dictionary, render_distance_chunks: int) -> void:
 
 func set_render_distance(value: int) -> void:
 	render_distance = maxi(value, 1)
-	lod_distance = clampi(render_distance / 3, 3, MAX_FULL_DETAIL_DISTANCE)
+	lod_distance = clampi(render_distance / 2, 3, MAX_FULL_DETAIL_DISTANCE)
 	unload_radius = render_distance + 2
 	_rebuild_desired()
 	_unload_far()
@@ -675,6 +675,11 @@ func _find_column_spawn(block_x: int, block_z: int, scan_top: int) -> int:
 
 func get_block_name(block_id: int) -> String:
 	return _blocks.get_block_name(block_id)
+
+
+## Immutable block tables + texture array; used by HUD/inventory icon renderers.
+func get_registry() -> BlockRegistry:
+	return _blocks
 
 
 func get_biome_name(world_position: Vector3) -> String:

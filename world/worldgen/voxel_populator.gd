@@ -129,8 +129,6 @@ func _fill_base_and_surface(data: PackedByteArray, field: ChunkTerrainData) -> i
 				var block_id := BlockRegistryScript.BLOCK_STONE
 				if y == 0:
 					block_id = BlockRegistryScript.BLOCK_BEDROCK
-				elif y < 18 and WorldGenHashScript.float_01_3d(config.seed + 353, field.world_x(local_x), y, field.world_z(local_z)) < 0.07:
-					block_id = BlockRegistryScript.BLOCK_COBBLESTONE
 				data[_index(local_x, y, local_z)] = block_id
 			_apply_surface_rule(data, field, local_x, local_z, surface_y, water_y, is_river)
 			if water_y >= 0:
@@ -463,8 +461,8 @@ func _decorate(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, or
 	# This cache is strictly per populate() call. It avoids repeatedly resolving
 	# expensive immutable sampler queries without introducing worker-shared state.
 	var tree_ground_cache: Dictionary = {}
-	# Forest trees have a dedicated clustered pass. Rocks, flowers, and fallen
-	# logs retain their sparse independent lottery instead of competing with trees.
+	# Dense-biome trees have a dedicated clustered pass. Ground flora and sparse
+	# biome trees use the regular deterministic feature lattice below.
 	max_y = maxi(max_y, _decorate_tree_groves(data, field, origin_x, origin_z, tree_ground_cache))
 	var first_x: int = WorldGenHashScript.floor_div(origin_x - FEATURE_HALO, FEATURE_CELL_SIZE)
 	var last_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + FEATURE_HALO, FEATURE_CELL_SIZE)
@@ -485,16 +483,15 @@ func _decorate(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, or
 			if entry.is_empty():
 				continue
 			var feature: int = int(entry[0])
+			var flags: int = int(entry[3])
 			var probability: float = float(entry[2]) * config.decoration_density
-			if (int(entry[3]) & DecorationCatalog.FLAG_TREE) != 0:
+			if (flags & DecorationCatalog.FLAG_TREE) != 0:
 				probability *= config.tree_density
 			if WorldGenHashScript.float_01_2d(config.seed + 1129, cell_x, cell_z) >= minf(0.94, probability):
 				continue
-			# Grassland trees still use the legacy sparse lottery (including the
-			# savanna's current oak selection), but share the immutable surface and
-			# hillside test used by grove trees. Mangroves are intentionally excluded:
-			# their water-edge root template is a separate valid case.
-			if (int(entry[3]) & DecorationCatalog.FLAG_TREE) != 0 and feature != DecorationCatalog.FEATURE_MANGROVE:
+			if not _feature_site_is_valid(field, tree_ground_cache, world_x, ground.x, world_z, flags):
+				continue
+			if (flags & DecorationCatalog.FLAG_TREE) != 0 and feature != DecorationCatalog.FEATURE_MANGROVE:
 				if not _tree_site_is_safe(field, tree_ground_cache, world_x, ground.x, world_z, _tree_footprint_for(feature), _tree_top_offset_for(feature, hash_value)):
 					continue
 			max_y = maxi(max_y, _stamp_feature(data, origin_x, origin_z, world_x, ground.x, world_z, feature, hash_value))
@@ -523,7 +520,7 @@ func _decorate_tree_groves(data: PackedByteArray, field: ChunkTerrainData, origi
 			var world_x: int = cell_x * TREE_CELL_SIZE + 2 + anchor_hash % 2
 			var world_z: int = cell_z * TREE_CELL_SIZE + 2 + (anchor_hash / 23) % 2
 			var ground := _cached_decoration_ground(field, world_x, world_z, ground_cache)
-			if ground.x <= VoxelDefsScript.SEA_LEVEL + 1:
+			if ground.x < VoxelDefsScript.SEA_LEVEL - 3:
 				continue
 			var decoration_set: int = biomes.decoration_set(ground.y)
 			if not _uses_grove_trees(decoration_set):
@@ -539,16 +536,21 @@ func _decorate_tree_groves(data: PackedByteArray, field: ChunkTerrainData, origi
 			var feature: int = int(entry[0])
 			var footprint: int = _tree_footprint_for(feature)
 			var top_offset: int = _tree_top_offset_for(feature, feature_hash)
-			if not _tree_site_is_safe(field, ground_cache, world_x, ground.x, world_z, footprint, top_offset):
+			var flags: int = int(entry[3])
+			if not _feature_site_is_valid(field, ground_cache, world_x, ground.x, world_z, flags):
 				continue
+			if feature != DecorationCatalog.FEATURE_MANGROVE:
+				if not _tree_site_is_safe(field, ground_cache, world_x, ground.x, world_z, footprint, top_offset):
+					continue
 			max_y = maxi(max_y, _stamp_feature(data, origin_x, origin_z, world_x, ground.x, world_z, feature, feature_hash))
 	return max_y
 
 
 func _uses_grove_trees(decoration_set: int) -> bool:
 	return decoration_set == BiomeCatalogScript.DECORATION_FOREST \
-		or decoration_set == BiomeCatalogScript.DECORATION_CONIFER \
-		or decoration_set == BiomeCatalogScript.DECORATION_TROPICAL
+		or decoration_set == BiomeCatalogScript.DECORATION_TAIGA \
+		or decoration_set == BiomeCatalogScript.DECORATION_TROPICAL \
+		or decoration_set == BiomeCatalogScript.DECORATION_SWAMP
 
 
 ## A nearby accepted grove cell contributes a rounded density field. Searching
@@ -561,11 +563,11 @@ func _tree_grove_strength(world_x: int, world_z: int) -> float:
 	for grove_z in range(cell_z - TREE_GROVE_SEARCH_RADIUS, cell_z + TREE_GROVE_SEARCH_RADIUS + 1):
 		for grove_x in range(cell_x - TREE_GROVE_SEARCH_RADIUS, cell_x + TREE_GROVE_SEARCH_RADIUS + 1):
 			var grove_hash: int = WorldGenHashScript.hash_2d(config.seed + 1277, grove_x, grove_z)
-			if float(grove_hash % 1000) / 1000.0 >= 0.72:
+			if float(grove_hash % 1000) / 1000.0 >= 0.80:
 				continue
 			var center_x: int = grove_x * TREE_GROVE_CELL_SIZE + 10 + grove_hash % 29
 			var center_z: int = grove_z * TREE_GROVE_CELL_SIZE + 10 + (grove_hash / 37) % 29
-			var radius: float = float(17 + (grove_hash / 73) % 8)
+			var radius: float = float(22 + (grove_hash / 73) % 9)
 			var dx: float = float(world_x - center_x)
 			var dz: float = float(world_z - center_z)
 			var distance: float = sqrt(dx * dx + dz * dz)
@@ -579,12 +581,42 @@ func _grove_tree_probability(decoration_set: int, grove_strength: float) -> floa
 	var base := 0.0
 	match decoration_set:
 		BiomeCatalogScript.DECORATION_FOREST:
-			base = 0.78
-		BiomeCatalogScript.DECORATION_CONIFER:
-			base = 0.70
+			base = 0.94
+		BiomeCatalogScript.DECORATION_TAIGA:
+			base = 0.90
 		BiomeCatalogScript.DECORATION_TROPICAL:
-			base = 0.88
+			base = 0.96
+		BiomeCatalogScript.DECORATION_SWAMP:
+			base = 0.86
 	return minf(0.96, base * grove_strength * config.tree_density * config.decoration_density)
+
+
+## Placement flags are evaluated from immutable terrain samples so every chunk
+## touching a cross-border feature reaches the same ecological decision.
+func _feature_site_is_valid(field: ChunkTerrainData, ground_cache: Dictionary, world_x: int, ground_y: int, world_z: int, flags: int) -> bool:
+	if ground_y < 1 or ground_y + 1 >= VoxelDefsScript.WORLD_HEIGHT:
+		return false
+	var site_biome: int = _cached_decoration_ground(field, world_x, world_z, ground_cache).y
+	if (flags & DecorationCatalog.FLAG_DRY_GROUND) != 0:
+		var surface_block: int = biomes.surface_block(site_biome)
+		if surface_block != BlockRegistryScript.BLOCK_SAND and surface_block != BlockRegistryScript.BLOCK_RED_SAND:
+			return false
+	if (flags & DecorationCatalog.FLAG_WATER_EDGE) != 0:
+		var max_water_edge_y := VoxelDefsScript.SEA_LEVEL + (5 if site_biome == BiomeCatalogScript.SWAMP else 2)
+		var near_water := ground_y < VoxelDefsScript.SEA_LEVEL \
+			or (site_biome == BiomeCatalogScript.SWAMP and ground_y <= max_water_edge_y)
+		for direction in VoxelDefsScript.DIRS_4:
+			var neighbor := _cached_decoration_ground(
+				field, world_x + direction.x * 2, world_z + direction.y * 2, ground_cache)
+			if neighbor.x < VoxelDefsScript.SEA_LEVEL:
+				near_water = true
+				break
+		if not near_water or ground_y > max_water_edge_y:
+			return false
+	if (flags & DecorationCatalog.FLAG_SHADE) != 0:
+		if _tree_grove_strength(world_x, world_z) < 0.18:
+			return false
+	return true
 
 
 func _tree_footprint_for(feature: int) -> int:
@@ -765,7 +797,7 @@ func _stamp_feature(data: PackedByteArray, origin_x: int, origin_z: int, world_x
 		DecorationCatalog.FEATURE_RED_MUSHROOM:
 			return _place(data, origin_x, origin_z, world_x, ground_y + 1, world_z, BlockRegistryScript.BLOCK_RED_MUSHROOM) + 1
 		DecorationCatalog.FEATURE_REEDS:
-			return _stamp_vertical(data, origin_x, origin_z, world_x, ground_y + 1, world_z, BlockRegistryScript.BLOCK_TALL_GRASS, 2 + hash_value % 2)
+			return _stamp_vertical(data, origin_x, origin_z, world_x, maxi(ground_y + 1, VoxelDefsScript.SEA_LEVEL + 1), world_z, BlockRegistryScript.BLOCK_TALL_GRASS, 2 + hash_value % 2)
 		_:
 			return _place(data, origin_x, origin_z, world_x, ground_y + 1, world_z, BlockRegistryScript.BLOCK_TALL_GRASS) + 1
 
@@ -843,14 +875,17 @@ func _stamp_acacia(data: PackedByteArray, origin_x: int, origin_z: int, world_x:
 
 
 func _stamp_mangrove(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, ground_y: int, world_z: int) -> int:
-	for y in range(-2, 5):
-		var block_id: int = BlockRegistryScript.BLOCK_MANGROVE_ROOTS if y <= 0 else BlockRegistryScript.BLOCK_MANGROVE_LOG
-		_place(data, origin_x, origin_z, world_x, ground_y + y, world_z, block_id)
+	var base_y := maxi(ground_y, VoxelDefsScript.SEA_LEVEL - 1)
+	_place_replaceable(data, origin_x, origin_z, world_x, base_y + 1, world_z, BlockRegistryScript.BLOCK_MANGROVE_ROOTS)
+	for direction in VoxelDefsScript.DIRS_4:
+		_place_replaceable(data, origin_x, origin_z, world_x + direction.x, base_y + 1, world_z + direction.y, BlockRegistryScript.BLOCK_MANGROVE_ROOTS)
+	for y in range(2, 7):
+		_place_replaceable(data, origin_x, origin_z, world_x, base_y + y, world_z, BlockRegistryScript.BLOCK_MANGROVE_LOG)
 	for dz in range(-2, 3):
 		for dx in range(-2, 3):
 			if dx * dx + dz * dz <= 5:
-				_place(data, origin_x, origin_z, world_x + dx, ground_y + 5, world_z + dz, BlockRegistryScript.BLOCK_MANGROVE_LEAVES)
-	return ground_y + 5
+				_place(data, origin_x, origin_z, world_x + dx, base_y + 7, world_z + dz, BlockRegistryScript.BLOCK_MANGROVE_LEAVES)
+	return base_y + 7
 
 
 func _stamp_vertical(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, start_y: int, world_z: int, block_id: int, height: int) -> int:
@@ -884,6 +919,21 @@ func _place(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, y
 		return -1
 	var voxel_index: int = _index(local_x, y, local_z)
 	if data[voxel_index] == BlockRegistryScript.BLOCK_AIR:
+		data[voxel_index] = block_id
+		return y
+	return -1
+
+
+func _place_replaceable(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, y: int, world_z: int, block_id: int) -> int:
+	var local_x: int = world_x - origin_x
+	var local_z: int = world_z - origin_z
+	if local_x < 0 or local_x >= VoxelDefsScript.CHUNK_SIZE or local_z < 0 or local_z >= VoxelDefsScript.CHUNK_SIZE or y < 0 or y >= VoxelDefsScript.WORLD_HEIGHT:
+		return -1
+	var voxel_index: int = _index(local_x, y, local_z)
+	var current: int = data[voxel_index]
+	var water: bool = current == BlockRegistryScript.BLOCK_WATER \
+		or (current >= BlockRegistryScript.BLOCK_WATER_FLOW_7 and current <= BlockRegistryScript.BLOCK_WATER_FLOW_1)
+	if current == BlockRegistryScript.BLOCK_AIR or water:
 		data[voxel_index] = block_id
 		return y
 	return -1

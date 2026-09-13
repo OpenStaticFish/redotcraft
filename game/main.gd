@@ -9,9 +9,11 @@ const HOTBAR: Array[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 27]
 const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32, 27: 32}
 const STATS_INTERVAL := 0.25
 const NEAR_SHADOW_DISTANCE := 6.0
-const SLOT_WIDTH := 92.0
-const SLOT_HEIGHT := 64.0
-const SLOT_GAP := 6.0
+const SLOT_WIDTH := 76.0
+const SLOT_HEIGHT := 76.0
+const SLOT_GAP := 8.0
+const SLOT_MARGIN := 10.0
+const SLOT_ICON := 46.0
 
 @onready var world: VoxelWorld = $World
 @onready var player: Player = $Player
@@ -28,19 +30,26 @@ const SLOT_GAP := 6.0
 @onready var _inventory_overlay: InventoryOverlay = $InventoryOverlay
 
 var slot_panels: Array[PanelContainer] = []
-var slot_labels: Array[Label] = []
+var slot_icons: Array[TextureRect] = []
+var slot_key_labels: Array[Label] = []
+var slot_count_labels: Array[Label] = []
 var selected_slot := 0
 var status_time := 6.0
 var inventory: Dictionary = INITIAL_INVENTORY.duplicate()
 var _pause_menu: PauseMenu
 var _stats_time := 0.0
 var _worldgen_overlay: WorldgenOverlay
+var _selection_chip: Label
+var _hotbar_slot_size := SLOT_WIDTH
+var _hotbar_icon_size := SLOT_ICON
 
 
 func _ready() -> void:
 	_hud_root.theme = UITheme.build()
+	_style_hud()
 	_apply_config()
 	_build_hotbar()
+	_build_crosshair()
 	_build_pause_menu()
 	_connect_player()
 	_inventory_overlay.opened.connect(_on_inventory_opened)
@@ -209,52 +218,199 @@ func _build_pause_menu() -> void:
 	_pause_menu.quit_requested.connect(_on_quit_game)
 
 
+func _style_hud() -> void:
+	# Instrument chips: coords read out position, stats read out telemetry.
+	var chip := UITheme.chip_style()
+	_coords_label.add_theme_font_override("font", UITheme.font_semi())
+	_coords_label.add_theme_font_size_override("font_size", 14)
+	_coords_label.add_theme_color_override("font_color", UITheme.INK)
+	var coords_panel := _coords_label.get_parent() as PanelContainer
+	coords_panel.add_theme_stylebox_override("panel", chip)
+	_stats_label.add_theme_font_override("font", UITheme.font_semi())
+	_stats_label.add_theme_font_size_override("font_size", 14)
+	_stats_label.add_theme_color_override("font_color", UITheme.MUTED)
+	var stats_panel := _stats_label.get_parent() as PanelContainer
+	stats_panel.add_theme_stylebox_override("panel", chip.duplicate())
+
+	# Selection chip floats above the hotbar; status toast above that.
+	_selection_chip = Label.new()
+	_selection_chip.name = "SelectionChip"
+	_selection_chip.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_selection_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_selection_chip.add_theme_font_override("font", UITheme.font_semi())
+	_selection_chip.add_theme_font_size_override("font_size", 15)
+	_selection_chip.add_theme_color_override("font_color", UITheme.EMBER_HI)
+	_selection_chip.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.75))
+	_selection_chip.add_theme_constant_override("shadow_offset_x", 1)
+	_selection_chip.add_theme_constant_override("shadow_offset_y", 1)
+	_selection_chip.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_hud_root.add_child(_selection_chip)
+	_selection_chip.offset_left = -160.0
+	_selection_chip.offset_top = -148.0
+	_selection_chip.offset_right = 160.0
+	_selection_chip.offset_bottom = -126.0
+	_selection_chip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
+	_status_label.offset_top = -172.0
+	_status_label.offset_bottom = -146.0
+	_status_label.add_theme_font_override("font", UITheme.font_semi())
+	_status_label.add_theme_font_size_override("font_size", 15)
+	_status_label.add_theme_color_override("font_color", UITheme.INK_DIM)
+
+
+func _build_crosshair() -> void:
+	# Replace the text "+" with hairline ticks and a dot, each with a dark
+	# backing rect so it stays readable against sky and caves alike.
+	var old := _hud_root.get_node_or_null("Crosshair") as Label
+	if old != null:
+		old.visible = false
+	var reticle := Control.new()
+	reticle.name = "CrosshairReticle"
+	reticle.set_anchors_preset(Control.PRESET_CENTER)
+	reticle.custom_minimum_size = Vector2(34.0, 34.0)
+	reticle.size = Vector2(34.0, 34.0)
+	reticle.position = Vector2(-17.0, -17.0)
+	reticle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ink := Color(0.95, 0.92, 0.83, 0.92)
+	var backing := Color(0.0, 0.0, 0.0, 0.5)
+	for spec in [
+		[Vector2(16, 3), Vector2(2, 8)],
+		[Vector2(16, 23), Vector2(2, 8)],
+		[Vector2(3, 16), Vector2(8, 2)],
+		[Vector2(23, 16), Vector2(8, 2)],
+	]:
+		var tick_pos: Vector2 = spec[0]
+		var tick_size: Vector2 = spec[1]
+		var shadow := ColorRect.new()
+		shadow.color = backing
+		shadow.position = tick_pos + Vector2(1, 1)
+		shadow.size = tick_size
+		shadow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		reticle.add_child(shadow)
+		var rect := ColorRect.new()
+		rect.color = ink
+		rect.position = tick_pos
+		rect.size = tick_size
+		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		reticle.add_child(rect)
+	var dot_shadow := ColorRect.new()
+	dot_shadow.color = backing
+	dot_shadow.position = Vector2(17, 17)
+	dot_shadow.size = Vector2(2, 2)
+	dot_shadow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	reticle.add_child(dot_shadow)
+	var dot := ColorRect.new()
+	dot.color = ink
+	dot.position = Vector2(16, 16)
+	dot.size = Vector2(2, 2)
+	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	reticle.add_child(dot)
+	_hud_root.add_child(reticle)
+
+
 func _build_hotbar() -> void:
-	var hotbar_width := HOTBAR.size() * SLOT_WIDTH + (HOTBAR.size() - 1) * SLOT_GAP + 18.0
+	var slot_count := HOTBAR.size()
+	var available_width := get_viewport().get_visible_rect().size.x - 24.0
+	_hotbar_slot_size = minf(SLOT_WIDTH, floorf(
+		(available_width - SLOT_MARGIN * 2.0 - (slot_count - 1) * SLOT_GAP) / slot_count))
+	_hotbar_icon_size = minf(SLOT_ICON, _hotbar_slot_size - 22.0)
+	var hotbar_width := slot_count * _hotbar_slot_size + (slot_count - 1) * SLOT_GAP + SLOT_MARGIN * 2.0
 	_hotbar.offset_left = -hotbar_width * 0.5
-	_hotbar.offset_top = -104.0
+	_hotbar.offset_top = -110.0
 	_hotbar.offset_right = hotbar_width * 0.5
-	_hotbar.offset_bottom = -22.0
-	_hotbar.add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.PANEL, UITheme.BORDER, 1, 10))
+	_hotbar.offset_bottom = -14.0
+	var empty := StyleBoxEmpty.new()
+	_hotbar.add_theme_stylebox_override("panel", empty)
 
 	var row := HBoxContainer.new()
-	row.position = Vector2(9.0, 9.0)
-	row.size = Vector2(hotbar_width - 18.0, SLOT_HEIGHT)
+	row.name = "Slots"
+	row.set_anchors_preset(Control.PRESET_FULL_RECT)
+	row.offset_left = SLOT_MARGIN
+	row.offset_right = -SLOT_MARGIN
+	row.offset_top = SLOT_MARGIN
+	row.offset_bottom = -SLOT_MARGIN
 	row.add_theme_constant_override("separation", int(SLOT_GAP))
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hotbar.add_child(row)
 
-	for index in HOTBAR.size():
+	for index in slot_count:
 		var slot := PanelContainer.new()
-		slot.custom_minimum_size = Vector2(SLOT_WIDTH, SLOT_HEIGHT)
+		slot.custom_minimum_size = Vector2(_hotbar_slot_size, minf(SLOT_HEIGHT, _hotbar_slot_size))
 		slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		slot.clip_contents = false
 		row.add_child(slot)
 		slot_panels.append(slot)
-		var label := Label.new()
-		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		label.add_theme_font_size_override("font_size", 12)
-		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		slot.add_child(label)
-		slot_labels.append(label)
+
+		var overlay := Control.new()
+		overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		slot.add_child(overlay)
+
+		var icon := TextureRect.new()
+		icon.name = "Icon"
+		var content := _hotbar_slot_size - 12.0
+		icon.custom_minimum_size = Vector2(_hotbar_icon_size, _hotbar_icon_size)
+		icon.size = Vector2(_hotbar_icon_size, _hotbar_icon_size)
+		icon.position = Vector2((content - _hotbar_icon_size) * 0.5, (content - _hotbar_icon_size) * 0.5)
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		overlay.add_child(icon)
+		slot_icons.append(icon)
+
+		var key_label := Label.new()
+		key_label.text = _slot_key_hint(index)
+		key_label.position = Vector2(1, 0)
+		key_label.add_theme_font_override("font", UITheme.font_semi())
+		key_label.add_theme_font_size_override("font_size", 10)
+		key_label.add_theme_color_override("font_color", UITheme.FAINT)
+		key_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		overlay.add_child(key_label)
+		slot_key_labels.append(key_label)
+
+		var count_label := Label.new()
+		count_label.position = Vector2(0, _hotbar_slot_size - 12.0 - 17.0)
+		count_label.size = Vector2(_hotbar_slot_size - 12.0, 16)
+		count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		count_label.add_theme_font_override("font", UITheme.font_semi())
+		count_label.add_theme_font_size_override("font_size", 13)
+		count_label.add_theme_color_override("font_color", UITheme.INK_DIM)
+		count_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
+		count_label.add_theme_constant_override("shadow_offset_x", 1)
+		count_label.add_theme_constant_override("shadow_offset_y", 1)
+		count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		overlay.add_child(count_label)
+		slot_count_labels.append(count_label)
 
 	_update_slot_styles()
+
+
+func _slot_key_hint(index: int) -> String:
+	if index < 9:
+		return str(index + 1)
+	if index == 9:
+		return "0"
+	return ""
 
 
 func _update_slot_styles() -> void:
 	for index in slot_panels.size():
 		var selected := index == selected_slot
 		var style := UITheme.panel_style(
-			Color(0.16, 0.3, 0.3, 0.96) if selected else Color(0.06, 0.11, 0.13, 0.92),
-			UITheme.TEAL if selected else Color(0.45, 0.65, 0.64, 0.3),
+			Color(0.128, 0.176, 0.208, 0.95) if selected else Color(UITheme.SURFACE.r, UITheme.SURFACE.g, UITheme.SURFACE.b, 0.9),
+			UITheme.EMBER if selected else UITheme.LINE,
 			2 if selected else 1,
-			6)
+			10)
 		style.content_margin_left = 6.0
 		style.content_margin_right = 6.0
 		style.content_margin_top = 6.0
 		style.content_margin_bottom = 6.0
 		slot_panels[index].add_theme_stylebox_override("panel", style)
-		slot_labels[index].add_theme_color_override("font_color", Color.WHITE if selected else UITheme.INK)
+		slot_count_labels[index].add_theme_color_override("font_color",
+			UITheme.EMBER_HI if selected else UITheme.INK_DIM)
+		slot_key_labels[index].add_theme_color_override("font_color",
+			UITheme.CYAN if selected else UITheme.FAINT)
 
 
 func activate_pause() -> void:
@@ -329,8 +485,13 @@ func _on_block_placed(block_id: int) -> void:
 func select_slot(index: int) -> void:
 	selected_slot = clampi(index, 0, HOTBAR.size() - 1)
 	_update_slot_styles()
+	Motion.pulse(slot_panels[selected_slot])
 	if player:
 		player.set_selected_block(HOTBAR[selected_slot])
+	if _selection_chip != null and world != null:
+		_selection_chip.text = "%s · ×%d" % [
+			world.get_block_name(HOTBAR[selected_slot]).to_lower(),
+			inventory.get(HOTBAR[selected_slot], 0)]
 	set_status("Selected %s (%d)" % [world.get_block_name(HOTBAR[selected_slot]), inventory.get(HOTBAR[selected_slot], 0)])
 
 
@@ -350,19 +511,22 @@ func consume_selected_block() -> void:
 
 
 func _update_inventory_display() -> void:
-	for index in slot_labels.size():
+	var registry := world.get_registry()
+	for index in slot_icons.size():
 		var block_id: int = HOTBAR[index]
-		var key_label := str(index + 1)
-		if index == 9:
-			key_label = "0"
-		elif index > 9:
-			key_label = ""
-		slot_labels[index].text = "%s  %s\n   x%d" % [key_label, world.get_block_name(block_id), inventory.get(block_id, 0)]
+		if registry != null:
+			slot_icons[index].texture = BlockIcon.make_icon(registry, block_id, int(_hotbar_icon_size))
+		slot_count_labels[index].text = "×%d" % inventory.get(block_id, 0)
+	if _selection_chip != null:
+		_selection_chip.text = "%s · ×%d" % [
+			world.get_block_name(HOTBAR[selected_slot]).to_lower(),
+			inventory.get(HOTBAR[selected_slot], 0)]
 
 
 func set_status(message: String) -> void:
 	_status_label.text = message
 	status_time = 3.5
+	Motion.fade_in(_status_label)
 
 
 func _update_camera_far(render_distance: int) -> void:
