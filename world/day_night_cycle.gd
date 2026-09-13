@@ -52,6 +52,14 @@ const RAIN_FOG_NIGHT := Color(0.045, 0.055, 0.085)
 const RAIN_FOG_ADD := 0.01
 const RAIN_SUN_FACTOR := 0.4
 const RAIN_AMBIENT_FACTOR := 0.7
+# Water's additive surface terms are emission, so they need the time-of-day sky
+# strength to fade out after dark instead of glowing like a lit pool.
+const NIGHT_SKY_LIGHT := 0.05
+# Volumetric fog: denser at night and thickest in the dawn/dusk mist band,
+# plus a rain boost (the preset value stays the clear-day baseline).
+const VOLUMETRIC_FOG_NIGHT_SCALE := 1.25
+const VOLUMETRIC_FOG_DAWN_SCALE := 1.6
+const RAIN_VOLUMETRIC_SCALE := 1.5
 
 @export var sun_path := NodePath("../Sun")
 @export var fill_light_path := NodePath("../SkyFill")
@@ -71,6 +79,7 @@ const RAIN_AMBIENT_FACTOR := 0.7
 var time_hours := 0.0
 var weather_dim := 0.0
 var base_fog_density := 0.006
+var base_volumetric_fog_density := 0.006
 var base_saturation := 1.08
 var base_contrast := 1.04
 var _sky_material: ShaderMaterial
@@ -132,10 +141,14 @@ func _apply() -> void:
 	environment.ambient_light_energy = lerpf(AMBIENT_NIGHT_ENERGY, AMBIENT_DAY_ENERGY, day_factor) * lerpf(1.0, RAIN_AMBIENT_FACTOR, weather_dim)
 	environment.fog_light_color = FOG_DAY_COLOR.lerp(FOG_NIGHT_COLOR, night_amount).lerp(RAIN_FOG_NIGHT.lerp(RAIN_FOG_DAY, day_factor), weather_dim)
 	environment.fog_density = base_fog_density + RAIN_FOG_ADD * weather_dim
+	var dawn_mist := lerpf(1.0, VOLUMETRIC_FOG_DAWN_SCALE, horizon_factor)
+	var night_scale := lerpf(VOLUMETRIC_FOG_NIGHT_SCALE, 1.0, day_factor)
+	environment.volumetric_fog_density = base_volumetric_fog_density * dawn_mist * night_scale * lerpf(1.0, RAIN_VOLUMETRIC_SCALE, weather_dim)
 	environment.glow_hdr_threshold = lerpf(GLOW_THRESHOLD_NIGHT, GLOW_THRESHOLD_DAY, day_factor)
 	environment.adjustment_enabled = true
 	environment.adjustment_saturation = base_saturation * lerpf(NIGHT_SATURATION, 1.0, day_factor)
 	environment.adjustment_contrast = base_contrast * lerpf(NIGHT_CONTRAST, 1.0, day_factor)
+	RenderingServer.global_shader_parameter_set("sky_light_strength", lerpf(NIGHT_SKY_LIGHT, 1.0, day_factor) * weather_factor)
 	if _clouds:
 		var cloud_tint := CLOUD_DAY_TINT.lerp(CLOUD_NIGHT_TINT, night_amount)
 		_clouds.set_sky_tint(cloud_tint.lerp(RAIN_CLOUD_NIGHT.lerp(RAIN_CLOUD_DAY, day_factor), weather_dim))

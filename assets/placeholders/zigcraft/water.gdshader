@@ -17,6 +17,10 @@ uniform float foam_amount = 0.025;
 uniform float refraction_strength = 0.28;
 uniform float refraction_mix = 0.48;
 uniform float chromatic_strength = 0.0;
+// Day/night sky strength (1 at noon, NIGHT_SKY_LIGHT at midnight) driven by
+// DayNightCycle. The additive tint/sheen/foam terms are already emission, so
+// without this they keep glowing after the terrain has gone dark.
+global uniform float sky_light_strength;
 
 varying vec2 world_xz;
 varying float face_up;
@@ -124,11 +128,16 @@ void fragment() {
 	// Keep the sandy shallows readable, but absorb the seabed progressively
 	// with depth instead of showing distant gravel through glass-clear ocean.
 	vec3 transmission = exp(-vec3(0.18, 0.09, 0.045) * thickness);
+	// Sky exposure scaled by the time-of-day strength; the tint, sheen, and
+	// foam terms follow the sun so nights stay dark while block light keeps
+	// its warm glow (added below, unaffected).
+	float sky = light_data.a * sky_light_strength;
+	float sky_floor = max(light_data.a, 0.05) * sky_light_strength;
 	vec3 surface = refracted * transmission;
-	surface += tint * (vec3(1.0) - transmission) * max(light_data.a, 0.05);
-	surface += tint * (0.06 + fresnel * 0.10);
-	surface += sky_reflection * fresnel * 0.08 * light_data.a;
-	surface += foam_color * foam * foam_amount * max(light_data.a, 0.05);
+	surface += tint * (vec3(1.0) - transmission) * sky_floor;
+	surface += tint * (0.06 + fresnel * 0.10) * sky_light_strength;
+	surface += sky_reflection * fresnel * 0.08 * sky;
+	surface += foam_color * foam * foam_amount * sky_floor;
 	surface += water_color.rgb * block_light * 0.35;
 	float deep = 1.0 - exp(-thickness / max(depth_fade, 0.01) * 0.288);
 	float alpha = clamp(mix(refraction_mix, 0.96, deep) + fresnel * 0.04, 0.0, 1.0);

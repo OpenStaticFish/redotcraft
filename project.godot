@@ -108,3 +108,10 @@ scaling_3d/scale=0.77
 environment/defaults/default_clear_color=Color(0.38, 0.65, 0.86, 1)
 lights_and_shadows/directional_shadow/size=16384
 textures/default_filters/use_nearest_mipmap_filter=true
+
+[shader_globals]
+
+sky_light_strength={
+"type": "float",
+"value": 1.0
+}

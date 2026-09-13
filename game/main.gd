@@ -158,7 +158,8 @@ func _apply_graphics() -> void:
 	_environment.sdfgi_enabled = bool(graphics["sdfgi"])
 	_environment.ssr_enabled = bool(graphics["ssr"])
 	_environment.volumetric_fog_enabled = bool(graphics["volumetric_fog"])
-	_environment.volumetric_fog_density = float(graphics["volumetric_fog_density"])
+	# DayNightCycle owns the per-time-of-day modulation of this density.
+	_day_night.base_volumetric_fog_density = float(graphics["volumetric_fog_density"])
 	_environment.volumetric_fog_length = float(graphics["volumetric_fog_length"])
 	_environment.volumetric_fog_anisotropy = float(graphics["volumetric_fog_anisotropy"])
 	_environment.fog_density = float(graphics["fog_density"])
