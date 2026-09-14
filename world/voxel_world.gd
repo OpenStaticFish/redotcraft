@@ -16,6 +16,12 @@ const MAX_FULL_DETAIL_DISTANCE := 32
 ## for every loaded chunk.
 const COLLISION_DISTANCE := 6
 const COMMIT_BUDGET_MS := 5
+## Diagnostic map rasters resolve one mode sample per pixel. The final-height
+## family walks the erosion graph five times per sample, so map views request
+## fewer pixels for those modes instead of freezing their refresh for seconds.
+const DEBUG_MAP_MAX_RESOLUTION := 128
+const DEBUG_MAP_HEAVY_RESOLUTION := 64
+const DEBUG_MAP_HEAVY_MODES: Array[String] = ["height", "raw_height", "slope"]
 const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4]
 const WATER_TICK_INTERVAL := 0.25
 const WATER_CELLS_PER_TICK := 1024
@@ -775,9 +781,17 @@ func get_worldgen_stats() -> Dictionary:
 ## Starts or polls an asynchronous diagnostic-map request. The expensive noise
 ## sampling never blocks the main thread; callers receive `pending = true`
 ## until the immutable worker result is available.
-func request_debug_map(mode: String, center: Vector2i, sample_size: int, stride: int) -> Dictionary:
+##
+## `sample_size` is the requested raster width in pixels (and `stride` the
+## requested blocks per pixel): `max_resolution` caps the pixels actually
+## sampled, and the stride is scaled so the requested world span is preserved.
+## The default 32 keeps the F3 overlay's historical detail and cost; the HUD
+## map views pass a higher cap for sharper rasters.
+func request_debug_map(mode: String, center: Vector2i, sample_size: int, stride: int, max_resolution: int = 32) -> Dictionary:
 	_collect_debug_map()
-	var resolution := clampi(sample_size, 16, 32)
+	var resolution := clampi(sample_size, 16, clampi(max_resolution, 16, DEBUG_MAP_MAX_RESOLUTION))
+	if mode in DEBUG_MAP_HEAVY_MODES:
+		resolution = mini(resolution, DEBUG_MAP_HEAVY_RESOLUTION)
 	var resolution_scale := maxi(1, ceili(float(sample_size) / float(resolution)))
 	var safe_stride := clampi(stride * resolution_scale, 1, 32)
 	var key := "%s:%d:%d:%d:%d:%d" % [mode, center.x, center.y, resolution, safe_stride, _worldgen_revision]
