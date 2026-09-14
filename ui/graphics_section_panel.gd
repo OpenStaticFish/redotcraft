@@ -20,7 +20,7 @@ var _first_control: Control
 
 
 func _ready() -> void:
-	theme = UITheme.build()
+	UITheme.apply(self)
 	_style_static()
 	_back_button.pressed.connect(close_panel)
 	_rebuild()
@@ -53,9 +53,7 @@ func _style_static() -> void:
 	_panel.add_theme_stylebox_override("panel", UITheme.modal_style())
 	_heading.text = section_title.capitalize()
 	_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_heading.add_theme_font_override("font", UITheme.font_display())
-	_heading.add_theme_font_size_override("font_size", UITheme.SIZE_DISPLAY)
-	_heading.add_theme_color_override("font_color", UITheme.INK)
+	UITheme.style_heading(_heading)
 	var box := _heading.get_parent() as VBoxContainer
 	var eyebrow := UITheme.eyebrow("Advanced Graphics")
 	box.add_child(eyebrow)
