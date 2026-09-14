@@ -73,6 +73,21 @@ func _run() -> void:
 				and maxi(absi(pos.x - center.x), absi(pos.y - center.y)) > VoxelWorld.COLLISION_DISTANCE + 1:
 			_fail("stale collision shape was not dropped at %s" % pos)
 
+	# Photo-mode re-targets stream asynchronously, but a re-target that is about
+	# to unfreeze physics must rebuild the 3x3 ring synchronously so the player
+	# cannot drop into unloaded space.
+	var remote := Node3D.new()
+	root.add_child(remote)
+	remote.global_position = Vector3(-4096, 0, -4096)
+	var loaded_before := world._chunks.size()
+	world.setup_player(remote)
+	if world._chunks.size() != loaded_before:
+		_fail("async re-target should not commit a spawn ring synchronously")
+	world.setup_player(remote, true)
+	if world._chunks.size() <= loaded_before:
+		_fail("sync re-target should commit the spawn ring synchronously")
+	remote.free()
+
 	if _failures == 0:
 		print("STREAM FULL VERIFY: PASS")
 		quit(0)

@@ -92,6 +92,13 @@ func _run() -> void:
 	_expect(not photo.is_camera_active(), "free camera did not deactivate")
 	_expect(player_camera.current, "player camera did not become current again")
 	_expect(hud.visible, "exiting photo mode should restore the HUD")
+	_expect(photo.is_hud_visible(), "exiting should resync the tracked HUD state")
+
+	# With the state in sync, the first F1 after a plain session hides the HUD.
+	photo.toggle_hud()
+	_expect(not photo.is_hud_visible() and not hud.visible, "first F1 after exit should hide the HUD")
+	photo.toggle_hud()
+	_expect(photo.is_hud_visible() and hud.visible, "second F1 after exit should show the HUD")
 
 	# F1 inside photo mode is an explicit choice and survives the exit.
 	photo.set_free_camera(true)

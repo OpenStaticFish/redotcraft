@@ -172,6 +172,9 @@ func set_free_camera(active: bool) -> void:
 		_camera_active = false
 		_camera.current = false
 		_player_camera.current = true
+		# The entry overwrote _hud_visible; re-sync it with the restored state
+		# or the next F1/F2 would act on a stale value.
+		_hud_visible = _hud_restore
 		_apply_hud(_hud_restore)
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 		status_requested.emit("Photo camera closed")

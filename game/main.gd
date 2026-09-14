@@ -546,9 +546,15 @@ func _on_weather_changed(state: int) -> void:
 
 func _on_photo_camera_changed(active: bool, camera: Camera3D) -> void:
 	# Streaming, weather, and player control all follow the active render camera.
-	world.setup_player(camera if active else player)
+	# Entry can stream the camera's surroundings asynchronously, but returning
+	# to the player must commit its ring before physics unfreezes.
+	world.setup_player(camera if active else player, not active)
 	player.set_photo_mode(active)
 	_weather.set_camera(camera if active else player.camera)
+	if active and _worldgen_overlay != null and _worldgen_overlay.visible:
+		# The nonmodal F3 map would sit over the photo composition; close it
+		# silently and let F3 reopen it after the camera is dismissed.
+		_worldgen_overlay.visible = false
 
 
 func _active_camera() -> Camera3D:
