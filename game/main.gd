@@ -14,6 +14,9 @@ const SLOT_HEIGHT := 48.0
 const SLOT_GAP := 5.0
 const SLOT_MARGIN := 6.0
 const SLOT_ICON := 30.0
+const UNDERWATER_SAMPLE_INTERVAL := 0.15
+const UNDERWATER_FADE_SECONDS := 0.35
+const UNDERWATER_DEEP_COLOR := Color(0.02, 0.08, 0.16)
 
 @onready var world: VoxelWorld = $World
 @onready var player: Player = $Player
@@ -38,6 +41,11 @@ var status_time := 6.0
 var inventory: Dictionary = INITIAL_INVENTORY.duplicate()
 var _pause_menu: PauseMenu
 var _stats_time := 0.0
+var _underwater_amount := 0.0
+var _underwater_depth := 0.0
+var _underwater_tint := Color.WHITE
+var _underwater_target := 0.0
+var _underwater_sample_time := 0.0
 var _worldgen_overlay: WorldgenOverlay
 var _selection_chip: Label
 var _hotbar_slot_size := SLOT_WIDTH
@@ -137,11 +145,33 @@ func _process(delta: float) -> void:
 		status_time -= delta
 		if status_time <= 0.0:
 			_status_label.text = ""
-	_underwater_overlay.visible = world.is_water_at(player.camera.global_position)
+	_update_underwater(delta)
 	_stats_time -= delta
 	if _stats_time <= 0.0:
 		_stats_time = STATS_INTERVAL
 		_update_stats()
+
+
+## Grades the overlay, fog, caustics, and audio from the submerged state. The
+## world query is throttled; the blend itself is smoothed per frame so
+## surfacing does not pop.
+func _update_underwater(delta: float) -> void:
+	_underwater_sample_time -= delta
+	if _underwater_sample_time <= 0.0:
+		_underwater_sample_time = UNDERWATER_SAMPLE_INTERVAL
+		var ambience := world.get_water_ambience(player.camera.global_position)
+		_underwater_target = 1.0 if bool(ambience["submerged"]) else 0.0
+		_underwater_depth = clampf(float(ambience["depth"]) / DayNightCycle.UNDERWATER_MAX_DEPTH, 0.0, 1.0)
+		if _underwater_target > 0.0:
+			_underwater_tint = ambience["tint"] as Color
+	_underwater_amount = move_toward(_underwater_amount, _underwater_target, delta / UNDERWATER_FADE_SECONDS)
+	_day_night.set_underwater(_underwater_amount, _underwater_depth, _underwater_tint)
+	_underwater_overlay.visible = _underwater_amount > 0.001
+	if _underwater_overlay.visible:
+		var tinted := _underwater_tint.lerp(UNDERWATER_DEEP_COLOR, _underwater_depth * 0.75)
+		_underwater_overlay.color = Color(tinted.r, tinted.g, tinted.b,
+			lerpf(0.06, 0.42, _underwater_depth) * _underwater_amount)
+	AudioManager.set_underwater(_underwater_amount > 0.5)
 
 
 func _apply_config() -> void:

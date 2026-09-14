@@ -36,6 +36,13 @@ const FEATURE_DRIFTWOOD: int = 26
 ## Grove interiors only: a tall old broadleaf that never appears in the
 ## ordinary species lottery.
 const FEATURE_ANCIENT_TREE: int = 27
+## Seabed species, used by VoxelPopulator._decorate_underwater().
+const FEATURE_SEAGRASS: int = 28
+const FEATURE_KELP: int = 29
+const FEATURE_CORAL_FAN: int = 30
+const FEATURE_CORAL_BRANCH: int = 31
+const FEATURE_SPONGE: int = 32
+const FEATURE_ANEMONE: int = 33
 
 const FLAG_TREE: int = 1
 const FLAG_WATER_EDGE: int = 2
@@ -43,6 +50,10 @@ const FLAG_DRY_GROUND: int = 4
 const FLAG_SHADE: int = 8
 
 var _sets: Dictionary = {}
+## Underwater species tables, keyed by BiomeCatalog.DECORATION_*. The land
+## lottery deliberately never reads these (it would stamp them on dry ground),
+## so the seabed pass owns all water placement.
+var _underwater_sets: Dictionary = {}
 
 
 func _init() -> void:
@@ -117,10 +128,63 @@ func _init() -> void:
 			[FEATURE_ROCK_OUTCROP, 8, 0.18, 0], [FEATURE_PEBBLE, 6, 0.14, 0],
 		],
 	}
+	# Entry shape matches the land sets: [feature, weight, chance, flags].
+	_underwater_sets = {
+		BiomeCatalog.DECORATION_SHELF: [
+			[FEATURE_SEAGRASS, 30, 0.95, 0], [FEATURE_KELP, 10, 0.70, 0],
+			[FEATURE_ANEMONE, 5, 0.35, 0],
+		],
+		BiomeCatalog.DECORATION_REEF: [
+			[FEATURE_CORAL_FAN, 30, 0.95, 0], [FEATURE_CORAL_BRANCH, 26, 0.95, 0],
+			[FEATURE_SEAGRASS, 22, 0.85, 0], [FEATURE_ANEMONE, 12, 0.70, 0],
+			[FEATURE_SPONGE, 8, 0.55, 0],
+		],
+		BiomeCatalog.DECORATION_KELP: [
+			[FEATURE_KELP, 42, 0.98, 0], [FEATURE_SEAGRASS, 14, 0.85, 0],
+			[FEATURE_ANEMONE, 4, 0.40, 0],
+		],
+		BiomeCatalog.DECORATION_SEAGRASS: [
+			[FEATURE_SEAGRASS, 50, 0.98, 0], [FEATURE_ANEMONE, 8, 0.50, 0],
+			[FEATURE_CORAL_FAN, 5, 0.40, 0],
+		],
+		BiomeCatalog.DECORATION_ABYSSAL: [
+			[FEATURE_ANEMONE, 8, 0.55, 0], [FEATURE_SPONGE, 4, 0.35, 0],
+		],
+		BiomeCatalog.DECORATION_FROZEN_SEA: [
+			[FEATURE_SEAGRASS, 12, 0.65, 0], [FEATURE_ANEMONE, 3, 0.30, 0],
+		],
+	}
 
 
 func entries_for_set(decoration_set: int) -> Array:
 	return _sets.get(decoration_set, [])
+
+
+func underwater_entries_for_set(decoration_set: int) -> Array:
+	return _underwater_sets.get(decoration_set, [])
+
+
+func choose_underwater(decoration_set: int, selector: float) -> Array:
+	return _choose_from(underwater_entries_for_set(decoration_set), selector)
+
+
+## Successful anchor cells per set: x = cell success chance, y/z = minimum and
+## maximum plants stamped in that cell. Chances multiply world settings.
+func underwater_density(decoration_set: int) -> Vector3:
+	match decoration_set:
+		BiomeCatalog.DECORATION_REEF:
+			return Vector3(0.85, 3.0, 6.0)
+		BiomeCatalog.DECORATION_KELP:
+			return Vector3(0.65, 2.0, 4.0)
+		BiomeCatalog.DECORATION_SEAGRASS:
+			return Vector3(0.95, 3.0, 5.0)
+		BiomeCatalog.DECORATION_SHELF:
+			return Vector3(0.20, 1.0, 3.0)
+		BiomeCatalog.DECORATION_ABYSSAL:
+			return Vector3(0.06, 1.0, 1.0)
+		BiomeCatalog.DECORATION_FROZEN_SEA:
+			return Vector3(0.10, 1.0, 2.0)
+	return Vector3.ZERO
 
 
 ## Tree groves choose their species separately from incidental decorations.
@@ -153,7 +217,7 @@ func ground_cover_chance(decoration_set: int) -> float:
 	match decoration_set:
 		BiomeCatalog.DECORATION_PLAINS:
 			return 0.90
-		BiomeCatalog.DECORATION_MEADOW:
+		BiomeCatalog.DECORATION_SEAGRASS:
 			return 0.96
 		BiomeCatalog.DECORATION_SAVANNA:
 			return 0.70

@@ -21,6 +21,8 @@ const MAX_FIELD_SLOPE: float = 8.0
 # Share of 1-block steps above 2 blocks; guards against a broken-up surface.
 const MAX_ROUGH_RATIO: float = 0.06
 
+var _biomes: BiomeCatalog = BiomeCatalog.new()
+
 
 func _initialize() -> void:
 	var generator := TerrainGenerator.new()
@@ -36,6 +38,10 @@ func _initialize() -> void:
 	_verify_ground_cover()
 	_verify_props()
 	_verify_seabed_sediment()
+	_verify_seabed_shaping()
+	_verify_underwater_vegetation()
+	_verify_water_plant_meshing()
+	_verify_underwater_biomes()
 	_verify_edit_priority(generator)
 	_verify_parallel_generation(generator)
 	_verify_distribution(generator)
@@ -378,6 +384,245 @@ func _verify_seabed_sediment() -> void:
 	_expect(deep_data[deep_index] == BlockRegistry.BLOCK_GRAVEL, "deeper seabed did not transition to gravel")
 	_expect(deep_data[deep_index - 4 * VoxelDefs.DATA_STRIDE_Y] == BlockRegistry.BLOCK_GRAVEL,
 		"deep gravel seabed exposed stone before its sediment blanket ended")
+	# The waterline stays sand for every sea biome; the surface and buried
+	# layers then change with depth and biome.
+	var biome_cases: Array = [
+		[BiomeCatalog.OCEAN, 4, BlockRegistry.BLOCK_SAND, BlockRegistry.BLOCK_SAND],
+		[BiomeCatalog.OCEAN, 8, BlockRegistry.BLOCK_SAND, BlockRegistry.BLOCK_CLAY],
+		[BiomeCatalog.CORAL_REEF, 10, BlockRegistry.BLOCK_CORAL_SUBSTRATE, BlockRegistry.BLOCK_CORAL_SUBSTRATE],
+		[BiomeCatalog.SEAGRASS_MEADOW, 8, BlockRegistry.BLOCK_SAND, BlockRegistry.BLOCK_CLAY],
+		[BiomeCatalog.KELP_FOREST, 8, BlockRegistry.BLOCK_GRAVEL, BlockRegistry.BLOCK_STONE],
+		[BiomeCatalog.FROZEN_OCEAN, 12, BlockRegistry.BLOCK_GRAVEL, BlockRegistry.BLOCK_GRAVEL],
+		[BiomeCatalog.DEEP_OCEAN, 13, BlockRegistry.BLOCK_CLAY, BlockRegistry.BLOCK_GRAVEL],
+	]
+	for case in biome_cases:
+		var biome: int = case[0]
+		var depth: int = case[1]
+		var expected: int = case[2]
+		var expected_sub: int = case[3]
+		var surface_y: int = VoxelDefs.SEA_LEVEL - depth
+		var result: Dictionary = populator.populate(Vector2i.ZERO, _uniform_field(surface_y, biome), {}, false)
+		var data: PackedByteArray = result["data"]
+		_expect(data[surface_y * VoxelDefs.DATA_STRIDE_Y] == expected,
+			"%s seabed substrate was wrong at depth %d" % [_biomes.name_for(biome), depth])
+		_expect(data[(surface_y - 1) * VoxelDefs.DATA_STRIDE_Y] == expected_sub,
+			"%s seabed subsurface was wrong at depth %d" % [_biomes.name_for(biome), depth])
+		var shelf_y := VoxelDefs.SEA_LEVEL - 4
+		var shelf: Dictionary = populator.populate(Vector2i.ZERO, _uniform_field(shelf_y, biome), {}, false)
+		var shelf_data: PackedByteArray = shelf["data"]
+		_expect(shelf_data[shelf_y * VoxelDefs.DATA_STRIDE_Y] == BlockRegistry.BLOCK_SAND,
+			"%s waterline sediment broke the sand shelf" % _biomes.name_for(biome))
+
+
+## Reef mounds must rise from the mid-shelf floor while the abyssal plain stays
+## deep, and the biome label must track the shaped floor instead of ignoring it.
+func _verify_seabed_shaping() -> void:
+	var sampler := TerrainSampler.new(WorldGenConfig.new(TEST_CONFIG), TerrainProfileCatalog.new(), _biomes)
+	var mound_total := 0.0
+	var mound_count := 0
+	var flat_total := 0.0
+	var flat_count := 0
+	var floor_min := INF
+	var floor_max := -INF
+	for z in range(-1024, 1025, 16):
+		for x in range(-1024, 1025, 16):
+			var continental := sampler._continentalness_at(x, z)
+			if continental >= TerrainSampler.OCEAN_CONTINENTAL:
+				continue
+			var floor_height: float = sampler._ocean_floor_at(x, z, continental)
+			floor_min = minf(floor_min, floor_height)
+			floor_max = maxf(floor_max, floor_height)
+			if continental < 0.15 or continental > 0.32:
+				continue
+			var mound: float = sampler._seabed_patch_strength(
+				x, z, TerrainSampler.CHANNEL_REEF, TerrainSampler.REEF_PATCH_SCALE)
+			if mound >= 0.70:
+				mound_total += float(VoxelDefs.SEA_LEVEL) - floor_height
+				mound_count += 1
+			elif mound <= 0.05:
+				flat_total += float(VoxelDefs.SEA_LEVEL) - floor_height
+				flat_count += 1
+	_expect(mound_count > 0, "no high-reef-mask shelf samples found")
+	_expect(flat_count > 0, "no low-reef-mask shelf samples found")
+	if mound_count > 0 and flat_count > 0:
+		var mound_depth := mound_total / float(mound_count)
+		var flat_depth := flat_total / float(flat_count)
+		_expect(mound_depth < flat_depth - 1.0,
+			"reef mounds did not raise the shelf floor (%.2f vs %.2f)" % [mound_depth, flat_depth])
+	_expect(floor_max <= float(VoxelDefs.SEA_LEVEL) - 2.0, "seabed shaping broke the water surface")
+	var abyssal_budget: float = TerrainSampler.ABYSSAL_DEPTH + TerrainSampler.SEABED_RELIEF_HEIGHT
+	_expect(floor_min >= float(VoxelDefs.SEA_LEVEL) - abyssal_budget - 0.01, "seabed shaping exceeded the abyssal budget")
+	print("WORLDGEN SEABED SHAPING: floor_min=%.1f floor_max=%.1f mound_depth=%.2f flat_depth=%.2f" % [
+		floor_min, floor_max, mound_total / maxf(float(mound_count), 1.0), flat_total / maxf(float(flat_count), 1.0)])
+
+
+## Seabed plants must appear in their biomes, stand on the seabed (never float
+## or break the surface), honour the decoration-density gate, and stay
+## deterministic across identical runs.
+func _verify_underwater_vegetation() -> void:
+	var config: Dictionary = TEST_CONFIG.duplicate()
+	config["cave_density"] = 0.0
+	config["tree_density"] = 0.0
+	var populator := VoxelPopulator.new(WorldGenConfig.new(config), _biomes)
+	# Dense biomes are asserted per chunk; shelf and abyssal seas are sparse by
+	# design and would make a single-chunk fixture flaky.
+	var cases: Array = [
+		[BiomeCatalog.CORAL_REEF, 6],
+		[BiomeCatalog.SEAGRASS_MEADOW, 6],
+		[BiomeCatalog.KELP_FOREST, 9],
+	]
+	for case in cases:
+		var biome: int = case[0]
+		var depth: int = case[1]
+		var surface_y: int = VoxelDefs.SEA_LEVEL - depth
+		var field := _uniform_field(surface_y, biome)
+		var result: Dictionary = populator.populate(Vector2i.ZERO, field, {}, true)
+		var data: PackedByteArray = result["data"]
+		var plant_count := 0
+		var floating := 0
+		for column in VoxelDefs.CHUNK_AREA:
+			_expect(data[column + VoxelDefs.SEA_LEVEL * VoxelDefs.DATA_STRIDE_Y] == BlockRegistry.BLOCK_WATER,
+				"%s seabed vegetation broke the water surface" % _biomes.name_for(biome))
+			for y in range(surface_y + 2, VoxelDefs.SEA_LEVEL):
+				var block: int = data[column + y * VoxelDefs.DATA_STRIDE_Y]
+				if not _is_underwater_plant(block):
+					continue
+				plant_count += 1
+				var below: int = data[column + (y - 1) * VoxelDefs.DATA_STRIDE_Y]
+				if not _is_underwater_plant(below):
+					floating += 1
+			var surface_plus_one: int = data[column + (surface_y + 1) * VoxelDefs.DATA_STRIDE_Y]
+			if _is_underwater_plant(surface_plus_one) and data[column + surface_y * VoxelDefs.DATA_STRIDE_Y] != _biomes.seabed_block(biome, depth):
+				floating += 1
+		_expect(plant_count > 0, "%s produced no seabed vegetation" % _biomes.name_for(biome))
+		_expect(floating == 0, "%s seabed plants floated off the seabed (%d)" % [_biomes.name_for(biome), floating])
+		var repeat: Dictionary = populator.populate(Vector2i.ZERO, _uniform_field(surface_y, biome), {}, true)
+		_expect(repeat["data"] == data, "%s seabed vegetation changed between identical runs" % _biomes.name_for(biome))
+		var barren_config: Dictionary = config.duplicate()
+		barren_config["decoration_density"] = 0.0
+		var barren := VoxelPopulator.new(WorldGenConfig.new(barren_config), _biomes)
+		var barren_result: Dictionary = barren.populate(Vector2i.ZERO, _uniform_field(surface_y, biome), {}, true)
+		for column in VoxelDefs.CHUNK_AREA:
+			for y in range(surface_y + 1, VoxelDefs.SEA_LEVEL):
+				_expect(not _is_underwater_plant(barren_result["data"][column + y * VoxelDefs.DATA_STRIDE_Y]),
+					"decoration_density 0 still produced seabed vegetation")
+
+
+## Thin cross plants sit inside the water volume; the water mesh must cull its
+## faces against them (same faces as an all-water fixture) or every tuft is
+## boxed in its own glassy pocket.
+func _verify_water_plant_meshing() -> void:
+	var mesher := ChunkMesher.new(BlockRegistry.new())
+	var heights := PackedInt32Array()
+	heights.resize(VoxelDefs.CHUNK_AREA)
+	heights.fill(24)
+	var tints := PackedColorArray()
+	tints.resize(VoxelDefs.CHUNK_AREA)
+	tints.fill(Color.WHITE)
+	var with_plant := mesher.build(_water_fixture(true), 24, heights, tints, tints, ChunkMesher.NeighborSet.new())
+	var without_plant := mesher.build(_water_fixture(false), 24, heights, tints, tints, ChunkMesher.NeighborSet.new())
+	_expect(with_plant.water_verts == without_plant.water_verts,
+		"cross plants created internal water faces")
+	_expect(with_plant.water_indices.size() == without_plant.water_indices.size(),
+		"cross plants changed the water face count")
+	print("WORLDGEN WATER PLANTS: faces=%d verts=%d" % [
+		without_plant.water_indices.size() / 6, without_plant.water_verts.size()])
+
+
+func _water_fixture(with_plant: bool) -> PackedByteArray:
+	var data := PackedByteArray()
+	data.resize(VoxelDefs.CHUNK_AREA * VoxelDefs.WORLD_HEIGHT)
+	for local_z in range(4, 12):
+		for local_x in range(4, 12):
+			for y in range(16, 25):
+				data[local_x + local_z * VoxelDefs.DATA_STRIDE_Z + y * VoxelDefs.DATA_STRIDE_Y] = BlockRegistry.BLOCK_WATER
+	if with_plant:
+		data[8 + 8 * VoxelDefs.DATA_STRIDE_Z + 20 * VoxelDefs.DATA_STRIDE_Y] = BlockRegistry.BLOCK_SEAGRASS
+	return data
+
+
+func _is_underwater_plant(block_id: int) -> bool:
+	return block_id == BlockRegistry.BLOCK_SEAGRASS \
+		or block_id == BlockRegistry.BLOCK_KELP \
+		or block_id == BlockRegistry.BLOCK_CORAL_FAN \
+		or block_id == BlockRegistry.BLOCK_CORAL_BRANCH \
+		or block_id == BlockRegistry.BLOCK_SPONGE \
+		or block_id == BlockRegistry.BLOCK_ANEMONE
+
+
+## The ocean split must cover every underwater regime without leaking land
+## biomes onto the seabed, and each label must follow the depth and climate
+## the shape used.
+func _verify_underwater_biomes() -> void:
+	var seeds: Array[int] = [int(TEST_CONFIG["seed"]), -48271, 918273]
+	var expected: Array[int] = [
+		BiomeCatalog.OCEAN, BiomeCatalog.DEEP_OCEAN, BiomeCatalog.CORAL_REEF,
+		BiomeCatalog.KELP_FOREST, BiomeCatalog.SEAGRASS_MEADOW, BiomeCatalog.FROZEN_OCEAN,
+	]
+	var seen := {}
+	var samples := 0
+	var stranded_land := 0
+	var depth_totals := {}
+	var depth_counts := {}
+	var depth_min := {}
+	var depth_max := {}
+	var temperature_min := {}
+	var temperature_max := {}
+	for seed in seeds:
+		var config: Dictionary = TEST_CONFIG.duplicate()
+		config["seed"] = seed
+		var generator := TerrainGenerator.new()
+		generator.configure(config)
+		for z in range(-2304, 2305, 64):
+			for x in range(-2304, 2305, 64):
+				var sample := generator.sample_point(x, z)
+				var biome := int(sample["dominant_biome_id"])
+				var height := float(sample["final_height"])
+				var temperature := float(sample["temperature"])
+				var depth := float(VoxelDefs.SEA_LEVEL) - height
+				samples += 1
+				# Beaches and rivers are allowed at the waterline; any deeper
+				# land biome means the sea/shelf classification gapped.
+				if depth >= 1.0 and not _biomes.is_ocean_biome(biome) \
+						and biome != BiomeCatalog.RIVER and biome != BiomeCatalog.BEACH:
+					stranded_land += 1
+				if not _biomes.is_ocean_biome(biome):
+					continue
+				seen[biome] = true
+				depth_totals[biome] = float(depth_totals.get(biome, 0.0)) + depth
+				depth_counts[biome] = int(depth_counts.get(biome, 0)) + 1
+				depth_min[biome] = minf(float(depth_min.get(biome, INF)), depth)
+				depth_max[biome] = maxf(float(depth_max.get(biome, -INF)), depth)
+				temperature_min[biome] = minf(float(temperature_min.get(biome, INF)), temperature)
+				temperature_max[biome] = maxf(float(temperature_max.get(biome, -INF)), temperature)
+	for biome in expected:
+		_expect(seen.has(biome), "underwater biome %s never appeared in the sampled ocean" % _biomes.name_for(biome))
+	_expect(stranded_land == 0, "%d land-biome samples sat at least one block below sea level" % stranded_land)
+	var shelf_depth := _mean_value(depth_totals, depth_counts, BiomeCatalog.OCEAN)
+	var deep_depth := _mean_value(depth_totals, depth_counts, BiomeCatalog.DEEP_OCEAN)
+	_expect(deep_depth > shelf_depth + 4.0, "deep sea is not deeper than the shelf (%.1f vs %.1f)" % [deep_depth, shelf_depth])
+	_expect(float(depth_max.get(BiomeCatalog.CORAL_REEF, 0.0)) <= TerrainSampler.CORAL_REEF_DEPTH + 0.01, "coral reef left the shallow shelf")
+	_expect(float(depth_min.get(BiomeCatalog.DEEP_OCEAN, 0.0)) >= TerrainSampler.DEEP_SEA_DEPTH - 0.01, "deep sea reached the shelf")
+	_expect(float(depth_min.get(BiomeCatalog.KELP_FOREST, 99.0)) >= TerrainSampler.KELP_FOREST_MIN_DEPTH - 0.01, "kelp forest grew at the waterline")
+	_expect(float(temperature_max.get(BiomeCatalog.FROZEN_OCEAN, 1.0)) <= TerrainSampler.FROZEN_SEA_TEMPERATURE + 0.01, "frozen sea appeared outside cold water")
+	_expect(float(temperature_min.get(BiomeCatalog.CORAL_REEF, 0.0)) >= TerrainSampler.CORAL_REEF_TEMPERATURE - 0.01, "coral reef appeared outside warm water")
+	print("WORLDGEN UNDERWATER: samples=%d shelf_depth=%.1f deep_depth=%.1f coral=%.1f kelp=%.1f seagrass=%.1f frozen=%.1f" % [
+		samples, shelf_depth, deep_depth,
+		_mean_value(depth_totals, depth_counts, BiomeCatalog.CORAL_REEF),
+		_mean_value(depth_totals, depth_counts, BiomeCatalog.KELP_FOREST),
+		_mean_value(depth_totals, depth_counts, BiomeCatalog.SEAGRASS_MEADOW),
+		_mean_value(depth_totals, depth_counts, BiomeCatalog.FROZEN_OCEAN)])
+	print("WORLDGEN UNDERWATER SHARE: shelf=%d deep=%d coral=%d kelp=%d seagrass=%d frozen=%d" % [
+		int(depth_counts.get(BiomeCatalog.OCEAN, 0)), int(depth_counts.get(BiomeCatalog.DEEP_OCEAN, 0)),
+		int(depth_counts.get(BiomeCatalog.CORAL_REEF, 0)), int(depth_counts.get(BiomeCatalog.KELP_FOREST, 0)),
+		int(depth_counts.get(BiomeCatalog.SEAGRASS_MEADOW, 0)), int(depth_counts.get(BiomeCatalog.FROZEN_OCEAN, 0))])
+
+
+func _mean_value(totals: Dictionary, counts: Dictionary, biome: int) -> float:
+	var count := int(counts.get(biome, 0))
+	if count == 0:
+		return -1.0
+	return float(totals.get(biome, 0.0)) / float(count)
 
 
 func _uniform_field(surface_y: int, biome: int) -> ChunkTerrainData:
