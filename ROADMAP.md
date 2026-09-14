@@ -22,6 +22,13 @@ Property names and file references are included so each item is easy to find.
 - [x] Play and Settings information architecture — Play opens a world setup screen (world type, seed, clipboard import, Create Game) whose Advanced button opens the tunables-only world gen screen; Settings opens a category hub (Display, Graphics, Sound, Gameplay) where Advanced Graphics is itself a hub split into Lighting, Shadows, Sky & Atmosphere, Post-Processing, and Performance section panels. Cancel unwinds one layer at a time with focus restoration, and the pause menu reuses the hub. `tools/ui_flow_verify.gd` covers the flows
 - [x] Compact HUD — hotbar slots 76 -> 48 px with smaller icons, key hints, and counts, coords/stats chips reduced to ~150 px through the shared compact chip style, and status/selection labels moved above the smaller hotbar
 - [x] E opens the inventory — `inventory` action rebound from I; main-menu footer and docs updated
+- [ ] Loading and world-creation progress — show generation/streaming progress between menu and gameplay; high render distances block with no feedback today (RD 32 measured ~155 s CPU-bound)
+- [ ] Chat / command console — `/time`, `/weather`, `/tp`, `/give`, `/seed`, and `/help` for testing and moderation; reuses `DayNightCycle.set_time()`, `WeatherSystem.toggle()`, and `GameConfig.world`
+- [ ] Death and respawn flow — prompts respawn at `Player.spawn_position` or quit to menu; pairs with the survival layer in Gameplay
+- [ ] Photo mode and HUD hiding — F1-style HUD toggle, screenshot key, and a free/detached camera built on the `game/shadow_capture.gd` precedent
+- [ ] Minimap or map item — optional HUD minimap or an inventory map item fed by the `WorldgenOverlay` map modes (`ui/worldgen_overlay.gd`)
+- [ ] Frame pacing options — vsync, FPS cap, and an optional dynamic-resolution target in Display settings; `GameConfig.DEFAULT_SETTINGS` has no pacing keys today
+- [ ] First-run hints — surface controls gradually (movement, fly double-tap, inventory, targeting) instead of one startup status toast
 
 ## Shadows
 - [x] Near-shadow resolution — `Main.NEAR_SHADOW_DISTANCE` reserves the first cascade for 6 m around the player, keeping close-up shadow texels dense enough to stop edge crawl (user-confirmed fixed)
@@ -53,6 +60,7 @@ Property names and file references are included so each item is easy to find.
 - [x] LOD tree canopies — compact columns bake the actual tree crowns using the same stamp functions as full chunks. Distance collection keeps only anchors inside the padded field and skips site-validity probes, which leave the field and re-enter the sampler (full parity cost ~19 ms per forest chunk, nearly full population). The top two tree blocks become the column's solid/sub pair, so distance forests read as real trees. Measured: LOD generation ~12.2 ms vs ~28.4 ms full, with the canopy pass ~1.2 ms; grove sample 142 canopy columns, open-ocean sample 0. `worldgen_lod_verify.gd` checks forest coverage and ocean exclusion
 - [x] LOD occlusion shading — distance meshes carry no AO or block-light volume, so far terrain read flat and cliffs showed a single soil stripe to the ground. Top faces now darken under taller cardinal neighbors (`LOD_AO_PER_BLOCK` 0.14, floor 0.52), side faces darken with depth, and sides below `LOD_SOIL_DEPTH` switch to stone (leaf columns stay leaf-textured). Pinned verification: flat spread 0.0000, hilly spread 1.5036, 5273 stone side faces; LOD mesh stays ~14 ms vs ~183 ms full
 - [x] LOD ground cover — compact columns now carry the same floor patches as full chunks (dirt/mud/gravel from the shared patch pass) plus low scrub bumps on grove edges and clearings (grove strength sampled on a stride-8 lattice, 12% of columns in the 0.45-0.85 band). `worldgen_lod_verify` checks patch propagation (2408 patch columns across a 7x7 grove area) alongside canopy coverage. Full generation ~30.8 ms, LOD ~12.5 ms
+- [ ] Horizon impostors — a far-distance layer past the render distance so the horizon does not simply end in fog; extends the compact-column LOD design instead of streaming full chunks
 
 ## Post-processing
 - [x] Per-time-of-day color grading — `DayNightCycle` scales preset saturation/contrast at night (`Main._apply_graphics()` sets `base_saturation`/`base_contrast`), keeping nights muted instead of neon
@@ -63,10 +71,24 @@ Property names and file references are included so each item is easy to find.
 
 ## Gameplay
 - [ ] World saving/loading — persist `VoxelWorld._edited_blocks`, player position/inventory, and world config per world (biggest missing gameplay feature)
+- [ ] World management UI — world list on the main menu with create/rename/duplicate/delete/backup plus autosave interval; `GameConfig.world` exists only in memory today
+- [ ] Versioned save format and migration — tag saves with a format revision and migrate or reject cleanly, mirroring the worldgen config revision flow (`world/worldgen/world_gen_config.gd` `CURRENT_VERSION`)
+- [ ] Persist time, weather, inventory, and player state — `DayNightCycle.time_hours`, `WeatherSystem`, and `Main.inventory` all reset each launch; only `_edited_blocks` is durable today
+- [ ] Survival layer — health/hunger/damage with respawn and damage sources (fall, drowning, lava/fire); `Player` has no health, falling below `FALL_RESET_Y` just teleports
+- [ ] Tools, hardness, and durability — per-block hardness/break time and tool tiers in `BlockRegistry.BLOCK_DEFS`, tool stacks with durability; mining is instant today (`Player._break_target()` -> `VoxelWorld.break_block()`)
+- [ ] Item inventory and crafting — stack grid with drag/drop beyond the fixed `Main.HOTBAR`, crafting recipes/table, furnaces, and chests; `Main.inventory` is only an id->count dictionary rendered by `InventoryOverlay`
+- [ ] Block break feedback — progress cracks, hit particles, and a held-item swing animation; breaks resolve instantly with no visual feedback today
+- [ ] Block and item drops — physical drop entities with a pickup animation instead of `Main.collect_block()` crediting instantly
+- [ ] Player verbs — sneak/crouch (edge protection), third-person camera toggle, and middle-click block pick; none have input actions in `project.godot`
+- [ ] Functional blocks — stairs, slabs, doors, ladders, signs, and block rotation so builds are not cube-only
+- [ ] Sleeping and spawn points — a bed that skips the night through `DayNightCycle`, sets the respawn point, and is blocked while raining or threatened
+- [ ] Mobs and combat — passive and hostile creatures with light/biome/time spawning rules, pathfinding, and melee combat; no entity system exists beyond the player
 - [x] Fly boost — holding Ctrl while flying multiplies fly speed and acceleration 5x (`player/player.gd` `FLY_BOOST_MULTIPLIER`); pause menu controls updated
 
 ## Audio
 - [x] Audio pass — `autoload/audio_manager.gd` adds SFX/Ambient buses, pooled 3D players, and a block-material registry; distance-based material-aware footsteps in `player/player.gd`, uniform subtle 3D block break/place cues for every block type, UI clicks wired through `UITheme` button styles, and a fading rain bed tied to `WeatherSystem`. All cues are recorded free assets with no synthesized bank: VoxeLibre `mcl_sounds` for material footsteps and the uniform block break/place cues (Minecraft-style; mixed CC BY-SA 3.0 / CC BY 3.0 / CC0 per file), Kenney UI Audio, and an OpenGameArt CC0 rain loop. Settings gained a Sound section with Master/SFX/Ambience sliders persisted through `GameConfig`; `tools/audio_verify.gd` checks the recordings, buses, mappings, and rejects any leftover placeholder WAV
+- [ ] Music — menu, day/night, and biome-aware ambient music with crossfades; `assets/audio/` holds SFX and one rain loop only
+- [ ] Biome and location ambience — cave drips, birdsong, and wind at altitude; the underwater low-pass landed with the underwater ambience pass, and biome weather ambience still overlaps the Sky item above
 
 ## World generation overhaul
 Current state: the TerraForged-inspired staged pipeline is live under `world/worldgen/`. It builds immutable padded terrain fields, domain-warped continents and blended profiles, analytic erosion and optional cached hydraulic erosion, river/coast masks, climate-selected biomes, data-driven surfaces, caves/ores, and deterministic cross-chunk decoration. `TerrainGenerator` remains an immutable worker-safe facade. The world is 192 blocks high with sea level 48; generation verification and live F3/F4 diagnostics are available for tuning.
@@ -104,6 +126,7 @@ Current state: the TerraForged-inspired staged pipeline is live under `world/wor
 - [ ] Landmark terrain — standout natural features: waterfalls where rivers meet cliffs, ravines, natural arches, and boulder fields. Should read as memorable landmarks rather than adding back procedural noise
 - [x] Deep forests and larger regions — `biome_scale` raised again to 3072 (worldgen version 4), groves widened (90% of cells valid, radius 30-42), and grove interiors over strength 0.75 now select `FEATURE_ANCIENT_TREE` (trunk 8-11, radius-3 crowns) with a full understory (cover chance 1.0, +2 tufts) so forests have old-growth cores instead of uniform crowns. Measured 7x7 samples: forest oak 1789, taiga spruce 2068, jungle logs 1677, 63 jungle vines; biome interior radius 113 -> 140 blocks. Full generation ~31 ms, LOD ~12.5 ms
 - [x] Larger biome regions — default `biome_scale` doubled from 896 to 1792 blocks (worldgen version 3; world-creation slider now reaches 4096), so temperature/moisture fields and their terrain-shaping weights span broad territories. `tools/worldgen_biome_verify.gd` now measures contiguous territory radius: 72 blocks at the old scale vs 115 at 1792, with neighbor coherence 0.609. Restoring the `lowland` gate on wetland basins was required: without it the broader river-mask influence pulled a 119-block mountain river edge down 19 blocks in one step and tripped the terrain-continuity guardrail
+- [ ] Seasonal drift — slow temperature/moisture variation over long play sessions that shifts foliage tint, snow coverage, and weather weighting; needs a world-time clock beyond `DayNightCycle`
 
 ### Vegetation and ground cover
 - [x] Ground-cover system — tinted grasses/flowers, mushrooms, reeds, vines, bamboo, bushes, cacti, and biome-specific small plants use cutout/cross meshes without collision.
@@ -131,6 +154,8 @@ Current state: the TerraForged-inspired staged pipeline is live under `world/wor
 - [x] Phase 3 — underground features: damp mud/mycelium cave patches, depth-banded ore veins, aquifers, lava pockets, and stone formations. Random deep cobblestone variation was removed so cobblestone remains player-made; mineshafts/ruins remain separate future structure work.
 - [ ] Cave-aware lighting and meshing — verify sky-light flood fill around large openings, that caves stay dark, and that `ChunkMesher` light-volume bounds hold for big caverns.
 - [ ] Cave dressing — stalactites/stalagmites, dripstone columns, moss, and small underground pools so cave interiors are not bare stone
+- [ ] Cave biomes — lush and deep-dark variants with distinct ambience, vegetation, and materials layered onto `world/worldgen/biome_catalog.gd`
+- [ ] Geodes and crystal formations — rare hollow geodes and mineral deposits so deep exploration has landmarks beyond ore veins
 - [x] Ore distribution overhaul — deterministic cell-anchored coal, iron, and gold vein segments use depth bands and replace stone after caves are carved.
 - [x] Cave performance guardrails — cell-anchored carving replaces full-height 3D cave scans; clipped ellipsoids hoist column limits, aquifer decisions are chunk-local, and normal full generation averages ~40 ms in the pinned CLI benchmark.
 
@@ -150,4 +175,28 @@ Current state: the TerraForged-inspired staged pipeline is live under `world/wor
 
 ## World / simulation
 - [x] Water polish — flowing water levels (IDs 28-34) with a 4 Hz cellular spill/dry sim seeded by edits, falling cascades, settled state persisted through `_edited_blocks`; the mesher renders `_water_top(level)` surfaces with a flowing vertex-color flag. `water.gdshader` uses sharp, gently distorted scene refraction with chromatic split disabled, progressive depth absorption, and faint narrow shore foam.
+- [ ] Block physics — gravity blocks (falling sand/gravel) and other environment reactions that must persist through saving
+- [ ] Fire, TNT, and explosions — fire spread/decay, ignitable blocks, and explosion destruction routed through `_record_edit()` so settled state survives chunk regeneration
+- [ ] Buckets and fluid sources — water/lava buckets and source rules on top of the flowing levels 28-34 and `_water_tick`, plus lava/water interaction
+- [ ] Growth and decay — grass spread, leaf decay, sapling growth, and crop farming
 - [ ] Ambient life (deferred until the world-detail passes land) — fireflies at night, butterflies/birds by day, and subtle particle life with per-biome density and time-of-day gating; fireflies can reuse the emissive block-light path for glow
+
+## Multiplayer
+- [ ] LAN/co-op multiplayer — authoritative host, chunk streaming to peers, player-state sync, and a join/lobby UI. Nothing is networked today; `VoxelWorld`'s main-thread scene mutation, worker chunk jobs, and per-edit versioning are the design constraints
+
+## Accessibility and input
+- [ ] Key rebinding — remap and persist every `project.godot` `[input]` action through `GameConfig.settings`; the InputMap is hardcoded today
+- [ ] Gamepad support — joypad bindings, dead zones, and button prompts; there are no joypad events in `project.godot`
+- [ ] Motion and camera options — invert Y, separate X/Y sensitivity, and a reduced-motion toggle that disables `ui/motion.gd` tweens
+- [ ] UI scale and text size — scale HUD and menus independently of resolution
+- [ ] Accessibility aids — subtitles for audio cues, colorblind-safe HUD/map colors, and a damage/danger vignette toggle
+
+## Tooling and CI
+- [ ] GitHub Actions runners — add `.github/workflows/` triggered on every pull request; no CI exists today (no `.github/`) and every `tools/` check is manual
+- [ ] Unit tests (blocking) — add a unit test runner for pure logic (worldgen fields/hashes, `BlockRegistry` packing, water level rules, mesher/AO math) alongside the headless verifiers, run it on every PR, and make it the only required status check in branch protection so it blocks merges
+- [ ] AI code review (advisory) — an opencode-based GitHub Action reviews every PR diff and posts findings, but must never be a required status check so it cannot block merges
+- [ ] Parse check and headless verifiers in CI — run `redot --editor --headless --path . --quit` plus the `tools/` verifiers on every PR; advisory-only like the AI review, not blocking
+- [ ] Benchmark guardrails — assert the pinned generation/mesh/streaming budgets in CI; `tools/worldgen_benchmark.gd` and friends record times but nothing enforces them
+- [ ] Migration tests — load version-tagged worldgen/save fixtures across revisions and assert clean migration or rejection
+- [ ] Replay regression harness — extend the F9 `game/shadow_capture.gd` bundle into a general deterministic replay so reported bugs reproduce from a saved bundle
+- [ ] Asset and license check — validate texture/audio naming, imports, and license files in CI; `tools/icon_check.gd` still needs a display
