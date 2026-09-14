@@ -121,7 +121,10 @@ func _check_display_panel(config: Node) -> void:
 
 
 func _find_option(panel: Node, label_text: String) -> OptionButton:
-	for row in panel.get_node("Center/Panel/Box/RowsBox").get_children():
+	var rows := panel.find_child("RowsBox", true, false)
+	if rows == null:
+		return null
+	for row in rows.get_children():
 		if not row is HBoxContainer:
 			continue
 		var name_label := row.get_child(0) as Label
@@ -134,7 +137,10 @@ func _find_option(panel: Node, label_text: String) -> OptionButton:
 
 
 func _find_check(panel: Node, label_text: String) -> CheckBox:
-	for row in panel.get_node("Center/Panel/Box/RowsBox").get_children():
+	var rows := panel.find_child("RowsBox", true, false)
+	if rows == null:
+		return null
+	for row in rows.get_children():
 		if row is CheckBox and (row as CheckBox).text == label_text:
 			return row
 	return null

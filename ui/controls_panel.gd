@@ -6,8 +6,7 @@ extends SettingsCategoryPanel
 ## becomes the binding, and Escape or a mouse click cancels. Bindings apply to
 ## the InputMap immediately and persist through GameConfig.settings.
 
-@onready var _hint: Label = $Center/Panel/Box/Hint
-@onready var _scroll: ScrollContainer = $Center/Panel/Box/Scroll
+@onready var _hint: Label = $Center/Panel/Box/RowsBox/Hint
 @onready var _shared_label: Label = $Center/Panel/Box/SharedLabel
 @onready var _reset_button: Button = $Center/Panel/Box/Footer/ResetButton
 
@@ -23,8 +22,9 @@ func _category_definition() -> Dictionary:
 func _style_static() -> void:
 	super()
 	_hint.add_theme_color_override("font_color", UITheme.MUTED)
-	_hint.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_hint, 13)
 	_hint.text = "Click a key to rebind it. Press Esc while listening to cancel; a key may drive more than one action."
+	UITheme.apply_font_size(_shared_label, 13)
 	UITheme.style_button_ghost(_reset_button)
 	_reset_button.pressed.connect(_on_reset)
 
@@ -40,13 +40,12 @@ func _build_rows() -> void:
 
 
 func open_panel() -> void:
-	# Leave room for the heading, hint, shared-key summary, and footer on
-	# short viewports; the action list scrolls instead of clipping the panel.
-	var viewport_height := get_viewport().get_visible_rect().size.y
-	_scroll.custom_minimum_size.y = clampf(viewport_height - 260.0, 160.0, 420.0)
 	_cancel_capture()
 	_refresh_bindings()
 	super()
+	# The hint and shared-key label wrap text whose minimum height is unknown
+	# until the panel has measured itself, so re-fit the scroll after layout.
+	_resize_to_viewport.call_deferred()
 
 
 func close_panel() -> void:

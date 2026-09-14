@@ -3,7 +3,7 @@
 class_name WorldGenConfig
 extends RefCounted
 
-const CURRENT_VERSION: int = 5
+const CURRENT_VERSION: int = 6
 
 const WORLD_TYPE_NORMAL: int = 0
 const WORLD_TYPE_FLAT: int = 1

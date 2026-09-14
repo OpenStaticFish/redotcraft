@@ -4,7 +4,7 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
 
 ## Foundations
 
-- `ui_theme.gd` owns palette, typography, spacing, style boxes, generated control textures, and small component factories.
+- `ui_theme.gd` owns palette, typography, spacing, style boxes, generated control textures, and small component factories. Screens apply it with `UITheme.apply(root)` (which registers the host for live scale refresh) and size fonts through `UITheme.apply_font_size()` so the Display text-size setting can rescale them.
 - `motion.gd` owns the restrained entrance, selection, and status tween vocabulary.
 - `block_icon.gd` renders cached isometric item icons from `BlockRegistry.texture_array`; UI icons therefore stay synchronized with world textures.
 - `minimap.gd` (corner HUD map, `]`) and `map_overlay.gd` (full-screen `M` atlas with wheel/`+`/`-` zoom and drag/arrow pan) both sample `VoxelWorld.request_debug_map()` on worker threads, so refreshes reuse the F3 overlay's modes and never block the frame; `map_view.gd` holds their shared view projection and color packing, and `N` cycles modes.
@@ -25,8 +25,8 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
   tunables; `build_config()` returns them and the play screen merges seed/type in.
 - **Settings** opens `settings_menu`, a category hub. Categories are
   `settings_category_panel` instances (`category` property): Display (render
-  distance + extreme toggle, FOV, fullscreen, V-Sync, FPS cap, dynamic
-  resolution + target), Graphics (preset + advanced),
+  distance + extreme toggle, FOV, fullscreen, UI scale, text size, V-Sync, FPS
+  cap, dynamic resolution + target), Graphics (preset + advanced),
   Sound (three buses), Gameplay (mouse sensitivity), and Controls (key
   rebinding). `controls_panel` extends `settings_category_panel` and builds one
   row per `GameConfig.rebindable_actions()` entry; clicking a key starts capture
@@ -50,5 +50,8 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
 - `redot --headless --path . --script res://tools/ui_flow_verify.gd` checks the
   Play/Advanced and Settings/category/advanced flows, cancel order, and focus
   restoration.
+- `redot --headless --path . --script res://tools/ui_scale_verify.gd` checks the
+  UI-scale/content-scale application, the text-size multiplier and live theme
+  refresh, the Display rows, and the open modal re-fitting at 200%.
 
-When adding a screen, apply `UITheme.build()` at its root, use the shared factories and button styles, preserve natural container layout, and add only motion that does not delay closing or scene changes.
+When adding a screen, apply `UITheme.apply(root)` at its root, use the shared factories and button styles, preserve natural container layout, and add only motion that does not delay closing or scene changes.

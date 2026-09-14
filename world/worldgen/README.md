@@ -17,8 +17,9 @@ catalogs/samplers used by worker jobs. A chunk then runs these ordered stages:
    the river channel is then carved from cached corridor fields, and climate
    shaping/smoothing follows before surface selection.
 4. Temperature/moisture choose primary and secondary biomes. Continuous fields
-   shape terrain and tint foliage/water; primary biomes choose coherent surface
-   blankets and decoration profiles without per-block biome dithering.
+   shape terrain and tint foliage/water; broad terrain-aware ecotones carry the
+   secondary biome into coherent surface and vegetation patches without
+   per-block biome dithering.
 5. `VoxelPopulator.populate()` fills strata, carves caves, adds liquids and ore
    veins, stamps global-cell decorations, then applies player edits last.
 6. `VoxelPopulator.populate_lod()` handles distance chunks: it writes compact
@@ -60,6 +61,20 @@ in `biome_catalog.gd`, and weighted feature sets in `decoration_catalog.gd`.
 The underwater split constants (shelf/abyss depths, patch scales, biome
 temperature/depth gates) live at the top of `terrain_sampler.gd`.
 Keep block IDs below 256 and add placeable blocks through `BlockRegistry` first.
+
+Large and small offshore islands are separate sparse peak fields layered onto
+effective continentalness at 720- and 135-block scales. They are coast-gated
+against the original mainland field, so they leave continental interiors and
+shorelines coherent. Terrain profiles, climate, surfaces, vegetation, and LOD
+all consume the combined field; river masks deliberately retain the mainland
+field so analytic corridors do not arbitrarily slice detached islands.
+
+Biome boundaries expose `ecotone_strength` alongside primary, secondary, and
+dominant biome IDs. Climate-distance closeness controls transition width, terrain
+affinity bends the mix toward suitable elevations/profiles, and a 160-block noise
+field selects coherent secondary-material and decoration patches. Consumers must
+use `dominant_biome` for discrete surface/vegetation choices and keep the smooth
+primary/secondary blend for foliage and water tinting.
 
 Local detail is controlled separately from mountain height: each profile has
 `FIELD_LOCAL_RELIEF` (24/64-block knolls and shoulders, with shallow 48-block
@@ -200,9 +215,13 @@ to review it; an already-running world retains its configured sampler and chunks
   across chunk edges. The main verifier also checks nonzero local detail and
   its amplitude budget, to guard against both flattening and runaway roughness.
 - `redot --headless --path . --script res://tools/worldgen_biome_verify.gd`
-  checks biome-neighbor coherence, contiguous forest/swamp/jungle/taiga territory
-  radius, signature vegetation density, and the absence of procedural
-  cobblestone debris.
+  checks biome-neighbor coherence, ecotone width and secondary ownership,
+  contiguous forest/swamp/jungle/taiga territory radius, signature vegetation
+  density, and the absence of procedural cobblestone debris.
+- `redot --headless --path . --script res://tools/worldgen_island_verify.gd`
+  finds connected offshore uplift components at both island scales, confirms
+  each scale produces dry non-ocean terrain, and proves established mainland
+  continentalness is unchanged.
 - `redot --headless --path . --script res://tools/worldgen_river_verify.gd`
   checks river naturalization: bounded-channel wetted width (interquartile ratio
   at most 1.8), a dished cross-section instead of a constant-depth pan, tapered
@@ -224,8 +243,8 @@ to review it; an already-running world retains its configured sampler and chunks
   records ring-load wall time and throughput at render distances 10/16/32 and
   several job-concurrency levels.
 
-The pinned normal-generation sample currently averages about 34 ms for full
-voxel generation and 14 ms for compact LOD data on the development machine.
+The pinned normal-generation sample currently averages about 44 ms for full
+voxel generation and 15 ms for compact LOD data on the development machine.
 Full mesh CPU remains much more expensive because it builds a 3x3 light volume,
 floods sky and RGB light, computes AO, and emits collision triangles; keep that
 work on workers and compare total chunk throughput when changing concurrency.

@@ -26,7 +26,7 @@ var _slot_width := 180.0
 
 
 func _ready() -> void:
-	_panel.theme = UITheme.build()
+	UITheme.apply(_panel)
 	_style_static()
 	for entry in TIME_BUTTONS:
 		var button := _time_row.get_node(entry["node"]) as Button
@@ -38,9 +38,7 @@ func _style_static() -> void:
 	_dim.color = Color(UITheme.VOID.r, UITheme.VOID.g, UITheme.VOID.b, 0.62)
 	_panel.add_theme_stylebox_override("panel", UITheme.modal_style())
 	_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_heading.add_theme_font_override("font", UITheme.font_display())
-	_heading.add_theme_font_size_override("font_size", UITheme.SIZE_DISPLAY)
-	_heading.add_theme_color_override("font_color", UITheme.INK)
+	UITheme.style_heading(_heading)
 	var box := _heading.get_parent() as VBoxContainer
 	var eyebrow := UITheme.eyebrow("Supplies")
 	box.add_child(eyebrow)
@@ -76,7 +74,7 @@ func _style_static() -> void:
 	_grid.add_theme_constant_override("h_separation", 8)
 	_grid.add_theme_constant_override("v_separation", 8)
 	_hint.add_theme_color_override("font_color", UITheme.MUTED)
-	_hint.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_hint, 13)
 	_refresh_hint()
 
 
@@ -174,15 +172,15 @@ func _make_slot(block_id: int, count: int, world_ref: VoxelWorld, registry: Bloc
 	var name_label := Label.new()
 	name_label.text = world_ref.get_block_name(block_id).to_lower()
 	name_label.add_theme_font_override("font", UITheme.font_semi())
-	name_label.add_theme_font_size_override("font_size", 13)
 	name_label.add_theme_color_override("font_color", UITheme.INK)
 	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_font_size(name_label, 13)
 	text.add_child(name_label)
 	var count_label := Label.new()
 	count_label.text = "×%d" % count
 	count_label.add_theme_font_override("font", UITheme.font_semi())
-	count_label.add_theme_font_size_override("font_size", 14)
 	count_label.add_theme_color_override("font_color", UITheme.CYAN)
+	UITheme.apply_font_size(count_label, 14)
 	text.add_child(count_label)
 	return slot
 

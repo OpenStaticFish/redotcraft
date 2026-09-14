@@ -231,7 +231,10 @@ func _check_pause_settings_signal() -> void:
 
 
 func _find_key_button(panel: Node, label_text: String) -> Button:
-	for child in panel.get_node("Center/Panel/Box/Scroll/RowsBox").get_children():
+	var rows := panel.find_child("RowsBox", true, false)
+	if rows == null:
+		return null
+	for child in rows.get_children():
 		if not child is HBoxContainer:
 			continue
 		var name_label := child.get_child(0) as Label
