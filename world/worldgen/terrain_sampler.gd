@@ -17,11 +17,13 @@ const CHANNEL_DETAIL: int = 5
 const CHANNEL_RIVER: int = 6
 const CHANNEL_TEMPERATURE: int = 7
 const CHANNEL_MOISTURE: int = 8
-const CHANNEL_REEF: int = 9
-const CHANNEL_KELP: int = 10
-const CHANNEL_SEAGRASS: int = 11
-const CHANNEL_SEABED: int = 12
-const CHANNEL_COUNT: int = 13
+const CHANNEL_RIVER_WIDTH: int = 9
+const CHANNEL_RIVER_BED: int = 10
+const CHANNEL_REEF: int = 11
+const CHANNEL_KELP: int = 12
+const CHANNEL_SEAGRASS: int = 13
+const CHANNEL_SEABED: int = 14
+const CHANNEL_COUNT: int = 15
 
 const MIN_TERRAIN_HEIGHT: float = 3.0
 const HEIGHT_MARGIN: float = 8.0
@@ -54,6 +56,30 @@ const REEF_PATCH_SCALE: float = 150.0
 const KELP_PATCH_SCALE: float = 140.0
 const SEAGRASS_PATCH_SCALE: float = 220.0
 const SEABED_RELIEF_SCALE: float = 96.0
+# River cross-section geometry in world blocks. The bed sits a few blocks below
+# sea level at the centreline, banks taper over RIVER_BANK_WIDTH, and the
+# floodplain grades back into natural terrain over RIVER_FLOODPLAIN_WIDTH.
+# Distances come from a gradient-normalized corridor field, so these are real
+# widths instead of noise-value bands whose extent depends on the local noise
+# gradient (which made channels pinch, fan out, and read as angular cuts).
+const RIVER_CHANNEL_HALF_MIN: float = 4.0
+const RIVER_CHANNEL_HALF_MAX: float = 12.0
+const RIVER_BANK_WIDTH: float = 10.0
+const RIVER_FLOODPLAIN_WIDTH: float = 22.0
+const RIVER_BED_DEPTH: float = 2.8
+const RIVER_BED_DEPTH_VARIATION: float = 0.8
+const RIVER_FLOODPLAIN_RISE: float = 2.0
+const RIVER_WIDTH_SCALE_MIN: float = 0.72
+const RIVER_WIDTH_SCALE_MAX: float = 1.75
+const RIVER_WIDTH_VARIATION: float = 0.10
+const RIVER_MIN_GRADIENT: float = 0.000001
+# Corridor-space extent of the floodplain relief damping. The corridor is
+# sampled at macro_scale * 0.70 and a typical noise gradient is order one, so
+# 0.12 is roughly a 32-block apron at the default macro scale.
+const RIVER_FLOODPLAIN_CORRIDOR: float = 0.12
+# Meander warp, as fractions of macro_scale: wavelength and lateral amplitude.
+const RIVER_MEANDER_SCALE: float = 0.34
+const RIVER_MEANDER_AMOUNT: float = 0.12
 # build_field has four successively smaller grids. Float64 packed arrays retain
 # point-query precision while making every coordinate's neighbourhood independent
 # of which chunk is being generated.
@@ -66,6 +92,12 @@ const RAW_MAX: int = FINAL_MAX + 1
 const SOURCE_MIN: int = RAW_MIN - RegionalErosion.SAMPLE_RADIUS
 const SOURCE_MAX: int = RAW_MAX + RegionalErosion.SAMPLE_RADIUS
 const SOURCE_SIDE: int = SOURCE_MAX - SOURCE_MIN + 1
+# The river corridor grid extends one cell past the source grid so the forward
+# difference in +x and +z exists at every source cell. That keeps the
+# gradient-normalized distance identical from every chunk and point query.
+const CORRIDOR_MIN: int = SOURCE_MIN
+const CORRIDOR_MAX: int = SOURCE_MAX + 1
+const CORRIDOR_SIDE: int = CORRIDOR_MAX - CORRIDOR_MIN + 1
 const RAW_SIDE: int = RAW_MAX - RAW_MIN + 1
 const FINAL_SIDE: int = FINAL_MAX - FINAL_MIN + 1
 const CLIMATE_BIOMES := [
@@ -124,6 +156,18 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 	var origin_x: int = chunk_pos.x * VoxelDefsScript.CHUNK_SIZE
 	var origin_z: int = chunk_pos.y * VoxelDefsScript.CHUNK_SIZE
 
+	var corridor := PackedFloat64Array()
+	corridor.resize(CORRIDOR_SIDE * CORRIDOR_SIDE)
+	var skip_rivers: bool = _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT or _config.river_density <= 0.0
+	if skip_rivers:
+		corridor.fill(10.0)
+	else:
+		for local_z in range(CORRIDOR_MIN, CORRIDOR_MAX + 1):
+			var corridor_z: int = origin_z + local_z
+			var corridor_row: int = (local_z - CORRIDOR_MIN) * CORRIDOR_SIDE
+			for local_x in range(CORRIDOR_MIN, CORRIDOR_MAX + 1):
+				corridor[corridor_row + local_x - CORRIDOR_MIN] = _river_corridor_at(origin_x + local_x, corridor_z)
+
 	var source_height := PackedFloat64Array()
 	var source_continental := PackedFloat64Array()
 	var source_base := PackedFloat64Array()
@@ -138,19 +182,25 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 	for local_z in range(SOURCE_MIN, SOURCE_MAX + 1):
 		var world_z: int = origin_z + local_z
 		var row: int = (local_z - SOURCE_MIN) * SOURCE_SIDE
+		var corridor_row: int = (local_z - CORRIDOR_MIN) * CORRIDOR_SIDE
 		for local_x in range(SOURCE_MIN, SOURCE_MAX + 1):
 			var world_x: int = origin_x + local_x
 			var source_index: int = row + local_x - SOURCE_MIN
+			var corridor_index: int = corridor_row + local_x - CORRIDOR_MIN
 			var continental: float = _continentalness_at(world_x, world_z)
 			var base: float = _base_height_at(world_x, world_z, continental)
 			var profile_position: float = _profile_position_at(world_x, world_z, continental)
-			var river_value: float = _river_at(world_x, world_z, continental)
+			var river_distance: float = _river_distance_from_corridor(
+				corridor[corridor_index],
+				corridor[corridor_index + 1],
+				corridor[corridor_index + CORRIDOR_SIDE])
+			var river_width_scale: float = _river_width_scale_at(world_x, world_z)
 			source_continental[source_index] = continental
 			source_profile[source_index] = profile_position
 			source_base[source_index] = base
-			source_river[source_index] = river_value
+			source_river[source_index] = _river_strength_from_distance(river_distance, continental, river_width_scale)
 			source_height[source_index] = _height_without_regional_erosion_from_samples(
-				world_x, world_z, continental, base, profile_position, river_value)
+				world_x, world_z, continental, base, profile_position, corridor[corridor_index])
 
 	var raw_height := PackedFloat64Array()
 	raw_height.resize(RAW_SIDE * RAW_SIDE)
@@ -158,6 +208,7 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 		var world_z: int = origin_z + local_z
 		var raw_row: int = (local_z - RAW_MIN) * RAW_SIDE
 		var source_row: int = (local_z - SOURCE_MIN) * SOURCE_SIDE
+		var corridor_row: int = (local_z - CORRIDOR_MIN) * CORRIDOR_SIDE
 		for local_x in range(RAW_MIN, RAW_MAX + 1):
 			var world_x: int = origin_x + local_x
 			var raw_index: int = raw_row + local_x - RAW_MIN
@@ -176,6 +227,18 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 					source_height[source_index + RegionalErosion.FLOW_SAMPLE_DISTANCE * SOURCE_SIDE])
 				if _hydraulic_erosion != null:
 					raw_value += _hydraulic_erosion.modifier(world_x, world_z, _hydraulic_height_source)
+				# The channel is carved after hillslope erosion so the whole
+				# downstream profile is re-shaped once, and so the many height
+				# evaluations inside regional erosion do not pay for a river
+				# distance query each.
+				var corridor_index: int = corridor_row + local_x - CORRIDOR_MIN
+				var river_distance: float = _river_distance_from_corridor(
+					corridor[corridor_index],
+					corridor[corridor_index + 1],
+					corridor[corridor_index + CORRIDOR_SIDE])
+				raw_value = _apply_river_carve(
+					world_x, world_z, raw_value, river_distance,
+					source_continental[source_index], _river_width_scale_at(world_x, world_z))
 			raw_height[raw_index] = clampf(raw_value, MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
 
 	var final_height := PackedFloat64Array()
@@ -395,9 +458,11 @@ func _make_noise_channels() -> Array[FastNoiseLite]:
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 701],
 		[FastNoiseLite.TYPE_PERLIN, 1.0, 2, 809],
 		[FastNoiseLite.TYPE_PERLIN, 1.0, 2, 907],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1201],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1301],
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1013],
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1109],
-		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1201],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1409],
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1303],
 	]
 	var result: Array[FastNoiseLite] = []
@@ -410,6 +475,17 @@ func _make_noise_channels() -> Array[FastNoiseLite]:
 		noise.fractal_gain = 0.5
 		noise.seed = WorldGenHash.hash_1d(_config.seed, definition[3])
 		result.append(noise)
+	# The channel meander uses FastNoiseLite's native domain warp instead of
+	# GDScript warp channels. Point queries evaluate the corridor many times per
+	# decoration, so the native single-pass warp keeps that path affordable.
+	var river_noise: FastNoiseLite = result[CHANNEL_RIVER]
+	var sample_scale: float = _config.macro_scale * 0.70
+	river_noise.domain_warp_enabled = true
+	river_noise.domain_warp_type = FastNoiseLite.DOMAIN_WARP_SIMPLEX
+	river_noise.domain_warp_amplitude = (_config.macro_scale * RIVER_MEANDER_AMOUNT) / sample_scale
+	river_noise.domain_warp_frequency = sample_scale / (_config.macro_scale * RIVER_MEANDER_SCALE)
+	river_noise.domain_warp_fractal_type = FastNoiseLite.DOMAIN_WARP_FRACTAL_NONE
+	river_noise.domain_warp_fractal_octaves = 1
 	return result
 
 
@@ -470,20 +546,21 @@ func _height_without_regional_erosion(x: int, z: int) -> float:
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT:
 		return base
 	var profile_position: float = _profile_position_at(x, z, continental)
-	var river_value: float = _river_at(x, z, continental)
-	return _height_without_regional_erosion_from_samples(x, z, continental, base, profile_position, river_value)
+	return _height_without_regional_erosion_from_samples(
+		x, z, continental, base, profile_position, _river_corridor_at(x, z))
 
 
 ## Computes the expensive, no-regional source height from values cached in the
 ## expanded grid. All arguments are scalar so point queries retain their API and
-## exact coordinate behaviour.
+## exact coordinate behaviour. Terrain shaping only needs the raw corridor value
+## (for floodplain damping); the channel carve runs later on the eroded height.
 func _height_without_regional_erosion_from_samples(
 		x: int,
 		z: int,
 		continental: float,
 		base: float,
 		profile_position: float,
-		river_value: float) -> float:
+		river_corridor: float) -> float:
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT:
 		return base
 	var profile: int = clampi(floori(profile_position), 0, TerrainProfileCatalog.RIDGED_MOUNTAINS)
@@ -507,16 +584,17 @@ func _height_without_regional_erosion_from_samples(
 	var relief_scale: float = _config.terrain_scale
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_AMPLIFIED:
 		relief_scale *= 1.85
-	var height: float = base + (detail + relief * ridge * ridge * ridge_weight) * land * relief_scale
+	# Floodplain grading: damp broad relief and fine detail near the channel so
+	# the cut blends into graded ground instead of stopping at a natural hill.
+	# The mask is corridor-space rather than distance-space: the carve owns the
+	# exact channel width, while this only needs a coherent low-relief apron.
+	var floodplain: float = _river_floodplain_weight(river_corridor, continental)
+	var relief_gain: float = 1.0 - floodplain * 0.45
+	var height: float = base + (detail * relief_gain + relief * ridge * ridge * ridge_weight * relief_gain) * land * relief_scale
 	# Keep regional relief separate from small landforms. Fade these additions
-	# at coasts; river carving below still owns the channel floor and waterline.
+	# at coasts; the channel carve later still owns the floor and waterline.
 	height += _local_landform_detail(warped, profile, next_profile, profile_blend) \
-		* _smoothstep(0.43, 0.60, continental) * relief_scale
-	if river_value > 0.0:
-		# A sea-connected lowland channel, not a knife cut through every peak.
-		# Fade the carve before uplands and fill to one common water level later.
-		var lowland: float = 1.0 - _smoothstep(float(VoxelDefsScript.SEA_LEVEL + 8), float(VoxelDefsScript.SEA_LEVEL + 24), height)
-		height = lerpf(height, minf(height, float(VoxelDefsScript.SEA_LEVEL - 2)), river_value * lowland)
+		* _smoothstep(0.43, 0.60, continental) * relief_scale * (1.0 - floodplain * 0.7)
 	return height
 
 
@@ -575,6 +653,10 @@ func _raw_height_at(x: int, z: int) -> float:
 	var height: float = _height_with_regional_erosion(x, z)
 	if _hydraulic_erosion != null and _config.world_type != WorldGenConfig.WORLD_TYPE_FLAT:
 		height += _hydraulic_erosion.modifier(x, z, _hydraulic_height_source)
+	if _config.world_type != WorldGenConfig.WORLD_TYPE_FLAT:
+		height = _apply_river_carve(
+			x, z, height, _river_distance_at(x, z),
+			_continentalness_at(x, z), _river_width_scale_at(x, z))
 	return clampf(height, MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
 
 
@@ -649,15 +731,124 @@ func _profile_position_at(x: int, z: int, continental: float) -> float:
 	return clampf(position, 0.0, float(TerrainProfileCatalog.RIDGED_MOUNTAINS))
 
 
-func _river_at(x: int, z: int, continental: float) -> float:
+## Raw river corridor field: absolute value of a warped low-frequency noise.
+## Its zero level set is the channel centreline. The noise carries a native
+## domain warp that bends the corridor into meanders instead of tracing the raw
+## level set, whose long straight segments and sharp corners read as artificial.
+func _river_corridor_at(x: int, z: int) -> float:
+	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT or _config.river_density <= 0.0:
+		return 10.0
+	var warped := _macro_warp(x, z)
+	var sample_scale: float = _config.macro_scale * 0.70
+	return absf(_noises[CHANNEL_RIVER].get_noise_2d(
+		warped.x / sample_scale, warped.y / sample_scale))
+
+
+## |n| / |grad n| is the first-order distance to the zero level set, in blocks.
+## Forward differences need only two neighbour samples, which keeps point
+## queries affordable; both chunk fields and point queries use the same formula.
+func _river_distance_from_corridor(center: float, east: float, south: float) -> float:
+	var dx: float = east - center
+	var dz: float = south - center
+	var gradient: float = sqrt(dx * dx + dz * dz)
+	return center / maxf(gradient, RIVER_MIN_GRADIENT)
+
+
+func _river_distance_at(x: int, z: int) -> float:
+	return _river_distance_from_corridor(
+		_river_corridor_at(x, z),
+		_river_corridor_at(x + 1, z),
+		_river_corridor_at(x, z + 1))
+
+
+## Channel width scales with the river-density control and a slow along-channel
+## variation, so reaches widen into pools and narrow into riffles instead of
+## staying perfectly uniform.
+func _river_width_scale_at(x: int, z: int) -> float:
+	var density_norm: float = clampf(_config.river_density * 0.25, 0.0, 1.0)
+	var base_scale: float = lerpf(RIVER_WIDTH_SCALE_MIN, RIVER_WIDTH_SCALE_MAX, density_norm)
+	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT or _config.river_density <= 0.0:
+		return base_scale
+	# Sampled unwarped: the width variation only needs to be coherent, and the
+	# extra macro-warp evaluation would be paid by every point query.
+	var variation: float = _noises[CHANNEL_RIVER_WIDTH].get_noise_2d(
+		float(x) / (_config.macro_scale * 0.50), float(z) / (_config.macro_scale * 0.50))
+	return base_scale * (1.0 + variation * RIVER_WIDTH_VARIATION)
+
+
+func _channel_half_width(width_scale: float) -> float:
+	return lerpf(RIVER_CHANNEL_HALF_MIN, RIVER_CHANNEL_HALF_MAX, clampf(_config.river_density * 0.25, 0.0, 1.0)) * width_scale
+
+
+## Strength of the floodplain grading mask, 0 outside the river corridor and 1
+## at the channel centre. Damping terrain amplitudes here lets the carve blend
+## into the surroundings rather than ending at a cliff of natural relief. The
+## corridor-space extent is a tuning constant rather than a true width; the
+## distance-normalized carve owns the actual channel geometry.
+func _river_floodplain_weight(river_corridor: float, continental: float) -> float:
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT or _config.river_density <= 0.0:
 		return 0.0
-	var warped := _macro_warp(x, z)
-	var corridor: float = absf(_noises[CHANNEL_RIVER].get_noise_2d(
-		warped.x / (_config.macro_scale * 0.70), warped.y / (_config.macro_scale * 0.70)))
-	var width: float = lerpf(0.018, 0.105, clampf(_config.river_density * 0.25, 0.0, 1.0))
-	var channel: float = 1.0 - _smoothstep(width, width * 2.4, corridor)
-	return channel * _smoothstep(0.43, 0.60, continental)
+	var density_norm: float = clampf(_config.river_density * 0.25, 0.0, 1.0)
+	var extent: float = RIVER_FLOODPLAIN_CORRIDOR * lerpf(RIVER_WIDTH_SCALE_MIN, RIVER_WIDTH_SCALE_MAX, density_norm)
+	return _smoothstep(0.43, 0.60, continental) \
+		* (1.0 - _smoothstep(extent * 0.05, extent, river_corridor))
+
+
+## Channel strength 0..1: used for climate moisture, biome selection, the voxel
+## surface rules, cave protection, and the debug river map. It follows the same
+## cross-channel distance as the carve so the water body and its bank share one
+## shape.
+func _river_strength_from_distance(distance: float, continental: float, width_scale: float) -> float:
+	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT or _config.river_density <= 0.0:
+		return 0.0
+	var channel_half: float = _channel_half_width(width_scale)
+	# The biome/moisture band deliberately reaches the waterline (about 73% of
+	# the bank run), so wet cells read as RIVER instead of a fragmented BEACH
+	# ribbon and the strength stays monotonic along the cross-section.
+	var bank_half: float = channel_half + RIVER_BANK_WIDTH * width_scale * 1.6
+	if distance >= bank_half:
+		return 0.0
+	return (1.0 - _smoothstep(channel_half, bank_half, distance)) * _smoothstep(0.43, 0.60, continental)
+
+
+func _river_at(x: int, z: int, continental: float) -> float:
+	return _river_strength_from_distance(_river_distance_at(x, z), continental, _river_width_scale_at(x, z))
+
+
+## Pool-and-riffle bed variation so the deepest line is not a constant-depth
+## trench. Sampled unwarped to keep the carve path cheap.
+func _river_bed_depth_at(x: int, z: int) -> float:
+	var variation: float = _noises[CHANNEL_RIVER_BED].get_noise_2d(
+		float(x) / (_config.macro_scale * 0.45), float(z) / (_config.macro_scale * 0.45))
+	return RIVER_BED_DEPTH + variation * RIVER_BED_DEPTH_VARIATION
+
+
+## Carves a smooth channel cross-section instead of dropping every corridor
+## column to one sea-relative floor. The bed follows a smoothstep from its
+## centreline depth up to a bank crest, then the floodplain fades the carve back
+## into natural terrain over a wider span. The lowland gate keeps channels
+## sea-connected and prevents cuts through uplands; only downward motion is
+## applied so a natural hollow is never filled.
+func _apply_river_carve(x: int, z: int, height: float, distance: float, continental: float, width_scale: float) -> float:
+	var channel_half: float = _channel_half_width(width_scale)
+	var bank_half: float = channel_half + RIVER_BANK_WIDTH * width_scale
+	var flood_half: float = bank_half + RIVER_FLOODPLAIN_WIDTH * width_scale
+	if distance >= flood_half:
+		return height
+	var lowland: float = 1.0 - _smoothstep(float(VoxelDefsScript.SEA_LEVEL + 8), float(VoxelDefsScript.SEA_LEVEL + 24), height)
+	var gate: float = _smoothstep(0.43, 0.60, continental) * lowland
+	if gate <= 0.0:
+		return height
+	var bed: float = float(VoxelDefsScript.SEA_LEVEL) - _river_bed_depth_at(x, z)
+	var flood: float = float(VoxelDefsScript.SEA_LEVEL) + RIVER_FLOODPLAIN_RISE
+	# A dished cross-section: nearly flat at the thalweg (zero slope at the
+	# centre), then a steeper bank run up to the floodplain. The previous
+	# smoothstep profile made the deepest line a single point and left wide,
+	# ankle-deep pans at the edges.
+	var t: float = clampf(distance / bank_half, 0.0, 1.0)
+	var target: float = lerpf(bed, flood, pow(t, 1.6))
+	var weight: float = gate * (1.0 - _smoothstep(bank_half, flood_half, distance))
+	return lerpf(height, minf(height, target), weight)
 
 
 func _climate_at(x: int, z: int, height: float, river_value: float) -> Vector2:

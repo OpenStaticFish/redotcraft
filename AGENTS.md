@@ -80,7 +80,7 @@ RedotCraft: a Minecraft-like voxel sandbox built with **Redot Engine** (Godot 4 
 
 - Parse check after editing scripts or scenes: `redot --editor --headless --path . --quit` (a nonzero "error" count means a script/scene fails to load).
 - Headless verifiers, from the repo root (`redot --headless --path . --script res://tools/<file>`):
-  `worldgen_verify.gd` (parity, seams, continuity, roughness), `worldgen_biome_verify.gd` (region size, vegetation density), `worldgen_lod_verify.gd` (LOD parity, canopies, patches, shading), `worldgen_tree_verify.gd`, `worldgen_cactus_verify.gd`, `audio_verify.gd` (bank/buses/mappings), `ui_flow_verify.gd` (menu flows, cancel order, focus), `stream_full_verify.gd` (no LOD inside render distance, lazy collision).
+  `worldgen_verify.gd` (parity, seams, continuity, roughness), `worldgen_biome_verify.gd` (region size, vegetation density), `worldgen_river_verify.gd` (river width, banks, floodplain, bed), `worldgen_lod_verify.gd` (LOD parity, canopies, patches, shading), `worldgen_tree_verify.gd`, `worldgen_cactus_verify.gd`, `audio_verify.gd` (bank/buses/mappings), `ui_flow_verify.gd` (menu flows, cancel order, focus), `stream_full_verify.gd` (no LOD inside render distance, lazy collision).
 - `redot --headless --path . res://tools/player_target_verify.tscn` is scene-based because autoload identifiers are unavailable to `--script` harnesses; use a `.tscn` whenever a test references `GameConfig`/`AudioManager`.
 - `tools/icon_check.gd` needs a rendering display and fails headless.
 - Benchmarks: `worldgen_benchmark.gd`, `worldgen_mesh_benchmark.gd`, and `worldgen_stream_benchmark.gd` (the last is minutes long at 32 chunks).

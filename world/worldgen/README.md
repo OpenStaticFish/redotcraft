@@ -13,8 +13,9 @@ catalogs/samplers used by worker jobs. A chunk then runs these ordered stages:
    scratch rings for regional erosion and gradients.
 2. Domain-warped continentalness and blended terrain profiles establish ocean,
    coast, plains, hills, plateaus, and mountain relief.
-3. Analytic erosion, optional cached hydraulic erosion, and river carving alter
-   heights before climate and surface selection.
+3. Analytic erosion and optional cached hydraulic erosion shape raw heights;
+   the river channel is then carved from cached corridor fields, and climate
+   shaping/smoothing follows before surface selection.
 4. Temperature/moisture choose primary and secondary biomes. Continuous fields
    shape terrain and tint foliage/water; primary biomes choose coherent surface
    blankets and decoration profiles without per-block biome dithering.
@@ -43,7 +44,9 @@ ranges live in `world_gen_config.gd`.
 - `macro_scale`: size of continents and broad terrain regions.
 - `biome_scale`: size of temperature/moisture regions, independent of landforms
   (default 3072 blocks; larger values make biome territories broader).
-- `river_density`: controls channel-mask width and can disable rivers at zero.
+- `river_density`: scales channel and floodplain width and can disable rivers at
+  zero (default 1.0). Meandering, bank taper, and bed depth are tuning constants
+  in `terrain_sampler.gd` (`RIVER_*`).
 - `erosion_strength`: local talus smoothing and profile terracing.
 - `regional_erosion`: broad rainfall/transport erosion strength.
 - `hydraulic_erosion`: deterministic 64x64 droplet tiles. This is deliberately
@@ -79,6 +82,30 @@ rock outcrops, stumps, dead and large trees, fallen logs) and a floor-patch
 pass (worn dirt, mud, gravel scars) add near-field detail; patches also apply
 to compact LOD columns so distance matches. Raising any of these counts must be
 checked against the full-generation budget in `worldgen_benchmark.gd`.
+
+### Rivers
+
+The channel centreline is the zero level set of a low-frequency noise with a
+native `FastNoiseLite` domain warp, so reaches meander instead of following the
+raw contour's straight segments and sharp corners. `_river_distance_at()`
+converts the corridor value into blocks with `|n| / |grad n|` (forward
+differences), which makes the wetted width independent of the local noise
+gradient; the old gradient-space mask pinched to nothing in steep areas and
+fanned into wide pans in flat areas. Width and bed-depth variation are sampled
+unwarped because they only need coherence and point queries pay for every extra
+noise call.
+
+The cross-section is dished rather than a flat sea-relative pan: a nearly flat
+thalweg at `RIVER_BED_DEPTH` (± pool/riffle variation), a bank run of
+`RIVER_BANK_WIDTH` up to a floodplain crest, then a `RIVER_FLOODPLAIN_WIDTH`
+apron that fades the carve into natural terrain. Terrain relief and fine detail
+are damped inside a corridor-space floodplain apron so the cut blends into
+graded ground. The carve runs on the eroded raw height in `build_field()` (and
+`_raw_height_at()`), after regional/hydraulic erosion and before final
+smoothing; the same cached corridor and distance grids feed both, so
+field/point parity and seams hold. The lowland and continental gates keep
+channels sea-connected and prevent cuts through uplands; only downward motion
+is applied, so natural hollows are never filled.
 
 ### Terrain-shape guardrails
 
@@ -176,6 +203,11 @@ to review it; an already-running world retains its configured sampler and chunks
   checks biome-neighbor coherence, contiguous forest/swamp/jungle/taiga territory
   radius, signature vegetation density, and the absence of procedural
   cobblestone debris.
+- `redot --headless --path . --script res://tools/worldgen_river_verify.gd`
+  checks river naturalization: bounded-channel wetted width (interquartile ratio
+  at most 1.8), a dished cross-section instead of a constant-depth pan, tapered
+  low-step banks, graded floodplains, and reach depth variation. Measured 1.5-1.65
+  width ratios against 1.9-2.5 for the old gradient-space mask.
 - `redot --headless --path . res://tools/player_target_verify.tscn`
   checks that voxel traversal skips water and selects breakable cross plants even
   though their meshes intentionally have no movement collision.
@@ -192,8 +224,8 @@ to review it; an already-running world retains its configured sampler and chunks
   records ring-load wall time and throughput at render distances 10/16/32 and
   several job-concurrency levels.
 
-The pinned normal-generation sample currently averages about 40 ms for full
-voxel generation and 12 ms for compact LOD data on the development machine.
+The pinned normal-generation sample currently averages about 34 ms for full
+voxel generation and 14 ms for compact LOD data on the development machine.
 Full mesh CPU remains much more expensive because it builds a 3x3 light volume,
 floods sky and RGB light, computes AO, and emits collision triangles; keep that
 work on workers and compare total chunk throughput when changing concurrency.
