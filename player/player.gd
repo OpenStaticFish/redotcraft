@@ -74,11 +74,14 @@ func set_selected_block(block_id: int) -> void:
 
 
 ## Detached photo-mode camera: freeze player simulation and hide the targeting
-## highlight so the composition cannot be disturbed or edited.
+## highlight and the first-person held block so the composition cannot be
+## disturbed or the hand model caught in the shot.
 func set_photo_mode(enabled: bool) -> void:
 	process_mode = Node.PROCESS_MODE_DISABLED if enabled else Node.PROCESS_MODE_INHERIT
 	if enabled and _highlight != null:
 		_highlight.visible = false
+	if _held_block != null:
+		_held_block.visible = not enabled
 
 
 func _unhandled_input(event: InputEvent) -> void:

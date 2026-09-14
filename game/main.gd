@@ -602,11 +602,11 @@ func _update_stats() -> void:
 	if not player:
 		return
 	var view := _active_camera()
-	var position := view.global_position if view != null else player.global_position
-	var coords := Vector3i(floori(position.x), floori(position.y), floori(position.z))
+	var camera_position := view.global_position if view != null else player.global_position
+	var coords := Vector3i(floori(camera_position.x), floori(camera_position.y), floori(camera_position.z))
 	_coords_label.text = "X %d   Y %d   Z %d\n%s" % [
 		coords.x, coords.y, coords.z,
-		world.get_biome_name(position),
+		world.get_biome_name(camera_position),
 	]
 	_stats_label.text = "%d FPS\n%d chunks\n%s" % [
 		Engine.get_frames_per_second(),

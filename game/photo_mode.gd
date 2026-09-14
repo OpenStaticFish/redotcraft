@@ -186,16 +186,19 @@ func get_camera() -> Camera3D:
 	return _camera
 
 
-## Captures the current frame without the HUD so shots stay clean even when F1
-## left the interface visible. The one-frame hide is restored before the PNG is
-## written, so the status toast appears normally afterwards.
+## Captures the current frame without the HUD or any CanvasLayer UI so shots
+## stay clean even when F1 left the interface visible or a modal is open. The
+## one-frame hide is restored before the PNG is written, so the status toast
+## and menus appear normally afterwards.
 func capture_screenshot() -> void:
 	if _capturing:
 		return
 	_capturing = true
 	_apply_hud(false)
+	var hidden_layers := _hide_canvas_layers()
 	await RenderingServer.frame_post_draw
 	var image := get_viewport().get_texture().get_image()
+	_restore_canvas_layers(hidden_layers)
 	_apply_hud(_hud_visible)
 	if image == null or image.is_empty():
 		_capturing = false
@@ -215,6 +218,31 @@ func capture_screenshot() -> void:
 		return
 	print("Screenshot saved: ", ProjectSettings.globalize_path(path))
 	status_requested.emit("Screenshot saved — %s" % path.get_file())
+
+
+## Hides every visible CanvasLayer (HUD, pause menu, inventory, overlays) for
+## the readback frame and returns the hidden set so the caller can restore it.
+## Walking the tree keeps the node independent of which overlays Main owns.
+func _hide_canvas_layers() -> Array[CanvasLayer]:
+	var hidden: Array[CanvasLayer] = []
+	_collect_hidden_layers(get_tree().root, hidden)
+	return hidden
+
+
+func _collect_hidden_layers(node: Node, hidden: Array[CanvasLayer]) -> void:
+	for child in node.get_children():
+		if child is CanvasLayer:
+			var layer := child as CanvasLayer
+			if layer.visible:
+				layer.visible = false
+				hidden.append(layer)
+		_collect_hidden_layers(child, hidden)
+
+
+func _restore_canvas_layers(hidden: Array[CanvasLayer]) -> void:
+	for layer in hidden:
+		if is_instance_valid(layer):
+			layer.visible = true
 
 
 ## Timestamped path that never overwrites an existing capture. Static so the

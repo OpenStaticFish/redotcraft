@@ -1,5 +1,6 @@
 ## Headless regression check for photo mode: HUD toggle state, detached camera
-## handoff, mouse look and movement, screenshot naming, and the input bindings.
+## handoff, mouse look and movement, first-person artifact hiding, UI-layer
+## readback hiding, screenshot naming, and the input bindings.
 ## Run:
 ##   redot --headless --path . --script res://tools/photo_mode_verify.gd
 ##
@@ -99,6 +100,39 @@ func _run() -> void:
 	_expect(photo.is_hud_visible() and hud.visible, "F1 should show the HUD in photo mode")
 	photo.set_free_camera(false)
 	_expect(photo.is_hud_visible() and hud.visible, "exiting should keep the F1 choice")
+
+	# Player.set_photo_mode freezes the actor and hides both first-person
+	# artifacts. Loaded by path: player.gd's autoload references only resolve
+	# once the harness is running.
+	var player_script: GDScript = load("res://player/player.gd")
+	var actor: Node = player_script.new()
+	var actor_highlight := MeshInstance3D.new()
+	var actor_held := MeshInstance3D.new()
+	actor.set("_highlight", actor_highlight)
+	actor.set("_held_block", actor_held)
+	actor.call("set_photo_mode", true)
+	_expect(actor.process_mode == Node.PROCESS_MODE_DISABLED, "photo mode should freeze the player")
+	_expect(not actor_highlight.visible and not actor_held.visible,
+		"photo mode should hide the target highlight and the held block")
+	actor.call("set_photo_mode", false)
+	_expect(actor.process_mode == Node.PROCESS_MODE_INHERIT, "exiting photo mode should unfreeze the player")
+	_expect(actor_held.visible, "exiting photo mode should restore the held block")
+	actor.free()
+	actor_highlight.free()
+	actor_held.free()
+
+	# The F2 readback hides every CanvasLayer, not just the HUD root, so
+	# pause/inventory/overlay menus cannot land in the PNG.
+	var overlay := CanvasLayer.new()
+	overlay.name = "VerifyOverlay"
+	root_node.add_child(overlay)
+	_expect(overlay.visible, "test overlay should start visible")
+	var hidden_layers := photo._hide_canvas_layers()
+	_expect(not overlay.visible, "capture should hide CanvasLayer overlays")
+	_expect(hidden_layers.has(overlay), "capture should track the hidden overlay")
+	photo._restore_canvas_layers(hidden_layers)
+	_expect(overlay.visible, "capture should restore CanvasLayer overlays")
+	overlay.free()
 
 	# Key bindings route through the InputMap actions.
 	for action in ["hud_toggle", "screenshot", "photo_camera"]:
