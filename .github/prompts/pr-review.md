@@ -43,6 +43,7 @@ $PREVIOUS_REVIEWS
 2. **ACKNOWLEDGE FIXES:** If a previously reported issue has been fixed, state "✅ **[FIXED]** Previous issue: [brief description]" in the appropriate section.
 3. **ONLY REPORT NEW/UNRESOLVED ISSUES:** Do NOT re-report issues that have already been fixed. Only report issues that are still present in the current code.
 4. **TRACK CHANGES:** If an issue was reported in a previous review but the code has changed, verify the new code and report the issue with updated file:line references if it still exists.
+5. **FORMATTING:** Never wrap review prose (issue descriptions, impacts, summaries, metadata) in code fences — only wrap actual code. Use a fenced code block solely for real code snippets and tag it with the correct language (e.g. `gdscript`).
 
 ---
 
@@ -65,14 +66,15 @@ Then provide 2-3 sentences summarizing the PR purpose, scope, and overall qualit
 
 Only report NEW critical issues that could cause crashes, security vulnerabilities, data loss, or major bugs.
 
-For each issue, use this exact format:
-```
+For each issue, output this exact structure directly as Markdown — do not wrap it in a code fence:
+
 **[CRITICAL]** `File:Line` - Issue Title
 **Confidence:** High|Medium|Low (how sure you are this is a real problem)
 **Description:** Clear explanation of the issue
 **Impact:** What could go wrong if merged
 **Suggested Fix:** Specific code changes needed
-```
+
+Only put actual code snippets inside the **Suggested Fix** (or the description) in a fenced block, tagged `gdscript` when it is GDScript.
 
 ## ⚠️ High Priority Issues (Should Fix)
 Same approach as Critical - check previous reviews first, acknowledge fixes, only report unresolved issues.
