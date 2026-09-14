@@ -64,7 +64,9 @@ const RAIN_VOLUMETRIC_SCALE := 1.5
 # `underwater_depth` is 0 at the surface, 1 at UNDERWATER_MAX_DEPTH. Fog, sun,
 # ambient, and caustics are all graded from those two values.
 const UNDERWATER_MAX_DEPTH := 18.0
-const UNDERWATER_FOG_ADD := 0.018
+# Depth-scaled haze that blends distant seabed banks into the water column
+# instead of letting their lit tops read as floating shelves.
+const UNDERWATER_FOG_ADD := 0.03
 const UNDERWATER_VOLUMETRIC_SCALE := 1.4
 const UNDERWATER_LIGHT_FLOOR := 0.32
 const UNDERWATER_CAUSTIC_STRENGTH := 0.9

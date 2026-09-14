@@ -162,7 +162,10 @@ const EMISSIVE_COLORS := {
 	BLOCK_LAVA: Color(1.0, 0.3, 0.06),
 }
 const ATTENUATION_LEAVES := 3
-const ATTENUATION_WATER := 2
+# Light drops 3 per water block so sky light stops fading in within ~5 blocks of
+# the surface; at 2 the shallow ocean banks stayed near-white and read as
+# glowing "fins" against the dark abyssal floor.
+const ATTENUATION_WATER := 3
 const TEXTURE_TINTS := {
 	"grass_top.png": Color(0.44, 0.84, 0.34),
 	"leaves.png": Color(0.62, 1.15, 0.5),
