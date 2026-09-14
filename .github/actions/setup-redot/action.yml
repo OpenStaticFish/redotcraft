@@ -46,11 +46,12 @@ runs:
       if: steps.engine-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
+        REDOT_VERSION: ${{ inputs.redot-version }}
         ARCHIVE: ${{ steps.release.outputs.archive }}
         EXPECTED_SHA512: ${{ steps.release.outputs.sha512 }}
       run: |
         set -euo pipefail
-        tag="redot-${{ inputs.redot-version }}-stable"
+        tag="redot-${REDOT_VERSION}-stable"
         base="https://github.com/Redot-Engine/redot-engine/releases/download/${tag}"
         install_dir="$HOME/.cache/redot-craft"
         mkdir -p "$install_dir"
