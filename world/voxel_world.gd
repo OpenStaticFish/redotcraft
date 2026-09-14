@@ -155,10 +155,17 @@ func set_render_distance(value: int) -> void:
 	_unload_far()
 
 
-func setup_player(player_node: Node3D) -> void:
+## Points streaming at a new node. The initial setup and any caller that is
+## about to place physics on the target (photo mode returning to the player)
+## ask for sync_spawn_area: it commits the 3x3 ring on the main thread so the
+## target is not left standing in unloaded space. Mid-flight re-targets leave
+## the ring to the async nearest-first stream instead of stalling the frame.
+func setup_player(player_node: Node3D, sync_spawn_area := false) -> void:
+	var first_setup := _player == null
 	_player = player_node
 	_stream_center = _chunk_for_position(player_node.global_position)
-	_generate_spawn_area()
+	if first_setup or sync_spawn_area:
+		_generate_spawn_area()
 	_rebuild_desired()
 	_schedule_jobs()
 

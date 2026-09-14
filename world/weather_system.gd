@@ -67,6 +67,12 @@ func setup(camera: Camera3D, day_night: DayNightCycle) -> void:
 		_day_night.set_weather_dim(rain_amount)
 
 
+## Re-targets the rain field and cover checks at the active render camera
+## (photo mode swaps in a detached camera).
+func set_camera(camera: Camera3D) -> void:
+	_camera = camera
+
+
 func set_state(new_state: State) -> void:
 	if new_state == state:
 		return
