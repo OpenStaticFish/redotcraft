@@ -64,16 +64,24 @@ jobs:
       - name: Fetch previous opencode reviews
         run: |
           set -euo pipefail
+          bot_filter='select(.user.login == "github-actions[bot]" or .user.login == "opencode-agent[bot]")'
           reviews_json="$(gh api \
             "/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]" or .user.login == "opencode-agent[bot]") | {body: .body, submitted_at: .submitted_at}]' \
+            --jq "[.[] | ${bot_filter} | {body: .body, submitted_at: .submitted_at}]" \
             2>/dev/null || echo '[]')"
-          if [[ -z "$reviews_json" || "$reviews_json" == "[]" ]]; then
+          comments_json="$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq "[.[] | ${bot_filter} | {body: .body, submitted_at: .created_at}]" \
+            2>/dev/null || echo '[]')"
+          reviews_json="${reviews_json:-[]}"
+          comments_json="${comments_json:-[]}"
+          combined_json="$(printf '%s\n%s\n' "$reviews_json" "$comments_json" | jq -s 'add | sort_by(.submitted_at // "")')"
+          if [[ "$(jq 'length' <<< "$combined_json")" == "0" ]]; then
             review_content="No previous automated reviews found."
           else
             review_content="$(jq -r \
               'map("### Review from " + (.submitted_at // "unknown date") + "\n\n" + (.body // "")) | join("\n\n---\n\n")' \
-              <<< "$reviews_json")"
+              <<< "$combined_json")"
           fi
           {
             echo 'PREVIOUS_REVIEWS<<OPENCODE_REVIEWS_EOF'
@@ -114,6 +122,16 @@ jobs:
             echo 'OPENCODE_PROMPT_EOF'
           } >> "$GITHUB_ENV"
 
+      - name: Verify required secrets
+        env:
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ZHIPU_API_KEY:-}" ]]; then
+            echo "::error::ZHIPU_API_KEY is not available to this repository. Add it as a repository secret or grant the organization secret to this repository."
+            exit 1
+          fi
+
       - name: Run opencode review
         id: ai_review
         timeout-minutes: 40
@@ -131,6 +149,7 @@ jobs:
         env:
           AI_REVIEW_OUTCOME: ${{ steps.ai_review.outcome }}
         run: |
+          rm -f "$HOME/.local/share/opencode/auth.json"
           echo "opencode action outcome: ${AI_REVIEW_OUTCOME:-unknown}"
           echo "runner: ${RUNNER_NAME:-unknown} (${RUNNER_OS:-unknown}/${RUNNER_ARCH:-unknown})"
           echo "XDG_CACHE_HOME: ${XDG_CACHE_HOME:-unset}"
