@@ -93,8 +93,8 @@ func _build_foliage_tints(field: ChunkTerrainData) -> PackedColorArray:
 		for local_x in VoxelDefs.CHUNK_SIZE:
 			var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
 			var field_index := ChunkTerrainData.cell_index(local_x, local_z)
-			# Discrete generation uses the primary biome. Blend the continuous
-			# climate pair for foliage tint; both values are shared by
+			# Discrete generation uses coherent ecotone dominant patches. Blend
+			# the continuous climate pair for foliage tint; both values are shared by
 			# adjacent chunk fields, so this remains deterministic and seam-safe.
 			var primary := _biomes.foliage_color(int(field.biome_id[field_index]))
 			var secondary := _biomes.foliage_color(int(field.biome_secondary_id[field_index]))

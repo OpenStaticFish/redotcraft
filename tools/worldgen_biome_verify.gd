@@ -23,12 +23,21 @@ func _init() -> void:
 		"decoration_density": 1.0,
 	})
 	var samples := {}
+	var secondary_samples := {}
 	var same_neighbors := 0
 	var neighbor_pairs := 0
+	var transition_count := 0
+	var secondary_owned := 0
 	for z in range(-SAMPLE_RADIUS, SAMPLE_RADIUS + 1, SAMPLE_STEP):
 		for x in range(-SAMPLE_RADIUS, SAMPLE_RADIUS + 1, SAMPLE_STEP):
 			var sample: Dictionary = generator.sample_point(x, z)
-			samples[Vector2i(x, z)] = int(sample["dominant_biome_id"])
+			var position := Vector2i(x, z)
+			samples[position] = int(sample["dominant_biome_id"])
+			if float(sample["ecotone_strength"]) >= 0.25:
+				transition_count += 1
+				if int(sample["dominant_biome_id"]) != int(sample["biome_id"]):
+					secondary_owned += 1
+					secondary_samples[position] = int(sample["dominant_biome_id"])
 	var centers := _find_interior_centers(generator, samples)
 	for position: Vector2i in samples:
 		for offset in [Vector2i(SAMPLE_STEP, 0), Vector2i(0, SAMPLE_STEP)]:
@@ -37,12 +46,24 @@ func _init() -> void:
 				if samples[position] == samples[position + offset]:
 					same_neighbors += 1
 	var coherence := float(same_neighbors) / float(neighbor_pairs)
-	# Naturalized rivers hold a consistent width, so narrow RIVER and BEACH
-	# ribbons cross more of the lattice than the old gradient-pinched channels
-	# did. That lowers the all-biome average even though the river ribbons
-	# themselves are more coherent. 0.54 still rejects the checkerboard
-	# fragmentation this guard exists for.
-	_check(coherence >= 0.54, "biome-neighbor coherence %.3f fell below 0.54" % coherence)
+	# Ecotone patches intentionally lower exact-biome agreement while remaining
+	# far above checkerboard randomness. Interior-radius checks below separately
+	# protect the broad primary territories.
+	_check(coherence >= 0.49, "biome-neighbor coherence %.3f fell below 0.49" % coherence)
+	var transition_share := float(transition_count) / float(samples.size())
+	var secondary_share := float(secondary_owned) / float(maxi(transition_count, 1))
+	var coherent_secondary_links := 0
+	var secondary_link_slots := 0
+	for position: Vector2i in secondary_samples:
+		for offset in [Vector2i(SAMPLE_STEP, 0), Vector2i(0, SAMPLE_STEP)]:
+			secondary_link_slots += 1
+			if secondary_samples.get(position + offset, -1) == secondary_samples[position]:
+				coherent_secondary_links += 1
+	var secondary_coherence := float(coherent_secondary_links) / float(maxi(secondary_link_slots, 1))
+	_check(transition_share >= 0.08, "ecotones became too narrow (%.3f of samples)" % transition_share)
+	_check(transition_share <= 0.55, "ecotones swallowed biome interiors (%.3f of samples)" % transition_share)
+	_check(secondary_share >= 0.03, "ecotones no longer blend secondary surface/vegetation patches (%.3f)" % secondary_share)
+	_check(secondary_coherence >= 0.05, "secondary ecotone ownership fragmented into isolated columns (%.3f coherence)" % secondary_coherence)
 	for biome in TARGETS:
 		_check(centers.has(biome), "could not find interior for %s" % BiomeCatalog.new().name_for(biome))
 	if centers.size() == TARGETS.size():
@@ -51,7 +72,7 @@ func _init() -> void:
 	if _failed:
 		quit(1)
 		return
-	print("WORLDGEN BIOME VERIFY: PASS coherence=%.3f" % coherence)
+	print("WORLDGEN BIOME VERIFY: PASS coherence=%.3f ecotones=%.3f secondary=%.3f patch_coherence=%.3f" % [coherence, transition_share, secondary_share, secondary_coherence])
 	quit(0)
 
 

@@ -199,7 +199,7 @@ func _apply_surface_rule(data: PackedByteArray, field: ChunkTerrainData, local_x
 	var world_x := field.world_x(local_x)
 	var world_z := field.world_z(local_z)
 	var values := _surface_rule_values(field, field_index, surface_y, water_y, is_river, world_x, world_z)
-	var biome: int = int(field.biome_id[field_index])
+	var biome: int = int(field.dominant_biome[field_index])
 	var top: int = values.x
 	var sub: int = values.y
 	var depth: int = values.z
@@ -212,11 +212,10 @@ func _apply_surface_rule(data: PackedByteArray, field: ChunkTerrainData, local_x
 		data[_index(local_x, y, local_z)] = top if y == surface_y else sub
 
 
-## Surface blankets must be coherent. Per-column biome dithering is useful for
-## vegetation variety, but creates checkerboards of snow/sand/grass. Shared by
-## the full fill and the compact LOD path so both place identical blocks.
+## Surface blankets stay coherent: the sampler's dominant biome changes only in
+## broad ecotone patches, never from a per-column hash. Shared by full and LOD.
 func _surface_rule_values(field: ChunkTerrainData, field_index: int, surface_y: int, water_y: int, is_river: bool, world_x: int, world_z: int) -> Vector3i:
-	var biome: int = int(field.biome_id[field_index])
+	var biome: int = int(field.dominant_biome[field_index])
 	var slope: float = field.slope[field_index]
 	var top: int = biomes.surface_block(biome)
 	var sub: int = biomes.subsurface_block(biome)
@@ -990,7 +989,7 @@ func _decorate_floor_patches(data: PackedByteArray, field: ChunkTerrainData, ori
 					if local_x < 0 or local_x >= VoxelDefsScript.CHUNK_SIZE or local_z < 0 or local_z >= VoxelDefsScript.CHUNK_SIZE:
 						continue
 					var field_index: int = ChunkTerrainDataScript.cell_index(local_x, local_z)
-					var biome: int = int(field.biome_id[field_index])
+					var biome: int = int(field.dominant_biome[field_index])
 					var patch_block: int = _floor_patch_block(biomes.decoration_set(biome))
 					if patch_block == BlockRegistryScript.BLOCK_AIR:
 						continue
@@ -1024,7 +1023,7 @@ func _apply_lod_floor_patches(solid_y: PackedInt32Array, solid_id: PackedByteArr
 					if solid_y[column] < 0:
 						continue
 					var field_index: int = ChunkTerrainDataScript.cell_index(local_x, local_z)
-					var biome: int = int(field.biome_id[field_index])
+					var biome: int = int(field.dominant_biome[field_index])
 					var patch_block: int = _floor_patch_block(biomes.decoration_set(biome))
 					if patch_block == BlockRegistryScript.BLOCK_AIR:
 						continue
@@ -1074,7 +1073,7 @@ func _apply_lod_scrub(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_
 			if WorldGenHashScript.hash_2d(config.seed + 1301, origin_x + local_x, origin_z + local_z) % 100 >= 12:
 				continue
 			var field_index: int = ChunkTerrainDataScript.cell_index(local_x, local_z)
-			var leaf_id: int = _grove_leaf_block(biomes.decoration_set(int(field.biome_id[field_index])))
+			var leaf_id: int = _grove_leaf_block(biomes.decoration_set(int(field.dominant_biome[field_index])))
 			if leaf_id == BlockRegistryScript.BLOCK_AIR:
 				continue
 			solid_y[column] += 1
