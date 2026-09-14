@@ -150,9 +150,15 @@ func set_render_distance(value: int) -> void:
 
 
 func setup_player(player_node: Node3D) -> void:
+	var first_setup := _player == null
 	_player = player_node
 	_stream_center = _chunk_for_position(player_node.global_position)
-	_generate_spawn_area()
+	if first_setup:
+		# Only the initial spawn needs terrain synchronously so
+		# find_safe_spawn() can inspect solid columns. Later re-targets (photo
+		# camera handoff) let the async stream refill instead of stalling a
+		# frame on up to SPAWN_RADIUS chunks.
+		_generate_spawn_area()
 	_rebuild_desired()
 	_schedule_jobs()
 
