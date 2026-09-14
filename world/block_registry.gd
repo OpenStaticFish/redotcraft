@@ -60,6 +60,8 @@ const BLOCK_CORAL_FAN := 55
 const BLOCK_CORAL_BRANCH := 56
 const BLOCK_SPONGE := 57
 const BLOCK_ANEMONE := 58
+const BLOCK_TNT := 59
+const BLOCK_NUKE := 60
 
 const FLAG_OPAQUE := 1
 const FLAG_CUTOUT := 2
@@ -129,12 +131,15 @@ const BLOCK_DEFS := [
 	[56, "CORAL BRANCH", "coral_branch.png", "coral_branch.png", "coral_branch.png", FLAG_CUTOUT | FLAG_CROSS],
 	[57, "SPONGE", "sponge.png", "sponge.png", "sponge.png", FLAG_OPAQUE],
 	[58, "ANEMONE", "anemone.png", "anemone.png", "anemone.png", FLAG_CUTOUT | FLAG_CROSS],
+	[59, "TNT", "tnt_top.png", "tnt_side.png", "tnt_bottom.png", FLAG_OPAQUE],
+	[60, "NUKE", "nuke_top.png", "nuke_side.png", "nuke_bottom.png", FLAG_OPAQUE],
 ]
 
 const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
 ## RedotCraft-generated placeholders live beside the copied ZigCraft set so the
 ## upstream directory stays an unmodified copy.
 const UNDERWATER_TEXTURE_ROOT := "res://assets/placeholders/underwater/"
+const EXPLOSIVE_TEXTURE_ROOT := "res://assets/placeholders/explosives/"
 const EXTRA_TEXTURE_PATHS := {
 	"coral_substrate.png": UNDERWATER_TEXTURE_ROOT + "coral_substrate.png",
 	"seagrass.png": UNDERWATER_TEXTURE_ROOT + "seagrass.png",
@@ -143,6 +148,12 @@ const EXTRA_TEXTURE_PATHS := {
 	"coral_branch.png": UNDERWATER_TEXTURE_ROOT + "coral_branch.png",
 	"sponge.png": UNDERWATER_TEXTURE_ROOT + "sponge.png",
 	"anemone.png": UNDERWATER_TEXTURE_ROOT + "anemone.png",
+	"tnt_top.png": EXPLOSIVE_TEXTURE_ROOT + "tnt_top.png",
+	"tnt_side.png": EXPLOSIVE_TEXTURE_ROOT + "tnt_side.png",
+	"tnt_bottom.png": EXPLOSIVE_TEXTURE_ROOT + "tnt_bottom.png",
+	"nuke_top.png": EXPLOSIVE_TEXTURE_ROOT + "nuke_top.png",
+	"nuke_side.png": EXPLOSIVE_TEXTURE_ROOT + "nuke_side.png",
+	"nuke_bottom.png": EXPLOSIVE_TEXTURE_ROOT + "nuke_bottom.png",
 }
 const WATER_TEXTURE_PATH := TEXTURE_ROOT + "water.png"
 const WATER_SHADER_PATH := "res://assets/placeholders/zigcraft/water.gdshader"
