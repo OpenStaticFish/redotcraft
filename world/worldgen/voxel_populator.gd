@@ -316,7 +316,7 @@ func _carve_cave_network(data: PackedByteArray, field: ChunkTerrainData, origin_
 			for band in CAVE_NETWORK_BANDS:
 				var node := _cave_network_node(cell_x, band, cell_z)
 				var route_hash := WorldGenHashScript.hash_3d(config.seed + 719, cell_x, band, cell_z)
-				var primary_offset := Vector2i(1, 0) if (route_hash & 1) == 0 else Vector2i(0, 1)
+				var primary_offset := _cave_primary_offset(cell_x, band, cell_z)
 				_stamp_cave_network_edge(data, field, node,
 					_cave_network_node(cell_x + primary_offset.x, band, cell_z + primary_offset.y), route_hash)
 				if float(route_hash % 1000) / 1000.0 < minf(0.72, 0.24 * config.cave_density):
@@ -336,6 +336,11 @@ func _cave_network_node(cell_x: int, band: int, cell_z: int) -> Vector3i:
 		cell_x * CAVE_NETWORK_CELL_SIZE + 8 + node_hash % (CAVE_NETWORK_CELL_SIZE - 16),
 		clampi(CAVE_NETWORK_BASE_Y + band * CAVE_NETWORK_BAND_STEP + ((node_hash / 47) % 11) - 5, 5, VoxelDefsScript.SEA_LEVEL + 58),
 		cell_z * CAVE_NETWORK_CELL_SIZE + 8 + (node_hash / 131) % (CAVE_NETWORK_CELL_SIZE - 16))
+
+
+func _cave_primary_offset(cell_x: int, band: int, cell_z: int) -> Vector2i:
+	var route_hash := WorldGenHashScript.hash_3d(config.seed + 719, cell_x, band, cell_z)
+	return Vector2i(1, 0) if (route_hash & 1) == 0 else Vector2i(0, 1)
 
 
 func _stamp_cave_network_edge(data: PackedByteArray, field: ChunkTerrainData, start: Vector3i, finish: Vector3i, route_hash: int) -> void:

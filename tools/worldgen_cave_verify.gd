@@ -71,8 +71,7 @@ func _verify_endless_cave_network() -> void:
 	var visited_cells := {}
 	for step in 128:
 		visited_cells[cell] = true
-		var route_hash := WorldGenHash.hash_3d(int(TEST_CONFIG.seed) + 719, cell.x, 2, cell.y)
-		cell += Vector2i(1, 0) if (route_hash & 1) == 0 else Vector2i(0, 1)
+		cell += populator._cave_primary_offset(cell.x, 2, cell.y)
 	_expect(visited_cells.size() == 128 and cell.x + cell.y == 128,
 		"canonical cave trunk terminated or looped instead of continuing globally")
 

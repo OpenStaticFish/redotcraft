@@ -723,13 +723,13 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 					water_shell.append(position)
 			if column_changed:
 				changed_chunks[chunk_position] = true
-				rebuild_chunks[chunk_position] = true
-				_collect_edge_rebuilds(rebuild_chunks, chunk_position, Vector3i(x, center.y, z))
 	for chunk_position in changed_chunks:
 		_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
+		rebuild_chunks[chunk_position] = true
+		_add_loaded_light_ring(rebuild_chunks, chunk_position)
 	for chunk_position in rebuild_chunks:
-		# Edge neighbors also need fresh face culling. Preserve this request if
-		# their current job already captured the pre-explosion neighbor snapshot.
+		# Every sampled neighbor needs fresh light and face data. Preserve this
+		# request if its current job captured the pre-explosion snapshot.
 		_queue_rebuild(chunk_position, true)
 	for position in water_shell:
 		for offset in WATER_NEIGHBOR_OFFSETS:
@@ -739,21 +739,6 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 	for position in interior_water:
 		_seed_water(position)
 	return removed
-
-
-func _collect_edge_rebuilds(rebuilds: Dictionary, chunk_position: Vector2i, block_position: Vector3i) -> void:
-	var local_x := block_position.x - chunk_position.x * VoxelDefs.CHUNK_SIZE
-	var local_z := block_position.z - chunk_position.y * VoxelDefs.CHUNK_SIZE
-	if local_x == 0:
-		rebuilds[chunk_position + Vector2i(-1, 0)] = true
-	elif local_x == VoxelDefs.CHUNK_SIZE - 1:
-		rebuilds[chunk_position + Vector2i(1, 0)] = true
-	if local_z == 0:
-		rebuilds[chunk_position + Vector2i(0, -1)] = true
-	elif local_z == VoxelDefs.CHUNK_SIZE - 1:
-		rebuilds[chunk_position + Vector2i(0, 1)] = true
-
-
 func _record_edit(block_position: Vector3i, block_id: int) -> void:
 	_record_edit_in_chunk(block_position, block_id, _chunk_for_block(block_position))
 
@@ -792,6 +777,7 @@ func _queue_water(position: Vector3i) -> void:
 ## changes, so oceans and lakes stay static until disturbed.
 func _water_tick() -> void:
 	var budget := WATER_CELLS_PER_TICK
+	var changed_chunks := {}
 	while budget > 0 and _water_head < _water_queue.size():
 		var position: Vector3i = _water_queue[_water_head]
 		_water_head += 1
@@ -799,7 +785,15 @@ func _water_tick() -> void:
 		_water_queued.erase(position)
 		if _loaded_chunk_for(position) == null:
 			continue
-		_update_water_cell(position)
+		_update_water_cell(position, changed_chunks)
+	if not changed_chunks.is_empty():
+		var rebuild_chunks := {}
+		for chunk_position in changed_chunks:
+			_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
+			rebuild_chunks[chunk_position] = true
+			_add_loaded_light_ring(rebuild_chunks, chunk_position)
+		for chunk_position in rebuild_chunks:
+			_queue_rebuild(chunk_position, true)
 	if _water_head == _water_queue.size():
 		_water_queue.clear()
 		_water_head = 0
@@ -808,7 +802,7 @@ func _water_tick() -> void:
 		_water_head = 0
 
 
-func _update_water_cell(position: Vector3i) -> void:
+func _update_water_cell(position: Vector3i, changed_chunks: Dictionary) -> void:
 	var id := get_block_world(position)
 	if id != BlockRegistry.BLOCK_AIR and not _blocks.is_water_id(id):
 		return
@@ -825,13 +819,13 @@ func _update_water_cell(position: Vector3i) -> void:
 	if is_source:
 		feed = 8
 	if feed != current_level:
-		_water_place(position, _blocks.water_id_for_level(feed))
+		_water_place(position, _blocks.water_id_for_level(feed), changed_chunks)
 	if feed <= 0:
 		return
 	var below := get_block_world(position + Vector3i(0, -1, 0))
 	if below == BlockRegistry.BLOCK_AIR:
 		if position.y > 1:
-			_water_place(position + Vector3i(0, -1, 0), _blocks.water_id_for_level(7))
+			_water_place(position + Vector3i(0, -1, 0), _blocks.water_id_for_level(7), changed_chunks)
 		return
 	if feed <= 1:
 		return
@@ -839,12 +833,12 @@ func _update_water_cell(position: Vector3i) -> void:
 		var target := position + Vector3i(direction.x, 0, direction.y)
 		var target_id := get_block_world(target)
 		if target_id == BlockRegistry.BLOCK_AIR:
-			_water_place(target, _blocks.water_id_for_level(feed - 1))
+			_water_place(target, _blocks.water_id_for_level(feed - 1), changed_chunks)
 		elif _blocks.is_water_id(target_id) and target_id != BlockRegistry.BLOCK_WATER and _blocks.water_level(target_id) < feed - 1:
-			_water_place(target, _blocks.water_id_for_level(feed - 1))
+			_water_place(target, _blocks.water_id_for_level(feed - 1), changed_chunks)
 
 
-func _water_place(position: Vector3i, block_id: int) -> void:
+func _water_place(position: Vector3i, block_id: int, changed_chunks: Dictionary) -> void:
 	var chunk := _loaded_chunk_for(position)
 	if chunk == null or chunk.lod:
 		return
@@ -853,20 +847,26 @@ func _water_place(position: Vector3i, block_id: int) -> void:
 		return
 	chunk.data[index] = block_id
 	_record_edit(position, block_id)
-	_touch_chunk(_chunk_for_block(position), position)
+	changed_chunks[_chunk_for_block(position)] = true
 	for offset in WATER_NEIGHBOR_OFFSETS:
 		_queue_water(position + offset)
 
 
-func _touch_chunk(chunk_position: Vector2i, block_position: Vector3i) -> void:
+func _touch_chunk(chunk_position: Vector2i, _block_position: Vector3i) -> void:
 	_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
-	_queue_rebuild(chunk_position, true)
+	var rebuild_chunks := {chunk_position: true}
 	# A full light volume consumes all eight neighboring chunks. Sky and block
 	# light can travel MAX_LIGHT_LEVEL - 1 cells, so even a non-edge edit can
 	# alter baked light in an adjacent chunk; invalidate the complete 3x3 ring.
+	_add_loaded_light_ring(rebuild_chunks, chunk_position)
+	for rebuild_position in rebuild_chunks:
+		_queue_rebuild(rebuild_position, true)
+
+
+func _add_loaded_light_ring(rebuilds: Dictionary, chunk_position: Vector2i) -> void:
 	for direction in VoxelDefs.DIRS_8:
 		if _chunks.has(chunk_position + direction):
-			_queue_rebuild(chunk_position + direction, true)
+			rebuilds[chunk_position + direction] = true
 
 
 func get_spawn_position() -> Vector3:
