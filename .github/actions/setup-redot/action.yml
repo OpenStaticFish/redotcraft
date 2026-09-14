@@ -14,42 +14,55 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Restore cached Redot build
-      id: engine-cache
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/redot-craft
-        key: redot-${{ inputs.redot-version }}-${{ runner.os }}-${{ runner.arch }}
-
-    - name: Install Redot ${{ inputs.redot-version }}
-      if: steps.engine-cache.outputs.cache-hit != 'true'
+    - name: Resolve release checksum
+      id: release
       shell: bash
       env:
         REDOT_VERSION: ${{ inputs.redot-version }}
       run: |
         set -euo pipefail
-        version="${REDOT_VERSION}"
-        tag="redot-${version}-stable"
-        archive="Redot_v${version}-stable_linux_x64.zip"
-        base="https://github.com/Redot-Engine/redot-engine/releases/download/${tag}"
-        install_dir="$HOME/.cache/redot-craft"
-        mkdir -p "$install_dir"
-
-        curl -fsSL -o "$RUNNER_TEMP/$archive" "$base/$archive"
-        curl -fsSL -o "$RUNNER_TEMP/SHA512-SUMS.txt" "$base/SHA512-SUMS.txt"
-
-        expected="$(awk -v name="$archive" '$2 == "releases/" name { print $1 }' "$RUNNER_TEMP/SHA512-SUMS.txt")"
+        tag="redot-${REDOT_VERSION}-stable"
+        archive="Redot_v${REDOT_VERSION}-stable_linux_x64.zip"
+        sums="$(curl -fsSL "https://github.com/Redot-Engine/redot-engine/releases/download/${tag}/SHA512-SUMS.txt")"
+        expected="$(awk -v name="$archive" '$2 == "releases/" name { print $1 }' <<<"$sums")"
         if [[ -z "$expected" ]]; then
           echo "::error::$archive is not listed in SHA512-SUMS.txt for $tag"
           exit 1
         fi
-        actual="$(sha512sum "$RUNNER_TEMP/$archive" | awk '{ print $1 }')"
-        if [[ "$actual" != "$expected" ]]; then
-          echo "::error::Checksum mismatch for $archive"
+        {
+          echo "archive=$archive"
+          echo "sha512=$expected"
+        } >>"$GITHUB_OUTPUT"
+        echo "Expected SHA512 for $archive: $expected"
+
+    - name: Restore cached Redot build
+      id: engine-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/redot-craft
+        key: redot-${{ inputs.redot-version }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.release.outputs.sha512 }}
+
+    - name: Install Redot ${{ inputs.redot-version }}
+      if: steps.engine-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        ARCHIVE: ${{ steps.release.outputs.archive }}
+        EXPECTED_SHA512: ${{ steps.release.outputs.sha512 }}
+      run: |
+        set -euo pipefail
+        tag="redot-${{ inputs.redot-version }}-stable"
+        base="https://github.com/Redot-Engine/redot-engine/releases/download/${tag}"
+        install_dir="$HOME/.cache/redot-craft"
+        mkdir -p "$install_dir"
+
+        curl -fsSL -o "$RUNNER_TEMP/$ARCHIVE" "$base/$ARCHIVE"
+        actual="$(sha512sum "$RUNNER_TEMP/$ARCHIVE" | awk '{ print $1 }')"
+        if [[ "$actual" != "$EXPECTED_SHA512" ]]; then
+          echo "::error::Checksum mismatch for $ARCHIVE"
           exit 1
         fi
 
-        unzip -q -o "$RUNNER_TEMP/$archive" -d "$RUNNER_TEMP/redot-extract"
+        unzip -q -o "$RUNNER_TEMP/$ARCHIVE" -d "$RUNNER_TEMP/redot-extract"
         install -m 0755 "$RUNNER_TEMP/redot-extract/redot.linuxbsd.editor.x86_64" "$install_dir/redot"
 
     - name: Add Redot to PATH
@@ -62,14 +75,7 @@ runs:
       continue-on-error: true
       env:
         REDOT_VERSION: ${{ inputs.redot-version }}
-      run: |
-        set -euo pipefail
-        installed="$(redot --version)"
-        echo "$installed"
-        if [[ "$installed" != "${REDOT_VERSION}"* ]]; then
-          echo "::error::Expected Redot ${REDOT_VERSION}, got: $installed"
-          exit 1
-        fi
+      run: bash "$GITHUB_ACTION_PATH/verify-redot.sh" "$REDOT_VERSION"
 
     - name: Install Redot runtime libraries
       if: steps.verify.outcome == 'failure'
@@ -86,7 +92,9 @@ runs:
     - name: Re-verify Redot
       if: steps.verify.outcome == 'failure'
       shell: bash
-      run: redot --version
+      env:
+        REDOT_VERSION: ${{ inputs.redot-version }}
+      run: bash "$GITHUB_ACTION_PATH/verify-redot.sh" "$REDOT_VERSION"
 
     - name: Import project assets
       if: inputs.import-project == 'true'

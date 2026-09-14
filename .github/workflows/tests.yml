@@ -58,7 +58,7 @@ jobs:
       - name: Run fast checks
         env:
           CHECK_SHARD: Parse and fast checks
-          CHECK_TIMEOUT_SECONDS: "300"
+          CHECK_TIMEOUT_SECONDS: "120"
         run: |
           bash .github/scripts/run_checks.sh \
             tools/audio_verify.gd \
@@ -116,7 +116,7 @@ jobs:
       - name: Run worldgen regression checks
         env:
           CHECK_SHARD: Worldgen regression
-          CHECK_TIMEOUT_SECONDS: "1800"
+          CHECK_TIMEOUT_SECONDS: "780"
         run: |
           bash .github/scripts/run_checks.sh \
             tools/worldgen_biome_verify.gd \
