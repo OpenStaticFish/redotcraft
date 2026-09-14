@@ -23,7 +23,10 @@ const CHANNEL_REEF: int = 11
 const CHANNEL_KELP: int = 12
 const CHANNEL_SEAGRASS: int = 13
 const CHANNEL_SEABED: int = 14
-const CHANNEL_COUNT: int = 15
+const CHANNEL_ECOTONE: int = 15
+const CHANNEL_LARGE_ISLAND: int = 16
+const CHANNEL_SMALL_ISLAND: int = 17
+const CHANNEL_COUNT: int = 18
 
 const MIN_TERRAIN_HEIGHT: float = 3.0
 const HEIGHT_MARGIN: float = 8.0
@@ -80,6 +83,17 @@ const RIVER_FLOODPLAIN_CORRIDOR: float = 0.12
 # Meander warp, as fractions of macro_scale: wavelength and lateral amplitude.
 const RIVER_MEANDER_SCALE: float = 0.34
 const RIVER_MEANDER_AMOUNT: float = 0.12
+# Independent sparse peak fields raise effective continentalness offshore. Their
+# absolute scales are intentional: islands remain recognizable exploration-scale
+# landmarks when the continent-size slider changes. A large-scale channel creates
+# substantial landmasses and a short-scale channel adds islets; both fade before
+# the mainland coast so continents remain intact.
+const LARGE_ISLAND_SCALE: float = 720.0
+const SMALL_ISLAND_SCALE: float = 135.0
+# Ecotones likewise use an absolute walk-scale: changing biome territory size
+# should not turn transition vegetation into continent-sized monocultures. The
+# independent field avoids per-column hashes and forms broad organic patches.
+const ECOTONE_PATCH_SCALE: float = 160.0
 # build_field has four successively smaller grids. Float64 packed arrays retain
 # point-query precision while making every coordinate's neighbourhood independent
 # of which chunk is being generated.
@@ -170,12 +184,14 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 
 	var source_height := PackedFloat64Array()
 	var source_continental := PackedFloat64Array()
+	var source_mainland := PackedFloat64Array()
 	var source_base := PackedFloat64Array()
 	var source_river := PackedFloat64Array()
 	var source_profile := PackedFloat64Array()
 	var source_count: int = SOURCE_SIDE * SOURCE_SIDE
 	source_height.resize(source_count)
 	source_continental.resize(source_count)
+	source_mainland.resize(source_count)
 	source_base.resize(source_count)
 	source_river.resize(source_count)
 	source_profile.resize(source_count)
@@ -187,7 +203,8 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 			var world_x: int = origin_x + local_x
 			var source_index: int = row + local_x - SOURCE_MIN
 			var corridor_index: int = corridor_row + local_x - CORRIDOR_MIN
-			var continental: float = _continentalness_at(world_x, world_z)
+			var mainland: float = _mainland_continentalness_at(world_x, world_z)
+			var continental: float = _continentalness_from_mainland(world_x, world_z, mainland)
 			var base: float = _base_height_at(world_x, world_z, continental)
 			var profile_position: float = _profile_position_at(world_x, world_z, continental)
 			var river_distance: float = _river_distance_from_corridor(
@@ -196,11 +213,12 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 				corridor[corridor_index + CORRIDOR_SIDE])
 			var river_width_scale: float = _river_width_scale_at(world_x, world_z)
 			source_continental[source_index] = continental
+			source_mainland[source_index] = mainland
 			source_profile[source_index] = profile_position
 			source_base[source_index] = base
-			source_river[source_index] = _river_strength_from_distance(river_distance, continental, river_width_scale)
+			source_river[source_index] = _river_strength_from_distance(river_distance, mainland, river_width_scale)
 			source_height[source_index] = _height_without_regional_erosion_from_samples(
-				world_x, world_z, continental, base, profile_position, corridor[corridor_index])
+				world_x, world_z, continental, mainland, base, profile_position, corridor[corridor_index])
 
 	var raw_height := PackedFloat64Array()
 	raw_height.resize(RAW_SIDE * RAW_SIDE)
@@ -238,7 +256,7 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 					corridor[corridor_index + CORRIDOR_SIDE])
 				raw_value = _apply_river_carve(
 					world_x, world_z, raw_value, river_distance,
-					source_continental[source_index], _river_width_scale_at(world_x, world_z))
+					source_mainland[source_index], _river_width_scale_at(world_x, world_z))
 			raw_height[raw_index] = clampf(raw_value, MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
 
 	var final_height := PackedFloat64Array()
@@ -247,12 +265,15 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 		var world_z: int = origin_z + local_z
 		var final_row: int = (local_z - FINAL_MIN) * FINAL_SIDE
 		var raw_row: int = (local_z - RAW_MIN) * RAW_SIDE
+		var source_row: int = (local_z - SOURCE_MIN) * SOURCE_SIDE
 		for local_x in range(FINAL_MIN, FINAL_MAX + 1):
 			var raw_index: int = raw_row + local_x - RAW_MIN
-			final_height[final_row + local_x - FINAL_MIN] = _final_from_raw_neighborhood(
-				origin_x + local_x, world_z, raw_height[raw_index],
+			var source_index: int = source_row + local_x - SOURCE_MIN
+			final_height[final_row + local_x - FINAL_MIN] = _final_from_raw_neighborhood_with_profile(
+				raw_height[raw_index],
 				raw_height[raw_index - 1], raw_height[raw_index + 1],
-				raw_height[raw_index - RAW_SIDE], raw_height[raw_index + RAW_SIDE])
+				raw_height[raw_index - RAW_SIDE], raw_height[raw_index + RAW_SIDE],
+				source_profile[source_index])
 	var final_temperature := PackedFloat64Array()
 	var final_moisture := PackedFloat64Array()
 	final_temperature.resize(FINAL_SIDE * FINAL_SIDE)
@@ -320,8 +341,12 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 				biome_choice.x, continental, final_value, river_value, profile,
 				temperature_value, world_x, world_z)
 			var secondary: int = biome_choice.y if biome == biome_choice.x else biome
-			var biome_blend_value: int = biome_choice.z if biome == biome_choice.x else 0
-			var dominant := biome
+			var transition := _ecotone_choice(
+				biome, secondary, biome_choice.z if biome == biome_choice.x else 0,
+				world_x, world_z, final_value, profile)
+			var dominant: int = transition.x
+			var biome_blend_value: int = transition.y
+			var ecotone_value: int = transition.z
 			field.continentalness[field_index] = continental
 			field.raw_height[field_index] = raw_height[raw_index]
 			field.base_height[field_index] = source_base[source_index]
@@ -335,6 +360,7 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 			field.biome_id[field_index] = biome
 			field.biome_secondary_id[field_index] = secondary
 			field.biome_blend[field_index] = biome_blend_value
+			field.ecotone_strength[field_index] = ecotone_value
 			field.dominant_biome[field_index] = dominant
 	field.seal()
 	return field
@@ -344,11 +370,12 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 ## a Dictionary and may be used by tools, previews, or spawn inspection.
 func sample_point(x: int, z: int) -> Dictionary:
 	_ensure_configured()
-	var continental: float = _continentalness_at(x, z)
+	var mainland: float = _mainland_continentalness_at(x, z)
+	var continental: float = _continentalness_from_mainland(x, z, mainland)
 	var base: float = _base_height_at(x, z, continental)
 	var raw: float = _raw_height_at(x, z)
 	var final_value: float = _final_height_at(x, z)
-	var river_value: float = _river_at(x, z, continental)
+	var river_value: float = _river_at(x, z, mainland)
 	var climate := _climate_at(x, z, final_value, river_value)
 	var temperature_value: float = climate.x
 	var moisture_value: float = climate.y
@@ -358,10 +385,14 @@ func sample_point(x: int, z: int) -> Dictionary:
 	var biome: int = _apply_biome_override(
 		choice.x, continental, final_value, river_value, profile, temperature_value, x, z)
 	var secondary: int = choice.y if biome == choice.x else biome
-	var blend: int = choice.z if biome == choice.x else 0
-	var dominant := biome
+	var transition := _ecotone_choice(
+		biome, secondary, choice.z if biome == choice.x else 0,
+		x, z, final_value, profile)
+	var dominant: int = transition.x
 	return {
 		"continentalness": continental,
+		"mainland_continentalness": mainland,
+		"island_strength": maxf(continental - mainland, 0.0),
 		"base_height": base,
 		"raw_height": raw,
 		"final_height": final_value,
@@ -373,7 +404,8 @@ func sample_point(x: int, z: int) -> Dictionary:
 		"profile_blend": profile_position - floorf(profile_position),
 		"biome_id": biome,
 		"biome_secondary_id": secondary,
-		"biome_blend": blend / 255.0,
+		"biome_blend": transition.y / 255.0,
+		"ecotone_strength": transition.z / 255.0,
 		"dominant_biome_id": dominant,
 	}
 
@@ -383,16 +415,21 @@ func sample_point(x: int, z: int) -> Dictionary:
 ## Dictionary allocation in the hot population path.
 func sample_decoration_ground(x: int, z: int) -> Vector2i:
 	_ensure_configured()
-	var continental := _continentalness_at(x, z)
+	var mainland := _mainland_continentalness_at(x, z)
+	var continental := _continentalness_from_mainland(x, z, mainland)
 	var final_value := _final_height_at(x, z)
-	var river_value := _river_at(x, z, continental)
+	var river_value := _river_at(x, z, mainland)
 	var climate := _climate_at(x, z, final_value, river_value)
 	var profile_position := _profile_position_at(x, z, continental)
 	var profile := clampi(floori(profile_position), TerrainProfileCatalog.PLAINS, TerrainProfileCatalog.RIDGED_MOUNTAINS)
 	var choice := _biome_choice(climate.x, climate.y)
 	var biome := _apply_biome_override(
 		choice.x, continental, final_value, river_value, profile, climate.x, x, z)
-	var dominant := biome
+	var secondary: int = choice.y if biome == choice.x else biome
+	var transition := _ecotone_choice(
+		biome, secondary, choice.z if biome == choice.x else 0,
+		x, z, final_value, profile)
+	var dominant: int = transition.x
 	return Vector2i(clampi(roundi(final_value), 2, VoxelDefsScript.WORLD_HEIGHT - 2), dominant)
 
 
@@ -403,10 +440,11 @@ func sample_decoration_ground(x: int, z: int) -> Vector2i:
 ## height; chunk generation and gameplay always use build_field() instead.
 func sample_debug_point(mode: String, x: int, z: int) -> Dictionary:
 	_ensure_configured()
-	var continental := _continentalness_at(x, z)
+	var mainland := _mainland_continentalness_at(x, z)
+	var continental := _continentalness_from_mainland(x, z, mainland)
 	if mode == "continentalness":
 		return {"continentalness": continental}
-	var river_value := _river_at(x, z, continental)
+	var river_value := _river_at(x, z, mainland)
 	if mode == "river":
 		return {"river": river_value}
 	if mode == "raw_height":
@@ -423,6 +461,11 @@ func sample_debug_point(mode: String, x: int, z: int) -> Dictionary:
 		return {"temperature": climate.x}
 	if mode == "moisture":
 		return {"moisture": climate.y}
+	# The cheap climate modes above intentionally use pre-erosion terrain. The
+	# biome map must match generated ecotone ownership, whose terrain affinity is
+	# based on final height, so pay for the exact query only on this mode.
+	height = _final_height_at(x, z)
+	climate = _climate_at(x, z, height, river_value)
 	var choice := _biome_choice(climate.x, climate.y)
 	var profile_position := _profile_position_at(x, z, continental)
 	var profile := clampi(floori(profile_position), TerrainProfileCatalog.PLAINS, TerrainProfileCatalog.RIDGED_MOUNTAINS)
@@ -430,7 +473,10 @@ func sample_debug_point(mode: String, x: int, z: int) -> Dictionary:
 		return {"profile_id": profile}
 	var biome := _apply_biome_override(
 		choice.x, continental, height, river_value, profile, climate.x, x, z)
-	var dominant := biome
+	var secondary: int = choice.y if biome == choice.x else biome
+	var dominant: int = _ecotone_choice(
+		biome, secondary, choice.z if biome == choice.x else 0,
+		x, z, height, profile).x
 	return {"dominant_biome_id": dominant}
 
 
@@ -464,6 +510,9 @@ func _make_noise_channels() -> Array[FastNoiseLite]:
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1109],
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1409],
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1303],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1601],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1709],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1801],
 	]
 	var result: Array[FastNoiseLite] = []
 	for definition in definitions:
@@ -492,10 +541,30 @@ func _make_noise_channels() -> Array[FastNoiseLite]:
 func _continentalness_at(x: int, z: int) -> float:
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT:
 		return 1.0
+	var mainland: float = _mainland_continentalness_at(x, z)
+	return _continentalness_from_mainland(x, z, mainland)
+
+
+func _mainland_continentalness_at(x: int, z: int) -> float:
+	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT:
+		return 1.0
 	var warped := _macro_warp(x, z)
 	var noise_value: float = _noises[CHANNEL_CONTINENT].get_noise_2d(
 		warped.x / _config.macro_scale, warped.y / _config.macro_scale)
 	return _smoothstep(-0.42, 0.40, noise_value)
+
+
+func _continentalness_from_mainland(x: int, z: int, mainland: float) -> float:
+	if mainland >= 0.38:
+		return mainland
+	var large_value: float = _noises[CHANNEL_LARGE_ISLAND].get_noise_2d(
+		float(x) / LARGE_ISLAND_SCALE, float(z) / LARGE_ISLAND_SCALE) * 0.5 + 0.5
+	var small_value: float = _noises[CHANNEL_SMALL_ISLAND].get_noise_2d(
+		float(x) / SMALL_ISLAND_SCALE, float(z) / SMALL_ISLAND_SCALE) * 0.5 + 0.5
+	var large_island: float = _smoothstep(0.66, 0.82, large_value) * 0.70
+	var small_island: float = _smoothstep(0.72, 0.86, small_value) * 0.58
+	var coast_fade: float = 1.0 - _smoothstep(0.24, 0.34, mainland)
+	return maxf(mainland, maxf(large_island, small_island) * coast_fade)
 
 
 func _base_height_at(x: int, z: int, continental: float) -> float:
@@ -541,13 +610,15 @@ func _seabed_patch_strength(x: int, z: int, channel: int, scale: float) -> float
 
 
 func _height_without_regional_erosion(x: int, z: int) -> float:
-	var continental: float = _continentalness_at(x, z)
+	var mainland: float = _mainland_continentalness_at(x, z)
+	var continental: float = _continentalness_from_mainland(x, z, mainland)
 	var base: float = _base_height_at(x, z, continental)
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT:
 		return base
 	var profile_position: float = _profile_position_at(x, z, continental)
 	return _height_without_regional_erosion_from_samples(
-		x, z, continental, base, profile_position, _river_corridor_at(x, z))
+		x, z, continental, mainland, base,
+		profile_position, _river_corridor_at(x, z))
 
 
 ## Computes the expensive, no-regional source height from values cached in the
@@ -558,6 +629,7 @@ func _height_without_regional_erosion_from_samples(
 		x: int,
 		z: int,
 		continental: float,
+		mainland: float,
 		base: float,
 		profile_position: float,
 		river_corridor: float) -> float:
@@ -588,7 +660,7 @@ func _height_without_regional_erosion_from_samples(
 	# the cut blends into graded ground instead of stopping at a natural hill.
 	# The mask is corridor-space rather than distance-space: the carve owns the
 	# exact channel width, while this only needs a coherent low-relief apron.
-	var floodplain: float = _river_floodplain_weight(river_corridor, continental)
+	var floodplain: float = _river_floodplain_weight(river_corridor, mainland)
 	var relief_gain: float = 1.0 - floodplain * 0.45
 	var height: float = base + (detail * relief_gain + relief * ridge * ridge * ridge_weight * relief_gain) * land * relief_scale
 	# Keep regional relief separate from small landforms. Fade these additions
@@ -656,7 +728,7 @@ func _raw_height_at(x: int, z: int) -> float:
 	if _config.world_type != WorldGenConfig.WORLD_TYPE_FLAT:
 		height = _apply_river_carve(
 			x, z, height, _river_distance_at(x, z),
-			_continentalness_at(x, z), _river_width_scale_at(x, z))
+			_mainland_continentalness_at(x, z), _river_width_scale_at(x, z))
 	return clampf(height, MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
 
 
@@ -680,8 +752,9 @@ func _final_height_at(x: int, z: int) -> float:
 	var height := _final_from_raw_neighborhood(x, z, raw, west, east, north, south)
 	var gradient := sqrt((east - west) * (east - west) + (south - north) * (south - north)) * 0.5
 	var local_relief := absf(raw - (west + east + north + south) * 0.25)
-	var continental := _continentalness_at(x, z)
-	var river_value := _river_at(x, z, continental)
+	var mainland := _mainland_continentalness_at(x, z)
+	var continental := _continentalness_from_mainland(x, z, mainland)
+	var river_value := _river_at(x, z, mainland)
 	var climate := _climate_at(x, z, height, river_value)
 	var climate_altitude := maxf(height - float(VoxelDefsScript.SEA_LEVEL), 0.0)
 	return _apply_climate_terrain_shape(
@@ -691,6 +764,20 @@ func _final_height_at(x: int, z: int) -> float:
 
 
 func _final_from_raw_neighborhood(x: int, z: int, raw: float, west: float, east: float, north: float, south: float) -> float:
+	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT:
+		return raw
+	var continental: float = _continentalness_at(x, z)
+	var profile_position: float = _profile_position_at(x, z, continental)
+	return _final_from_raw_neighborhood_with_profile(
+		raw, west, east, north, south, profile_position)
+
+
+## Chunk fields already cache profile position in the expanded source grid; use
+## it here to avoid re-sampling mainland plus both island channels during the
+## smoothing pass. Point queries retain the exact wrapper above.
+func _final_from_raw_neighborhood_with_profile(raw: float, west: float, east: float,
+		north: float, south: float,
+		profile_position: float) -> float:
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT:
 		return raw
 	var gradient: float = sqrt((east - west) * (east - west) + (south - north) * (south - north)) * 0.5
@@ -703,8 +790,6 @@ func _final_from_raw_neighborhood(x: int, z: int, raw: float, west: float, east:
 	var micro: float = talus - mean
 	if absf(micro) <= 1.8:
 		talus = mean + micro * 0.35
-	var continental: float = _continentalness_at(x, z)
-	var profile_position: float = _profile_position_at(x, z, continental)
 	# Terracing belongs on plateaus, not every hillside and mountain flank.
 	var terrace_weight: float = maxf(1.0 - absf(profile_position - 2.0) * 2.0, 0.0) * _smoothstep(0.2, 2.0, gradient) * _config.erosion_strength
 	var step: float = 2.0 + profile_position * 0.25
@@ -865,8 +950,8 @@ func _climate_at(x: int, z: int, height: float, river_value: float) -> Vector2:
 
 ## x=closest climate biome, y=second closest, z=blend weight toward y (0..255).
 ## ChunkTerrainData stores both choices for continuous tint blending. Discrete
-## surfaces and decorations use the primary biome so borders form broad,
-## coherent ecotones instead of one-block checkerboards.
+## surfaces and decorations use the coherent dominant biome chosen by
+## _ecotone_choice() instead of one-block dithering.
 func _biome_choice(temperature_value: float, moisture_value: float) -> Vector3i:
 	var first: int = BiomeCatalog.PLAINS
 	var second: int = BiomeCatalog.FOREST
@@ -887,6 +972,49 @@ func _biome_choice(temperature_value: float, moisture_value: float) -> Vector3i:
 			second_distance = distance
 	var blend: float = first_distance / maxf(first_distance + second_distance, 0.00001)
 	return Vector3i(first, second, roundi(blend * 255.0))
+
+
+## Expands the nearest-climate boundary into an ecotone and chooses broad
+## secondary-biome patches inside it. The climate distance still owns the mix;
+## profile/elevation suitability only bends the boundary, and coherent noise
+## prevents a checkerboard of surface blocks and species.
+## Returns dominant biome, tint blend (0..255), and ecotone strength (0..255).
+func _ecotone_choice(primary: int, secondary: int, raw_blend: int, world_x: int,
+		world_z: int, height: float, profile: int) -> Vector3i:
+	if primary == secondary or raw_blend <= 0:
+		return Vector3i(primary, 0, 0)
+	var climate_closeness: float = clampf(float(raw_blend) / 127.5, 0.0, 1.0)
+	# The old tint-only blend used half this climate ratio directly. Starting the
+	# material ecotone before the exact tie creates a broad shoulder while the
+	# lower gate protects the middle of large biome territories.
+	var strength: float = _smoothstep(0.18, 0.88, climate_closeness)
+	var organic: float = _noises[CHANNEL_ECOTONE].get_noise_2d(
+		float(world_x) / ECOTONE_PATCH_SCALE, float(world_z) / ECOTONE_PATCH_SCALE) * 0.5 + 0.5
+	var primary_affinity: float = _biome_terrain_affinity(primary, height, profile)
+	var secondary_affinity: float = _biome_terrain_affinity(secondary, height, profile)
+	var terrain_bias: float = clampf((secondary_affinity - primary_affinity) * 0.16, -0.12, 0.12)
+	var secondary_share: float = clampf(strength * 0.24 + terrain_bias * strength, 0.0, 0.34)
+	var dominant: int = secondary if organic < secondary_share else primary
+	var tint_blend: int = roundi(minf(0.5, climate_closeness * 0.64) * 255.0)
+	return Vector3i(dominant, tint_blend, roundi(strength * 255.0))
+
+
+func _biome_terrain_affinity(biome: int, height: float, profile: int) -> float:
+	var altitude: float = maxf(height - float(VoxelDefsScript.SEA_LEVEL), 0.0)
+	var lowland: float = 1.0 - _smoothstep(5.0, 17.0, altitude)
+	var upland: float = _smoothstep(1.0, 3.0, float(profile))
+	match biome:
+		BiomeCatalog.SWAMP:
+			return lowland * (1.0 - upland)
+		BiomeCatalog.MEADOW, BiomeCatalog.PLAINS:
+			return 1.0 - upland * 0.45
+		BiomeCatalog.FOREST, BiomeCatalog.TAIGA, BiomeCatalog.JUNGLE:
+			return 0.45 + upland * 0.35
+		BiomeCatalog.SNOW:
+			return clampf(altitude / 34.0, 0.0, 1.0)
+		BiomeCatalog.BADLANDS:
+			return 0.35 + upland * 0.45
+	return 0.5
 
 
 func _apply_biome_override(climate_biome: int, continental: float, height: float, river_value: float, profile: int, temperature: float, world_x: int, world_z: int) -> int:

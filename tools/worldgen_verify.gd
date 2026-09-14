@@ -212,23 +212,32 @@ func _verify_edit_priority(generator: TerrainGenerator) -> void:
 func _verify_surface_blankets() -> void:
 	var populator := VoxelPopulator.new(WorldGenConfig.new(TEST_CONFIG), BiomeCatalog.new())
 	var surface_y := VoxelDefs.SEA_LEVEL + 6
-	for biome in [BiomeCatalog.PLAINS, BiomeCatalog.SNOW]:
-		var field := ChunkTerrainData.new()
-		for index in ChunkTerrainData.CELL_COUNT:
+	var field := ChunkTerrainData.new()
+	for local_z in range(-1, VoxelDefs.CHUNK_SIZE + 1):
+		for local_x in range(-1, VoxelDefs.CHUNK_SIZE + 1):
+			var index := ChunkTerrainData.cell_index(local_x, local_z)
 			field.set_height(index, surface_y, surface_y, surface_y, 0.0)
 			field.set_climate(index, 0.8, 1.0, 0.5, 0.5)
-			field.set_biome(index, biome, BiomeCatalog.SNOW, 127,
-				BiomeCatalog.SNOW if index % 2 == 0 else BiomeCatalog.PLAINS)
-		field.seal()
-		# Surface-only generation isolates the blanket from caves/decorations.
-		var result := populator.populate(Vector2i.ZERO, field, {}, false)
-		var data: PackedByteArray = result["data"]
-		var expected := BlockRegistry.BLOCK_SNOW if biome == BiomeCatalog.SNOW else BlockRegistry.BLOCK_GRASS
-		for column in VoxelDefs.CHUNK_AREA:
-			_expect(data[column + surface_y * VoxelDefs.DATA_STRIDE_Y] == expected,
-				"biome dithering fragmented a coherent surface blanket")
+			var dominant := BiomeCatalog.PLAINS if local_x < VoxelDefs.CHUNK_SIZE / 2 else BiomeCatalog.SNOW
+			field.set_biome(index, BiomeCatalog.PLAINS, BiomeCatalog.SNOW, 96, dominant, 180)
+	field.seal()
+	# Surface-only generation isolates the coherent ecotone patches from caves.
+	var result := populator.populate(Vector2i.ZERO, field, {}, false)
+	var data: PackedByteArray = result["data"]
+	for local_z in VoxelDefs.CHUNK_SIZE:
+		var transitions := 0
+		var previous := -1
+		for local_x in VoxelDefs.CHUNK_SIZE:
+			var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
+			var expected := BlockRegistry.BLOCK_GRASS if local_x < VoxelDefs.CHUNK_SIZE / 2 else BlockRegistry.BLOCK_SNOW
+			var surface := int(data[column + surface_y * VoxelDefs.DATA_STRIDE_Y])
+			_expect(surface == expected, "ecotone surface did not follow its coherent dominant-biome patch")
+			if previous >= 0 and surface != previous:
+				transitions += 1
+			previous = surface
 			_expect(data[column + (surface_y + 1) * VoxelDefs.DATA_STRIDE_Y] == BlockRegistry.BLOCK_AIR,
 				"river mask created suspended water above sea level")
+		_expect(transitions == 1, "ecotone surface patch fragmented into a checkerboard")
 
 
 ## Rendering tints must use the smooth primary/secondary blend, not the
