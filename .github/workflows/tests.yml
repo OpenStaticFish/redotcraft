@@ -1,0 +1,178 @@
+name: PR tests
+
+# Blocking test suite for pull requests. Runs the parse check and the headless
+# verifiers from tools/, split across shards so a broken check fails fast and
+# shard results stay readable. Branch protection should require only the
+# "PR tests" job below, so shards can be rebalanced without touching the rule.
+#
+# Note: this workflow must exist on the base branch before pull_request events
+# run it (GitHub uses the base branch copy), and workflow_dispatch only appears
+# once it is on the default branch. To exercise it before merging, temporarily
+# add a `push: branches: [<branch>]` trigger and remove it before merge.
+#
+# Known follow-ups before making this required:
+#   - tools/stream_full_verify.gd caps its wait at 240 * 0.25s (60s); slow
+#     (4 vCPU) runners can exceed that and fail spuriously. Raise MAX_WAIT_TICKS.
+#   - The parse check only walks scripts the editor loads; an unreferenced
+#     broken script needs a dedicated scanner (load() + can_instantiate()).
+#   - Unit tests for pure logic still need a runner (ROADMAP "Unit tests").
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast-checks:
+    name: Parse and fast checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Redot and import assets
+        uses: ./.github/actions/setup-redot
+
+      - name: Parse check
+        shell: bash
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/parse-check.log"
+          if ! redot --editor --headless --path . --quit >"$log" 2>&1; then
+            echo "::error::Parse check could not run"
+            tail -n 40 "$log"
+            exit 1
+          fi
+          if grep -aE "SCRIPT ERROR|Failed to load" "$log"; then
+            echo "::error::Parse check found a script or scene that fails to load"
+            exit 1
+          fi
+          echo "PARSE CHECK: PASS"
+
+      - name: Run fast checks
+        env:
+          CHECK_SHARD: Parse and fast checks
+          CHECK_TIMEOUT_SECONDS: "300"
+        run: |
+          bash .github/scripts/run_checks.sh \
+            tools/audio_verify.gd \
+            tools/ui_flow_verify.gd \
+            tools/player_target_verify.tscn \
+            tools/worldgen_cactus_verify.gd \
+            tools/worldgen_tree_verify.gd
+
+      - name: Upload check logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs-fast-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/redot-checks
+          if-no-files-found: ignore
+          retention-days: 7
+
+  worldgen-core:
+    name: Worldgen core
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Redot and import assets
+        uses: ./.github/actions/setup-redot
+
+      - name: Run worldgen core checks
+        env:
+          CHECK_SHARD: Worldgen core
+        run: bash .github/scripts/run_checks.sh tools/worldgen_verify.gd
+
+      - name: Upload check logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs-worldgen-core-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/redot-checks
+          if-no-files-found: ignore
+          retention-days: 7
+
+  worldgen-regression:
+    name: Worldgen regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Redot and import assets
+        uses: ./.github/actions/setup-redot
+
+      - name: Run worldgen regression checks
+        env:
+          CHECK_SHARD: Worldgen regression
+          CHECK_TIMEOUT_SECONDS: "1800"
+        run: |
+          bash .github/scripts/run_checks.sh \
+            tools/worldgen_biome_verify.gd \
+            tools/worldgen_river_verify.gd \
+            tools/worldgen_lod_verify.gd
+
+      - name: Upload check logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs-worldgen-regression-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/redot-checks
+          if-no-files-found: ignore
+          retention-days: 7
+
+  streaming:
+    name: Streaming
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Redot and import assets
+        uses: ./.github/actions/setup-redot
+
+      - name: Run streaming checks
+        env:
+          CHECK_SHARD: Streaming
+          CHECK_TIMEOUT_SECONDS: "600"
+        run: bash .github/scripts/run_checks.sh tools/stream_full_verify.gd
+
+      - name: Upload check logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs-streaming-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/redot-checks
+          if-no-files-found: ignore
+          retention-days: 7
+
+  pr-tests:
+    name: PR tests
+    if: always()
+    needs: [fast-checks, worldgen-core, worldgen-regression, streaming]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every shard to pass
+        env:
+          SHARD_RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "Shard results: ${SHARD_RESULTS}"
+          if [[ "${SHARD_RESULTS}" =~ (failure|cancelled|skipped) ]]; then
+            echo "::error::One or more test shards did not pass"
+            exit 1
+          fi
+          echo "All test shards passed."
