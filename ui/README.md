@@ -7,6 +7,7 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
 - `ui_theme.gd` owns palette, typography, spacing, style boxes, generated control textures, and small component factories. Screens apply it with `UITheme.apply(root)` (which registers the host for live scale refresh) and size fonts through `UITheme.apply_font_size()` so the Display text-size setting can rescale them.
 - `motion.gd` owns the restrained entrance, selection, and status tween vocabulary.
 - `block_icon.gd` renders cached isometric item icons from `BlockRegistry.texture_array`; UI icons therefore stay synchronized with world textures.
+- `minimap.gd` (corner HUD map, `]`) and `map_overlay.gd` (full-screen `M` atlas with wheel/`+`/`-` zoom and drag/arrow pan) both sample `VoxelWorld.request_debug_map()` on worker threads, so refreshes reuse the F3 overlay's modes and never block the frame; `map_view.gd` holds their shared view projection and color packing, and `N` cycles modes.
 - Static hierarchy remains in `.tscn` scenes. Scripts compose dynamic rows, inventory slots, HUD slots, and decorative title-screen layers.
 - Iosevka font subsets and their license live in `assets/fonts/`.
 
