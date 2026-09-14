@@ -207,7 +207,7 @@ func _restyle_buttons() -> void:
 func _restyle_footer() -> void:
 	_footer.add_theme_color_override("font_color", UITheme.FAINT)
 	_footer.add_theme_font_size_override("font_size", 13)
-	_footer.text = "WASD move · SPACE jump · double-tap SPACE fly · E inventory · F3 worldgen map · ESC pause"
+	_footer.text = "WASD move · SPACE jump · double-tap SPACE fly · E inventory · F1 HUD · F2 screenshot · P photo camera · F3 worldgen map · ESC pause"
 
 
 func _on_panel_closed() -> void:

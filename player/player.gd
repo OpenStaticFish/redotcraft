@@ -73,6 +73,14 @@ func set_selected_block(block_id: int) -> void:
 	_update_held_block()
 
 
+## Detached photo-mode camera: freeze player simulation and hide the targeting
+## highlight so the composition cannot be disturbed or edited.
+func set_photo_mode(enabled: bool) -> void:
+	process_mode = Node.PROCESS_MODE_DISABLED if enabled else Node.PROCESS_MODE_INHERIT
+	if enabled and _highlight != null:
+		_highlight.visible = false
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var sensitivity := GameConfig.get_mouse_sensitivity()

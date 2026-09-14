@@ -47,6 +47,7 @@ var _underwater_tint := Color.WHITE
 var _underwater_target := 0.0
 var _underwater_sample_time := 0.0
 var _worldgen_overlay: WorldgenOverlay
+var _photo_mode: PhotoMode
 var _selection_chip: Label
 var _hotbar_slot_size := SLOT_WIDTH
 var _hotbar_icon_size := SLOT_ICON
@@ -86,18 +87,28 @@ func _ready() -> void:
 	shadow_capture.state_provider = _get_shadow_capture_state
 	shadow_capture.status_requested.connect(set_status)
 	add_child(shadow_capture)
+	_photo_mode = PhotoMode.new()
+	_photo_mode.name = "PhotoMode"
+	_photo_mode.initialize(player.camera, _hud_root)
+	_photo_mode.mouse_sensitivity_provider = GameConfig.get_mouse_sensitivity
+	_photo_mode.status_requested.connect(set_status)
+	_photo_mode.camera_mode_changed.connect(_on_photo_camera_changed)
+	add_child(_photo_mode)
 
 
 func _get_shadow_capture_state() -> Dictionary:
 	var viewport := get_viewport()
+	var view := _active_camera()
+	if view == null:
+		view = player.camera
 	return {
 		"engine": Engine.get_version_info(),
 		"world": GameConfig.world.duplicate(true),
 		"edited_blocks": world.get("_edited_blocks").duplicate(),
 		"paused": get_tree().paused,
-		"camera_transform": str(player.camera.global_transform),
-		"camera_fov": player.camera.fov,
-		"camera_far": player.camera.far,
+		"camera_transform": str(view.global_transform),
+		"camera_fov": view.fov,
+		"camera_far": view.far,
 		"sun_transform": str(_sun.global_transform),
 		"sun_processing": _sun.can_process(),
 		"day_night_processing": _day_night.can_process(),
@@ -117,6 +128,8 @@ func _get_shadow_capture_state() -> Dictionary:
 		"ssr": _environment.ssr_enabled,
 		"volumetric_fog": _environment.volumetric_fog_enabled,
 		"graphics_config": GameConfig.get_graphics().duplicate(true),
+		"hud_visible": _hud_root.visible,
+		"photo_camera": _photo_mode != null and _photo_mode.is_camera_active(),
 		"worldgen_stats": world.get_worldgen_stats(),
 		"worldgen_overlay": {
 			"overlay_visible": _worldgen_overlay != null and _worldgen_overlay.visible,
@@ -159,7 +172,10 @@ func _update_underwater(delta: float) -> void:
 	_underwater_sample_time -= delta
 	if _underwater_sample_time <= 0.0:
 		_underwater_sample_time = UNDERWATER_SAMPLE_INTERVAL
-		var ambience := world.get_water_ambience(player.camera.global_position)
+		var view := _active_camera()
+		if view == null:
+			return
+		var ambience := world.get_water_ambience(view.global_position)
 		_underwater_target = 1.0 if bool(ambience["submerged"]) else 0.0
 		_underwater_depth = clampf(float(ambience["depth"]) / DayNightCycle.UNDERWATER_MAX_DEPTH, 0.0, 1.0)
 		if _underwater_target > 0.0:
@@ -479,6 +495,19 @@ func _on_weather_changed(state: int) -> void:
 	AudioManager.set_rain(state == WeatherSystem.State.RAIN)
 
 
+func _on_photo_camera_changed(active: bool, camera: Camera3D) -> void:
+	# Streaming, weather, and player control all follow the active render camera.
+	world.setup_player(camera if active else player)
+	player.set_photo_mode(active)
+	_weather.set_camera(camera if active else player.camera)
+
+
+func _active_camera() -> Camera3D:
+	if _photo_mode != null and _photo_mode.is_camera_active():
+		return _photo_mode.get_camera()
+	return player.camera
+
+
 func _on_setting_changed(key: String, value: Variant) -> void:
 	match key:
 		"render_distance":
@@ -572,10 +601,12 @@ func _update_camera_far(render_distance: int) -> void:
 func _update_stats() -> void:
 	if not player:
 		return
-	var coords := Vector3i(floori(player.global_position.x), floori(player.global_position.y), floori(player.global_position.z))
+	var view := _active_camera()
+	var position := view.global_position if view != null else player.global_position
+	var coords := Vector3i(floori(position.x), floori(position.y), floori(position.z))
 	_coords_label.text = "X %d   Y %d   Z %d\n%s" % [
 		coords.x, coords.y, coords.z,
-		world.get_biome_name(player.global_position),
+		world.get_biome_name(position),
 	]
 	_stats_label.text = "%d FPS\n%d chunks\n%s" % [
 		Engine.get_frames_per_second(),
