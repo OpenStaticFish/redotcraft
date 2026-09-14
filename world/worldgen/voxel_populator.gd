@@ -59,6 +59,7 @@ func populate(chunk_pos: Vector2i, field: ChunkTerrainData, edits: Dictionary, f
 		_decorate_caves(data, origin_x, origin_z)
 	if full_detail and config.decoration_density > 0.0:
 		max_y = _decorate(data, field, origin_x, origin_z, max_y)
+		max_y = _decorate_underwater(data, field, origin_x, origin_z, max_y)
 	max_y = _apply_edits(data, edits, origin_x, origin_z, max_y)
 	return {"data": data, "max_y": _actual_max_y(data, max_y)}
 
@@ -227,8 +228,13 @@ func _surface_rule_values(field: ChunkTerrainData, field_index: int, surface_y: 
 	if underwater:
 		var water_depth: int = water_y - surface_y
 		top = biomes.seabed_block(biome, water_depth)
-		sub = top
+		sub = biomes.seabed_subsurface(biome, water_depth)
 		depth = biomes.seabed_depth(water_depth)
+		# Abyssal ooze is interrupted by exposed gravel banks so the deep floor
+		# does not read as one flat sheet.
+		if biome == BiomeCatalogScript.DEEP_OCEAN and depth > 6 \
+				and WorldGenHashScript.hash_2d(config.seed + 1409, world_x, world_z) % 6 == 0:
+			top = BlockRegistryScript.BLOCK_GRAVEL
 	elif beach:
 		top = BlockRegistryScript.BLOCK_SAND
 		sub = BlockRegistryScript.BLOCK_SAND
@@ -311,7 +317,7 @@ func _carve_cave_entrances(data: PackedByteArray, field: ChunkTerrainData, origi
 			var world_x := cell_x * entrance_cell_size + 8 + hash_value % 48
 			var world_z := cell_z * entrance_cell_size + 8 + (hash_value / 53) % 48
 			var ground := terrain_sampler.sample_decoration_ground(world_x, world_z)
-			if ground.y in [BiomeCatalogScript.OCEAN, BiomeCatalogScript.DEEP_OCEAN, BiomeCatalogScript.BEACH, BiomeCatalogScript.RIVER, BiomeCatalogScript.SWAMP]:
+			if biomes.is_ocean_biome(ground.y) or ground.y in [BiomeCatalogScript.BEACH, BiomeCatalogScript.RIVER, BiomeCatalogScript.SWAMP]:
 				continue
 			var direction_x := -1 if ((hash_value / 101) & 1) == 0 else 1
 			var direction_z := -1 if ((hash_value / 211) & 1) == 0 else 1
@@ -857,6 +863,106 @@ func _ground_cover_block(decoration_set: int, hash_value: int) -> int:
 			if hash_value % 100 < 16:
 				return BlockRegistryScript.BLOCK_YELLOW_FLOWER if hash_value % 2 == 0 else BlockRegistryScript.BLOCK_RED_FLOWER
 	return BlockRegistryScript.BLOCK_TALL_GRASS
+
+
+## Seabed vegetation. Like land decoration, anchors come from a global lattice
+## with a halo so adjacent chunks reach the same decision, and plants replace
+## water cells only: they can never overwrite terrain, caves, or other
+## features. Plant height is bounded by the local water depth, so nothing
+## reaches the surface. Distance chunks skip this pass (LOD keeps only the
+## compact top columns), which is invisible past the full-detail ring.
+const UNDERWATER_CELL_SIZE: int = 6
+const UNDERWATER_HALO: int = 4
+const UNDERWATER_TUFT_RADIUS: int = 2
+
+func _decorate_underwater(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int, max_y: int) -> int:
+	var ground_cache: Dictionary = {}
+	var first_x: int = WorldGenHashScript.floor_div(origin_x - UNDERWATER_HALO, UNDERWATER_CELL_SIZE)
+	var last_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + UNDERWATER_HALO, UNDERWATER_CELL_SIZE)
+	var first_z: int = WorldGenHashScript.floor_div(origin_z - UNDERWATER_HALO, UNDERWATER_CELL_SIZE)
+	var last_z: int = WorldGenHashScript.floor_div(origin_z + VoxelDefsScript.CHUNK_SIZE - 1 + UNDERWATER_HALO, UNDERWATER_CELL_SIZE)
+	for cell_z in range(first_z, last_z + 1):
+		for cell_x in range(first_x, last_x + 1):
+			var anchor_hash: int = WorldGenHashScript.hash_2d(config.seed + 1423, cell_x, cell_z)
+			var center_x: int = cell_x * UNDERWATER_CELL_SIZE + 2 + anchor_hash % (UNDERWATER_CELL_SIZE - 4)
+			var center_z: int = cell_z * UNDERWATER_CELL_SIZE + 2 + (anchor_hash / 29) % (UNDERWATER_CELL_SIZE - 4)
+			var ground := _cached_decoration_ground(field, center_x, center_z, ground_cache)
+			if ground.x < 0 or not biomes.is_ocean_biome(ground.y):
+				continue
+			var set_id: int = biomes.decoration_set(ground.y)
+			var density: Vector3 = decorations.underwater_density(set_id)
+			if density.x <= 0.0:
+				continue
+			var chance: float = density.x * config.decoration_density
+			if WorldGenHashScript.float_01_2d(config.seed + 1447, cell_x, cell_z) >= minf(0.95, chance):
+				continue
+			var tuft_span: int = maxi(int(density.z) - int(density.y) + 1, 1)
+			var tuft_count: int = int(density.y) + (anchor_hash / 71) % tuft_span
+			for tuft_index in tuft_count:
+				var tuft_hash: int = WorldGenHashScript.hash_3d(config.seed + 1451, cell_x, tuft_index, cell_z)
+				var world_x: int = center_x + (tuft_hash % (UNDERWATER_TUFT_RADIUS * 2 + 1)) - UNDERWATER_TUFT_RADIUS
+				var world_z: int = center_z + ((tuft_hash / 13) % (UNDERWATER_TUFT_RADIUS * 2 + 1)) - UNDERWATER_TUFT_RADIUS
+				var tuft_ground := _cached_decoration_ground(field, world_x, world_z, ground_cache)
+				if tuft_ground.x < 0 or not biomes.is_ocean_biome(tuft_ground.y):
+					continue
+				var depth: int = VoxelDefsScript.SEA_LEVEL - tuft_ground.x
+				if depth < 2:
+					continue
+				var entry: Array = decorations.choose_underwater(set_id, WorldGenHashScript.float_01_2d(
+					config.seed + 1459, cell_x * 31 + tuft_index, cell_z))
+				if entry.is_empty():
+					continue
+				if WorldGenHashScript.float_01_2d(config.seed + 1461, cell_x + tuft_index * 7, cell_z) >= float(entry[2]):
+					continue
+				max_y = maxi(max_y, _stamp_underwater_plant(
+					data, origin_x, origin_z, world_x, tuft_ground.x, world_z, int(entry[0]), tuft_hash, depth))
+	return max_y
+
+
+## Plants only ever fill water cells, and a multi-block stalk stops early when
+## the cell above is occupied, so kelp never floats on a shorter neighbor.
+func _stamp_underwater_plant(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, ground_y: int, world_z: int, species: int, hash_value: int, depth: int) -> int:
+	var block_id: int = BlockRegistryScript.BLOCK_SEAGRASS
+	var height: int = 1 + (hash_value / 17) % 2
+	match species:
+		DecorationCatalog.FEATURE_KELP:
+			block_id = BlockRegistryScript.BLOCK_KELP
+			height = 3 + (hash_value / 7) % 5
+		DecorationCatalog.FEATURE_CORAL_FAN:
+			block_id = BlockRegistryScript.BLOCK_CORAL_FAN
+			height = 1 + (hash_value / 11) % 2
+		DecorationCatalog.FEATURE_CORAL_BRANCH:
+			block_id = BlockRegistryScript.BLOCK_CORAL_BRANCH
+			height = 1 + (hash_value / 13) % 2
+		DecorationCatalog.FEATURE_SPONGE:
+			block_id = BlockRegistryScript.BLOCK_SPONGE
+		DecorationCatalog.FEATURE_ANEMONE:
+			block_id = BlockRegistryScript.BLOCK_ANEMONE
+	height = clampi(height, 1, maxi(depth - 1, 1))
+	var last := -1
+	for y in range(1, height + 1):
+		var placed := _place_underwater(data, origin_x, origin_z, world_x, ground_y + y, world_z, block_id)
+		if placed < 0:
+			break
+		last = placed
+	return last
+
+
+func _place_underwater(data: PackedByteArray, origin_x: int, origin_z: int, world_x: int, y: int, world_z: int, block_id: int) -> int:
+	var local_x: int = world_x - origin_x
+	var local_z: int = world_z - origin_z
+	if local_x < 0 or local_x >= VoxelDefsScript.CHUNK_SIZE or local_z < 0 or local_z >= VoxelDefsScript.CHUNK_SIZE or y < 0 or y >= VoxelDefsScript.WORLD_HEIGHT:
+		return -1
+	var voxel_index: int = _index(local_x, y, local_z)
+	if not _is_water(data[voxel_index]):
+		return -1
+	data[voxel_index] = block_id
+	return y
+
+
+func _is_water(block_id: int) -> bool:
+	return block_id == BlockRegistryScript.BLOCK_WATER \
+		or (block_id >= BlockRegistryScript.BLOCK_WATER_FLOW_7 and block_id <= BlockRegistryScript.BLOCK_WATER_FLOW_1)
 
 
 ## Worn ground patches: dirt scars in grasslands and forests, mud in wetlands,

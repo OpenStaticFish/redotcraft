@@ -962,13 +962,16 @@ func _append_water_block(padded: PackedByteArray, pad_index: int, local_x: int, 
 	var above_water := _water_level[above] > 0
 	var top := 1.0 if above_water else _water_top(level)
 	var flowing := level < 8
-	if not above_water and _opacity[above] < MAX_LEVEL:
+	# Cross plants are thin cutouts sitting inside the water volume. Culling
+	# the water faces against them keeps the sea continuous instead of boxing
+	# every tuft in its own glassy pocket.
+	if not above_water and _opacity[above] < MAX_LEVEL and _cross[above] == 0:
 		_append_water_face(0, local_x, y, local_z, top, flowing, tint, result)
 	for face in range(2, 6):
 		var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
 		var neighbor_index := pad_index + normal.x + normal.z * VoxelDefs.PAD_STRIDE_Z + normal.y * VoxelDefs.PAD_STRIDE_Y
 		var neighbor := padded[neighbor_index]
-		if _opacity[neighbor] >= MAX_LEVEL:
+		if _opacity[neighbor] >= MAX_LEVEL or _cross[neighbor] == 1:
 			continue
 		if _water_level[neighbor] >= level and _water_level[neighbor] > 0:
 			continue

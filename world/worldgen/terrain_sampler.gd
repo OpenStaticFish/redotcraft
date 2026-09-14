@@ -17,10 +17,43 @@ const CHANNEL_DETAIL: int = 5
 const CHANNEL_RIVER: int = 6
 const CHANNEL_TEMPERATURE: int = 7
 const CHANNEL_MOISTURE: int = 8
-const CHANNEL_COUNT: int = 9
+const CHANNEL_REEF: int = 9
+const CHANNEL_KELP: int = 10
+const CHANNEL_SEAGRASS: int = 11
+const CHANNEL_SEABED: int = 12
+const CHANNEL_COUNT: int = 13
 
 const MIN_TERRAIN_HEIGHT: float = 3.0
 const HEIGHT_MARGIN: float = 8.0
+
+# Underwater split. The same continental band shapes the seabed depth curve,
+# so a sea biome's label and its geometry cannot disagree. Patch fields decide
+# coral, kelp, and seagrass regions instead of hard depth stripes. The shelf
+# deliberately owns most of the ocean band: an abyss-only sea leaves the
+# biome-specific seafloors too rare to encounter.
+const OCEAN_CONTINENTAL: float = 0.34
+const SLOPE_START: float = 0.12
+const SLOPE_END: float = 0.24
+const SHORE_SHELF_START: float = 0.24
+const SHORE_SHELF_END: float = 0.36
+const ABYSSAL_DEPTH: float = 19.0
+const SHELF_DEPTH: float = 7.0
+const SHORE_DEPTH: float = 2.5
+const DEEP_SEA_DEPTH: float = 13.0
+const FROZEN_SEA_TEMPERATURE: float = 0.22
+const CORAL_REEF_TEMPERATURE: float = 0.60
+const CORAL_REEF_DEPTH: float = 12.0
+const KELP_FOREST_TEMPERATURE: float = 0.55
+const KELP_FOREST_MIN_DEPTH: float = 4.0
+const SEAGRASS_TEMPERATURE: float = 0.40
+const SEAGRASS_DEPTH: float = 12.0
+const SEABED_PATCH_THRESHOLD: float = 0.40
+const REEF_MOUND_HEIGHT: float = 6.5
+const SEABED_RELIEF_HEIGHT: float = 2.4
+const REEF_PATCH_SCALE: float = 150.0
+const KELP_PATCH_SCALE: float = 140.0
+const SEAGRASS_PATCH_SCALE: float = 220.0
+const SEABED_RELIEF_SCALE: float = 96.0
 # build_field has four successively smaller grids. Float64 packed arrays retain
 # point-query precision while making every coordinate's neighbourhood independent
 # of which chunk is being generated.
@@ -199,6 +232,7 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 		var raw_row: int = (local_z - RAW_MIN) * RAW_SIDE
 		var final_row: int = (local_z - FINAL_MIN) * FINAL_SIDE
 		for local_x in range(FIELD_MIN, FIELD_MAX + 1):
+			var world_x: int = origin_x + local_x
 			var field_index: int = field_row + local_x - FIELD_MIN
 			var source_index: int = source_row + local_x - SOURCE_MIN
 			var raw_index: int = raw_row + local_x - RAW_MIN
@@ -219,7 +253,9 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 			if profile == TerrainProfileCatalog.RIDGED_MOUNTAINS:
 				profile_fraction = 0.0
 			var continental: float = source_continental[source_index]
-			var biome: int = _apply_biome_override(biome_choice.x, continental, final_value, river_value, profile)
+			var biome: int = _apply_biome_override(
+				biome_choice.x, continental, final_value, river_value, profile,
+				temperature_value, world_x, world_z)
 			var secondary: int = biome_choice.y if biome == biome_choice.x else biome
 			var biome_blend_value: int = biome_choice.z if biome == biome_choice.x else 0
 			var dominant := biome
@@ -256,7 +292,8 @@ func sample_point(x: int, z: int) -> Dictionary:
 	var profile_position: float = _profile_position_at(x, z, continental)
 	var profile: int = clampi(floori(profile_position), TerrainProfileCatalog.PLAINS, TerrainProfileCatalog.RIDGED_MOUNTAINS)
 	var choice := _biome_choice(temperature_value, moisture_value)
-	var biome: int = _apply_biome_override(choice.x, continental, final_value, river_value, profile)
+	var biome: int = _apply_biome_override(
+		choice.x, continental, final_value, river_value, profile, temperature_value, x, z)
 	var secondary: int = choice.y if biome == choice.x else biome
 	var blend: int = choice.z if biome == choice.x else 0
 	var dominant := biome
@@ -290,7 +327,8 @@ func sample_decoration_ground(x: int, z: int) -> Vector2i:
 	var profile_position := _profile_position_at(x, z, continental)
 	var profile := clampi(floori(profile_position), TerrainProfileCatalog.PLAINS, TerrainProfileCatalog.RIDGED_MOUNTAINS)
 	var choice := _biome_choice(climate.x, climate.y)
-	var biome := _apply_biome_override(choice.x, continental, final_value, river_value, profile)
+	var biome := _apply_biome_override(
+		choice.x, continental, final_value, river_value, profile, climate.x, x, z)
 	var dominant := biome
 	return Vector2i(clampi(roundi(final_value), 2, VoxelDefsScript.WORLD_HEIGHT - 2), dominant)
 
@@ -327,7 +365,8 @@ func sample_debug_point(mode: String, x: int, z: int) -> Dictionary:
 	var profile := clampi(floori(profile_position), TerrainProfileCatalog.PLAINS, TerrainProfileCatalog.RIDGED_MOUNTAINS)
 	if mode == "profile":
 		return {"profile_id": profile}
-	var biome := _apply_biome_override(choice.x, continental, height, river_value, profile)
+	var biome := _apply_biome_override(
+		choice.x, continental, height, river_value, profile, climate.x, x, z)
 	var dominant := biome
 	return {"dominant_biome_id": dominant}
 
@@ -356,6 +395,10 @@ func _make_noise_channels() -> Array[FastNoiseLite]:
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 701],
 		[FastNoiseLite.TYPE_PERLIN, 1.0, 2, 809],
 		[FastNoiseLite.TYPE_PERLIN, 1.0, 2, 907],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1013],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1109],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1201],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1303],
 	]
 	var result: Array[FastNoiseLite] = []
 	for definition in definitions:
@@ -388,8 +431,37 @@ func _base_height_at(x: int, z: int, continental: float) -> float:
 	var blend: float = profile_position - floorf(profile_position)
 	var profile_base: float = lerpf(_profile_value(profile, TerrainProfileCatalog.FIELD_BASE_HEIGHT), _profile_value(next_profile, TerrainProfileCatalog.FIELD_BASE_HEIGHT), blend)
 	var shoreline: float = _smoothstep(0.27, 0.52, continental)
-	var ocean_floor: float = lerpf(float(VoxelDefsScript.SEA_LEVEL) - 17.0, float(VoxelDefsScript.SEA_LEVEL) - 2.5, _smoothstep(0.05, 0.36, continental))
-	return lerpf(ocean_floor, profile_base, shoreline)
+	return lerpf(_ocean_floor_at(x, z, continental), profile_base, shoreline)
+
+
+## Seabed shape: a broad shelf across most of the ocean band, a steeper
+## continental slope, and a narrower abyssal basin. The depth curve uses the
+## same continental band that classifies ocean biomes, so the geometry and its
+## label always agree. Reef mounds and low sediment banks are added on top and
+## the result is clamped so the floor never breaks the water surface.
+func _ocean_floor_at(x: int, z: int, continental: float) -> float:
+	var slope: float = _smoothstep(SLOPE_START, SLOPE_END, continental)
+	var shore: float = _smoothstep(SHORE_SHELF_START, SHORE_SHELF_END, continental)
+	var floor_height: float = lerpf(
+		lerpf(float(VoxelDefsScript.SEA_LEVEL) - ABYSSAL_DEPTH,
+			float(VoxelDefsScript.SEA_LEVEL) - SHELF_DEPTH, slope),
+		float(VoxelDefsScript.SEA_LEVEL) - SHORE_DEPTH, shore)
+	var depth: float = float(VoxelDefsScript.SEA_LEVEL) - floor_height
+	# Reef mounds grow on the mid-depth shelf. The depth gate keeps them off
+	# the beach and out of the abyssal plain even where the patch mask peaks.
+	var mound: float = _seabed_patch_strength(x, z, CHANNEL_REEF, REEF_PATCH_SCALE) * REEF_MOUND_HEIGHT \
+		* _smoothstep(3.0, 6.0, depth) * (1.0 - _smoothstep(12.0, 16.0, depth))
+	var relief: float = _noises[CHANNEL_SEABED].get_noise_2d(
+		float(x) / SEABED_RELIEF_SCALE, float(z) / SEABED_RELIEF_SCALE) * SEABED_RELIEF_HEIGHT
+	return minf(floor_height + mound + relief, float(VoxelDefsScript.SEA_LEVEL) - SHORE_DEPTH)
+
+
+## Positive-only patch field in [0, 1]. Shared by the seabed mound/bank
+## shaping and the underwater biome split so a patch's geometry and its biome
+## cannot disagree.
+func _seabed_patch_strength(x: int, z: int, channel: int, scale: float) -> float:
+	var value: float = _noises[channel].get_noise_2d(float(x) / scale, float(z) / scale)
+	return _smoothstep(-0.05, 0.45, value)
 
 
 func _height_without_regional_erosion(x: int, z: int) -> float:
@@ -626,11 +698,11 @@ func _biome_choice(temperature_value: float, moisture_value: float) -> Vector3i:
 	return Vector3i(first, second, roundi(blend * 255.0))
 
 
-func _apply_biome_override(climate_biome: int, continental: float, height: float, river_value: float, profile: int) -> int:
-	if continental < 0.18:
-		return BiomeCatalog.DEEP_OCEAN
-	if continental < 0.34:
-		return BiomeCatalog.OCEAN
+func _apply_biome_override(climate_biome: int, continental: float, height: float, river_value: float, profile: int, temperature: float, world_x: int, world_z: int) -> int:
+	# Only water the seabed actually covers becomes a sea biome; a rare raised
+	# ocean-floor column falls through to the waterline checks below.
+	if continental < OCEAN_CONTINENTAL and height <= float(VoxelDefsScript.SEA_LEVEL):
+		return _underwater_biome(height, temperature, world_x, world_z)
 	if river_value > 0.62 and continental >= 0.45 and height <= float(VoxelDefsScript.SEA_LEVEL) + 2.0:
 		return BiomeCatalog.RIVER
 	if height <= float(VoxelDefsScript.SEA_LEVEL) + 1.0:
@@ -643,6 +715,28 @@ func _apply_biome_override(climate_biome: int, continental: float, height: float
 	if climate_biome == BiomeCatalog.SWAMP and height > float(VoxelDefsScript.SEA_LEVEL) + 10.0:
 		return BiomeCatalog.FOREST
 	return climate_biome
+
+
+## Depth- and climate-appropriate underwater biome chosen from the same final
+## height and patch fields the seabed geometry uses. Cold water wins first,
+## then the abyssal plain, then coral/kelp/seagrass patches cover the shelf;
+## plain shelf sea remains the fallback so the split never gaps.
+func _underwater_biome(height: float, temperature: float, world_x: int, world_z: int) -> int:
+	var depth: float = float(VoxelDefsScript.SEA_LEVEL) - height
+	if temperature <= FROZEN_SEA_TEMPERATURE:
+		return BiomeCatalog.FROZEN_OCEAN
+	if depth >= DEEP_SEA_DEPTH:
+		return BiomeCatalog.DEEP_OCEAN
+	if temperature >= CORAL_REEF_TEMPERATURE and depth <= CORAL_REEF_DEPTH \
+			and _seabed_patch_strength(world_x, world_z, CHANNEL_REEF, REEF_PATCH_SCALE) >= SEABED_PATCH_THRESHOLD:
+		return BiomeCatalog.CORAL_REEF
+	if temperature <= KELP_FOREST_TEMPERATURE and depth >= KELP_FOREST_MIN_DEPTH \
+			and _seabed_patch_strength(world_x, world_z, CHANNEL_KELP, KELP_PATCH_SCALE) >= SEABED_PATCH_THRESHOLD:
+		return BiomeCatalog.KELP_FOREST
+	if temperature >= SEAGRASS_TEMPERATURE and depth <= SEAGRASS_DEPTH \
+			and _seabed_patch_strength(world_x, world_z, CHANNEL_SEAGRASS, SEAGRASS_PATCH_SCALE) >= SEABED_PATCH_THRESHOLD:
+		return BiomeCatalog.SEAGRASS_MEADOW
+	return BiomeCatalog.OCEAN
 
 
 func _macro_warp(x: int, z: int) -> Vector2:

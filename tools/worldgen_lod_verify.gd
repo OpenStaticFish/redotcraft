@@ -127,7 +127,9 @@ func _verify_canopy_coverage(generator: TerrainGenerator) -> void:
 		_fail("distance grove sample at %s has only %d canopy columns" % [grove_pos, grove_canopies])
 	if grove_pos.x != NO_OCEAN.x and grove_patches == 0:
 		_fail("distance floor patches did not propagate at %s" % grove_pos)
-	var ocean_pos := _find_biome_chunk(generator, [BiomeCatalog.OCEAN, BiomeCatalog.DEEP_OCEAN])
+	var ocean_pos := _find_biome_chunk(generator, [
+		BiomeCatalog.OCEAN, BiomeCatalog.DEEP_OCEAN, BiomeCatalog.CORAL_REEF,
+		BiomeCatalog.KELP_FOREST, BiomeCatalog.SEAGRASS_MEADOW, BiomeCatalog.FROZEN_OCEAN])
 	if ocean_pos.x != NO_OCEAN.x:
 		var ocean_lod := generator.generate_data(ocean_pos, {}, true)
 		for column in VoxelDefs.CHUNK_AREA:
