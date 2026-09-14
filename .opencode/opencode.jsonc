@@ -3,13 +3,8 @@
   "mcp": {
     "redot": {
       "type": "local",
-      "command": [
-        "/home/micqdf/.nix-profile/bin/redot",
-        "--headless",
-        "--mcp-server",
-        "--path",
-        "/home/micqdf/game-dev/redot-minecraft/redot-minecraft"
-      ],
+      "command": ["redot", "--headless", "--mcp-server", "--path", "."],
+      "cwd": ".",
       "enabled": true
     }
   }
