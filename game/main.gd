@@ -17,6 +17,8 @@ const SLOT_ICON := 30.0
 const UNDERWATER_SAMPLE_INTERVAL := 0.15
 const UNDERWATER_FADE_SECONDS := 0.35
 const UNDERWATER_DEEP_COLOR := Color(0.02, 0.08, 0.16)
+const DYNAMIC_RESOLUTION_INTERVAL := 0.5
+const DYNAMIC_RESOLUTION_SMOOTHING := 0.2
 
 @onready var world: VoxelWorld = $World
 @onready var player: Player = $Player
@@ -50,6 +52,9 @@ var _worldgen_overlay: WorldgenOverlay
 var _selection_chip: Label
 var _hotbar_slot_size := SLOT_WIDTH
 var _hotbar_icon_size := SLOT_ICON
+var _frame_time := 1.0 / 60.0
+var _dynamic_resolution_timer := 0.0
+var _dynamic_resolution_active := false
 
 
 func _ready() -> void:
@@ -146,6 +151,7 @@ func _process(delta: float) -> void:
 		if status_time <= 0.0:
 			_status_label.text = ""
 	_update_underwater(delta)
+	_update_frame_pacing(delta)
 	_stats_time -= delta
 	if _stats_time <= 0.0:
 		_stats_time = STATS_INTERVAL
@@ -172,6 +178,49 @@ func _update_underwater(delta: float) -> void:
 		_underwater_overlay.color = Color(tinted.r, tinted.g, tinted.b,
 			lerpf(0.06, 0.42, _underwater_depth) * _underwater_amount)
 	AudioManager.set_underwater(_underwater_amount > 0.5)
+
+
+## Dynamic resolution holds the target frame rate by trading 3D render scale
+## for frame time. The stepping policy is pure and lives in GameConfig; this
+## only smooths frame time and applies a step on an interval so FSR2 is not
+## asked to recreate its context every frame. Capped frame times (FPS cap or
+## vsync refresh) are treated as the budget, not as GPU load.
+func _update_frame_pacing(delta: float) -> void:
+	if not bool(GameConfig.get_setting("dynamic_resolution")):
+		_dynamic_resolution_active = false
+		return
+	if not _dynamic_resolution_active:
+		_dynamic_resolution_active = true
+		_frame_time = delta
+		_dynamic_resolution_timer = DYNAMIC_RESOLUTION_INTERVAL
+		return
+	_frame_time = lerpf(_frame_time, delta, 1.0 - exp(-delta / DYNAMIC_RESOLUTION_SMOOTHING))
+	_dynamic_resolution_timer -= delta
+	if _dynamic_resolution_timer > 0.0:
+		return
+	_dynamic_resolution_timer = DYNAMIC_RESOLUTION_INTERVAL
+	var viewport := get_viewport()
+	if viewport == null:
+		return
+	var target_fps := maxf(float(GameConfig.get_setting("dynamic_resolution_target")), 1.0)
+	var cap_period := 0.0
+	var cap := maxi(int(GameConfig.get_setting("fps_cap")), 0)
+	if cap > 0:
+		cap_period = 1.0 / float(cap)
+	if GameConfig.get_vsync_mode() != DisplayServer.VSYNC_DISABLED:
+		var refresh := DisplayServer.screen_get_refresh_rate()
+		if refresh < 1.0:
+			refresh = 60.0
+		cap_period = maxf(cap_period, 1.0 / refresh)
+	var max_scale := clampf(float(GameConfig.get_graphics().get("fsr_scale", 1.0)), GameConfig.DYNAMIC_RESOLUTION_MIN_SCALE, 1.0)
+	var scale := GameConfig.dynamic_resolution_scale(
+		viewport.scaling_3d_scale, _frame_time, 1.0 / target_fps, max_scale, cap_period)
+	# A sub-native scale needs the FSR2 path; at native keep the plain bilinear
+	# mode so TAA/FSR2 state matches what _apply_graphics() configured.
+	var mode := Viewport.SCALING_3D_MODE_FSR2 if scale < 1.0 else Viewport.SCALING_3D_MODE_BILINEAR
+	if viewport.scaling_3d_mode != mode:
+		viewport.scaling_3d_mode = mode
+	viewport.scaling_3d_scale = scale
 
 
 func _apply_config() -> void:
@@ -490,6 +539,8 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 		"graphics_preset":
 			_apply_graphics()
 		"graphics":
+			_apply_graphics()
+		"dynamic_resolution":
 			_apply_graphics()
 
 
