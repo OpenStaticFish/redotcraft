@@ -494,12 +494,32 @@ func _assemble_light_volume(data: PackedByteArray, data_max_y: int, data_heights
 			for tile_x in 3:
 				var index := tile_z * 3 + tile_x
 				var tile := tiles[index]
-				if not tile.is_empty() and y <= tile_max[index]:
+				if tile.is_empty():
+					# Unknown neighboring terrain is a closed light boundary, not open
+					# sky. Treating an unloaded tile as air leaks daylight sideways into
+					# caves until that neighbor commits and is especially visible in
+					# large caverns near the streaming edge.
+					for _local_x in VoxelDefs.CHUNK_SIZE:
+						volume.blocks.push_back(BlockRegistry.BLOCK_STONE)
+				elif y <= tile_max[index]:
 					var source := y * VoxelDefs.DATA_STRIDE_Y + local_z * VoxelDefs.DATA_STRIDE_Z
 					volume.blocks.append_array(tile.slice(source, source + VoxelDefs.CHUNK_SIZE))
 				else:
-					volume.blocks.resize(volume.blocks.size() + VoxelDefs.CHUNK_SIZE)
+					# An existing tile's rows above max_y are known air. Making these
+					# rows solid creates false walls between differently sized chunks.
+					for _local_x in VoxelDefs.CHUNK_SIZE:
+						volume.blocks.push_back(BlockRegistry.BLOCK_AIR)
 	volume.sky.resize(volume.blocks.size())
+	return volume
+
+
+## Verification/debug entry point. Production build() clears its temporary
+## light volume after baking vertex attributes; this method intentionally keeps
+## it so fixtures can assert cave-mouth falloff, sealed darkness, and bounds.
+func build_light_volume(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, neighbors: NeighborSet) -> LightVolume:
+	var volume := _assemble_light_volume(data, data_max_y, heights, neighbors)
+	_compute_sky_light(volume)
+	_compute_block_light(volume)
 	return volume
 
 
@@ -545,9 +565,7 @@ func _compute_sky_light(volume: LightVolume) -> void:
 	var sky := volume.sky
 	var heights := volume.heights
 	var queue := PackedInt32Array()
-	queue.resize(blocks.size() * 2)
 	var head := 0
-	var tail := 0
 	for volume_z in volume.d:
 		for vx in w:
 			var column := volume_z * w + vx
@@ -567,31 +585,31 @@ func _compute_sky_light(volume: LightVolume) -> void:
 						break
 				if sky[index] < level:
 					sky[index] = level
-				if level > 1 and tail < queue.size():
+				if level > 1:
 					if vx > 0:
 						var ni := index - 1
-						if sky[ni] < level - 1 and _opacity[blocks[ni]] < MAX_LEVEL:
-							sky[ni] = level - 1
-							queue[tail] = ni
-							tail += 1
+						var next_level := level - maxi(_opacity[blocks[ni]], 1)
+						if sky[ni] < next_level:
+							sky[ni] = next_level
+							queue.push_back(ni)
 					if vx < w - 1:
 						var ni := index + 1
-						if sky[ni] < level - 1 and _opacity[blocks[ni]] < MAX_LEVEL:
-							sky[ni] = level - 1
-							queue[tail] = ni
-							tail += 1
+						var next_level := level - maxi(_opacity[blocks[ni]], 1)
+						if sky[ni] < next_level:
+							sky[ni] = next_level
+							queue.push_back(ni)
 					if volume_z > 0:
 						var ni := index - w
-						if sky[ni] < level - 1 and _opacity[blocks[ni]] < MAX_LEVEL:
-							sky[ni] = level - 1
-							queue[tail] = ni
-							tail += 1
+						var next_level := level - maxi(_opacity[blocks[ni]], 1)
+						if sky[ni] < next_level:
+							sky[ni] = next_level
+							queue.push_back(ni)
 					if volume_z < volume.d - 1:
 						var ni := index + w
-						if sky[ni] < level - 1 and _opacity[blocks[ni]] < MAX_LEVEL:
-							sky[ni] = level - 1
-							queue[tail] = ni
-							tail += 1
+						var next_level := level - maxi(_opacity[blocks[ni]], 1)
+						if sky[ni] < next_level:
+							sky[ni] = next_level
+							queue.push_back(ni)
 				y -= 1
 			if top + 1 < volume.h:
 				for direction in 4:
@@ -611,19 +629,18 @@ func _compute_sky_light(volume: LightVolume) -> void:
 					var neighbor_top := mini(int(heights[nz * w + nx]), volume.h)
 					if neighbor_top <= top + 1:
 						continue
-					var seed_level := MAX_LEVEL - 1
 					var neighbor_y := top + 1
 					while neighbor_y < neighbor_top:
 						var ni := neighbor_y * area + nz * w + nx
-						if _opacity[blocks[ni]] >= MAX_LEVEL:
+						var attenuation := _opacity[blocks[ni]]
+						if attenuation >= MAX_LEVEL:
 							break
+						var seed_level := MAX_LEVEL - maxi(attenuation, 1)
 						if sky[ni] < seed_level:
 							sky[ni] = seed_level
-							if tail < queue.size():
-								queue[tail] = ni
-								tail += 1
+							queue.push_back(ni)
 						neighbor_y += 1
-	while head < tail:
+	while head < queue.size():
 		var index := queue[head]
 		head += 1
 		var level := sky[index]
@@ -636,45 +653,39 @@ func _compute_sky_light(volume: LightVolume) -> void:
 		if vx > 0:
 			var ni := index - 1
 			var nl := level - maxi(_opacity[blocks[ni]], 1)
-			if nl > sky[ni] and tail < queue.size():
+			if nl > sky[ni]:
 				sky[ni] = nl
-				queue[tail] = ni
-				tail += 1
+				queue.push_back(ni)
 		if vx < w - 1:
 			var ni := index + 1
 			var nl := level - maxi(_opacity[blocks[ni]], 1)
-			if nl > sky[ni] and tail < queue.size():
+			if nl > sky[ni]:
 				sky[ni] = nl
-				queue[tail] = ni
-				tail += 1
+				queue.push_back(ni)
 		if volume_z > 0:
 			var ni := index - w
 			var nl := level - maxi(_opacity[blocks[ni]], 1)
-			if nl > sky[ni] and tail < queue.size():
+			if nl > sky[ni]:
 				sky[ni] = nl
-				queue[tail] = ni
-				tail += 1
+				queue.push_back(ni)
 		if volume_z < volume.d - 1:
 			var ni := index + w
 			var nl := level - maxi(_opacity[blocks[ni]], 1)
-			if nl > sky[ni] and tail < queue.size():
+			if nl > sky[ni]:
 				sky[ni] = nl
-				queue[tail] = ni
-				tail += 1
+				queue.push_back(ni)
 		if y > 0:
 			var ni := index - area
 			var nl := level - maxi(_opacity[blocks[ni]], 1)
-			if nl > sky[ni] and tail < queue.size():
+			if nl > sky[ni]:
 				sky[ni] = nl
-				queue[tail] = ni
-				tail += 1
+				queue.push_back(ni)
 		if y < volume.h - 1:
 			var ni := index + area
 			var nl := level - maxi(_opacity[blocks[ni]], 1)
-			if nl > sky[ni] and tail < queue.size():
+			if nl > sky[ni]:
 				sky[ni] = nl
-				queue[tail] = ni
-				tail += 1
+				queue.push_back(ni)
 
 
 func _compute_block_light(volume: LightVolume) -> void:
@@ -695,9 +706,7 @@ func _compute_block_light(volume: LightVolume) -> void:
 	var green := volume.block_g
 	var blue := volume.block_b
 	var queue := PackedInt32Array()
-	queue.resize(size * 2)
 	var head := 0
-	var tail := 0
 	var volume_z := 0
 	var y := 0
 	var vx := 0
@@ -719,9 +728,7 @@ func _compute_block_light(volume: LightVolume) -> void:
 					red[emitter] = maxi(red[emitter], seed_r)
 					green[emitter] = maxi(green[emitter], seed_g)
 					blue[emitter] = maxi(blue[emitter], seed_b)
-					if tail < queue.size():
-						queue[tail] = emitter
-						tail += 1
+					queue.push_back(emitter)
 			elif seed_r > 1 or seed_g > 1 or seed_b > 1:
 				var neighbor_r := maxi(seed_r - 1, 0)
 				var neighbor_g := maxi(seed_g - 1, 0)
@@ -760,11 +767,9 @@ func _compute_block_light(volume: LightVolume) -> void:
 					red[ni] = maxi(red[ni], neighbor_r)
 					green[ni] = maxi(green[ni], neighbor_g)
 					blue[ni] = maxi(blue[ni], neighbor_b)
-					if tail < queue.size():
-						queue[tail] = ni
-						tail += 1
+					queue.push_back(ni)
 			emitter = blocks.find(block_id, emitter + 1)
-	while head < tail:
+	while head < queue.size():
 		var index := queue[head]
 		head += 1
 		var r := red[index]
@@ -814,9 +819,7 @@ func _compute_block_light(volume: LightVolume) -> void:
 			red[ni] = maxi(red[ni], nr)
 			green[ni] = maxi(green[ni], ng)
 			blue[ni] = maxi(blue[ni], nb)
-			if tail < queue.size():
-				queue[tail] = ni
-				tail += 1
+			queue.push_back(ni)
 
 
 func _build_ao_offsets() -> void:

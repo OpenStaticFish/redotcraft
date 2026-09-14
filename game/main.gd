@@ -19,6 +19,7 @@ const SLOT_ICON := 30.0
 const UNDERWATER_SAMPLE_INTERVAL := 0.15
 const UNDERWATER_FADE_SECONDS := 0.35
 const UNDERWATER_DEEP_COLOR := Color(0.02, 0.08, 0.16)
+const CAVE_FADE_SECONDS := 0.65
 const DYNAMIC_RESOLUTION_INTERVAL := 0.5
 const DYNAMIC_RESOLUTION_SMOOTHING := 0.2
 
@@ -50,6 +51,11 @@ var _underwater_depth := 0.0
 var _underwater_tint := Color.WHITE
 var _underwater_target := 0.0
 var _underwater_sample_time := 0.0
+var _cave_amount := 0.0
+var _cave_target := 0.0
+var _cave_depth := 0.0
+var _cave_biome := BiomeCatalog.CAVE_BIOME_NONE
+var _cave_tint := Color("#242936")
 var _worldgen_overlay: WorldgenOverlay
 var _photo_mode: PhotoMode
 var _minimap: Minimap
@@ -228,8 +234,16 @@ func _update_underwater(delta: float) -> void:
 		_underwater_depth = clampf(float(ambience["depth"]) / DayNightCycle.UNDERWATER_MAX_DEPTH, 0.0, 1.0)
 		if _underwater_target > 0.0:
 			_underwater_tint = ambience["tint"] as Color
+		var cave := world.get_cave_ambience(view.global_position)
+		_cave_target = 1.0 if bool(cave["active"]) and _underwater_target <= 0.0 else 0.0
+		_cave_depth = float(cave["depth"])
+		if _cave_target > 0.0:
+			_cave_biome = int(cave["biome"])
+			_cave_tint = cave["tint"] as Color
 	_underwater_amount = move_toward(_underwater_amount, _underwater_target, delta / UNDERWATER_FADE_SECONDS)
+	_cave_amount = move_toward(_cave_amount, _cave_target, delta / CAVE_FADE_SECONDS)
 	_day_night.set_underwater(_underwater_amount, _underwater_depth, _underwater_tint)
+	_day_night.set_cave_ambience(_cave_amount, _cave_depth, _cave_biome, _cave_tint)
 	_underwater_overlay.visible = _underwater_amount > 0.001
 	if _underwater_overlay.visible:
 		var tinted := _underwater_tint.lerp(UNDERWATER_DEEP_COLOR, _underwater_depth * 0.75)
@@ -789,9 +803,12 @@ func _update_stats() -> void:
 	var view := _active_camera()
 	var camera_position := view.global_position if view != null else player.global_position
 	var coords := Vector3i(floori(camera_position.x), floori(camera_position.y), floori(camera_position.z))
+	var location_name := world.get_biome_name(camera_position)
+	if _cave_amount > 0.35 and BiomeCatalog.is_cave_biome(_cave_biome):
+		location_name = BiomeCatalog.cave_display_name(_cave_biome)
 	_coords_label.text = "X %d   Y %d   Z %d\n%s" % [
 		coords.x, coords.y, coords.z,
-		world.get_biome_name(camera_position),
+		location_name,
 	]
 	_stats_label.text = "%d FPS\n%d chunks\n%s" % [
 		Engine.get_frames_per_second(),

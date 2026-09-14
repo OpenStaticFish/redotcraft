@@ -12,6 +12,10 @@ func _ready() -> void:
 	var chunk := VoxelWorld.Chunk.new()
 	chunk.data.resize(VoxelDefs.CHUNK_AREA * VoxelDefs.WORLD_HEIGHT)
 	world._chunks[Vector2i.ZERO] = chunk
+	for direction in VoxelDefs.DIRS_8:
+		var neighbor := VoxelWorld.Chunk.new()
+		neighbor.data.resize(VoxelDefs.CHUNK_AREA * VoxelDefs.WORLD_HEIGHT)
+		world._chunks[direction] = neighbor
 	for y in range(1, 21):
 		for z in VoxelDefs.CHUNK_SIZE:
 			for x in VoxelDefs.CHUNK_SIZE:
@@ -34,6 +38,25 @@ func _ready() -> void:
 		"blast was not recorded as a persistent edit") or failed
 	failed = _expect(world._chunk_edit_version.get(Vector2i.ZERO, 0) == 1,
 		"blast invalidated its changed chunk more than once") or failed
+	for direction in VoxelDefs.DIRS_8:
+		failed = _expect(world._gen_queued.has(direction),
+			"blast did not invalidate sampled light neighbor %s" % direction) or failed
+
+	# Multiple fluid writes in one cellular tick must bump/requeue each touched
+	# chunk only once; otherwise the full 3x3 light ring multiplies water churn.
+	world._gen_queue.clear()
+	world._gen_queued.clear()
+	world._dirty.clear()
+	var water_source := Vector3i(2, 18, 2)
+	var water_target := water_source + Vector3i(1, 0, 0)
+	_set_block(chunk.data, water_source, BlockRegistry.BLOCK_WATER)
+	_set_block(chunk.data, water_target, BlockRegistry.BLOCK_AIR)
+	world._queue_water(water_target)
+	world._water_tick()
+	failed = _expect(world._blocks.is_water_id(world.get_block_world(water_target)),
+		"water tick did not place flowing water") or failed
+	failed = _expect(world._chunk_edit_version.get(Vector2i.ZERO, 0) == 2,
+		"water tick invalidated one changed chunk more than once") or failed
 
 	_set_block(chunk.data, center, BlockRegistry.BLOCK_NUKE)
 	var nuke_result := world.trigger_explosive(center)

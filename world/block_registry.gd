@@ -62,6 +62,15 @@ const BLOCK_SPONGE := 57
 const BLOCK_ANEMONE := 58
 const BLOCK_TNT := 59
 const BLOCK_NUKE := 60
+const BLOCK_DRIPSTONE := 61
+const BLOCK_MOSS := 62
+const BLOCK_CAVE_MOSS := 63
+const BLOCK_DEEPSTONE := 64
+const BLOCK_SCULK := 65
+const BLOCK_CALCITE := 66
+const BLOCK_GEODE_SHELL := 67
+const BLOCK_AMETHYST := 68
+const BLOCK_CRYSTAL_BUD := 69
 
 const FLAG_OPAQUE := 1
 const FLAG_CUTOUT := 2
@@ -133,6 +142,15 @@ const BLOCK_DEFS := [
 	[58, "ANEMONE", "anemone.png", "anemone.png", "anemone.png", FLAG_CUTOUT | FLAG_CROSS],
 	[59, "TNT", "tnt_top.png", "tnt_side.png", "tnt_bottom.png", FLAG_OPAQUE],
 	[60, "NUKE", "nuke_top.png", "nuke_side.png", "nuke_bottom.png", FLAG_OPAQUE],
+	[61, "DRIPSTONE", "dripstone.png", "dripstone.png", "dripstone.png", FLAG_OPAQUE],
+	[62, "MOSS", "moss.png", "moss.png", "moss.png", FLAG_OPAQUE],
+	[63, "CAVE MOSS", "cave_moss.png", "cave_moss.png", "cave_moss.png", FLAG_CUTOUT | FLAG_CROSS],
+	[64, "DEEPSTONE", "deepstone.png", "deepstone.png", "deepstone.png", FLAG_OPAQUE],
+	[65, "SCULK", "sculk.png", "sculk.png", "sculk.png", FLAG_OPAQUE | FLAG_EMISSIVE],
+	[66, "CALCITE", "calcite.png", "calcite.png", "calcite.png", FLAG_OPAQUE],
+	[67, "GEODE SHELL", "geode_shell.png", "geode_shell.png", "geode_shell.png", FLAG_OPAQUE],
+	[68, "AMETHYST", "amethyst.png", "amethyst.png", "amethyst.png", FLAG_OPAQUE | FLAG_EMISSIVE],
+	[69, "CRYSTAL BUD", "crystal_bud.png", "crystal_bud.png", "crystal_bud.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE],
 ]
 
 const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
@@ -140,6 +158,7 @@ const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
 ## upstream directory stays an unmodified copy.
 const UNDERWATER_TEXTURE_ROOT := "res://assets/placeholders/underwater/"
 const EXPLOSIVE_TEXTURE_ROOT := "res://assets/placeholders/explosives/"
+const CAVE_TEXTURE_ROOT := "res://assets/placeholders/caves/"
 const EXTRA_TEXTURE_PATHS := {
 	"coral_substrate.png": UNDERWATER_TEXTURE_ROOT + "coral_substrate.png",
 	"seagrass.png": UNDERWATER_TEXTURE_ROOT + "seagrass.png",
@@ -154,6 +173,15 @@ const EXTRA_TEXTURE_PATHS := {
 	"nuke_top.png": EXPLOSIVE_TEXTURE_ROOT + "nuke_top.png",
 	"nuke_side.png": EXPLOSIVE_TEXTURE_ROOT + "nuke_side.png",
 	"nuke_bottom.png": EXPLOSIVE_TEXTURE_ROOT + "nuke_bottom.png",
+	"dripstone.png": CAVE_TEXTURE_ROOT + "dripstone.png",
+	"moss.png": CAVE_TEXTURE_ROOT + "moss.png",
+	"cave_moss.png": CAVE_TEXTURE_ROOT + "cave_moss.png",
+	"deepstone.png": CAVE_TEXTURE_ROOT + "deepstone.png",
+	"sculk.png": CAVE_TEXTURE_ROOT + "sculk.png",
+	"calcite.png": CAVE_TEXTURE_ROOT + "calcite.png",
+	"geode_shell.png": CAVE_TEXTURE_ROOT + "geode_shell.png",
+	"amethyst.png": CAVE_TEXTURE_ROOT + "amethyst.png",
+	"crystal_bud.png": CAVE_TEXTURE_ROOT + "crystal_bud.png",
 }
 const WATER_TEXTURE_PATH := TEXTURE_ROOT + "water.png"
 const WATER_SHADER_PATH := "res://assets/placeholders/zigcraft/water.gdshader"
@@ -171,6 +199,9 @@ const EMISSIVE_COLORS := {
 	BLOCK_GLOWSTONE: Color(1.0, 0.78, 0.52),
 	BLOCK_TORCH: Color(0.93, 0.68, 0.44),
 	BLOCK_LAVA: Color(1.0, 0.3, 0.06),
+	BLOCK_SCULK: Color(0.08, 0.34, 0.42),
+	BLOCK_AMETHYST: Color(0.48, 0.24, 0.72),
+	BLOCK_CRYSTAL_BUD: Color(0.72, 0.42, 1.0),
 }
 const ATTENUATION_LEAVES := 3
 # Light drops 3 per water block so sky light stops fading in within ~5 blocks of
