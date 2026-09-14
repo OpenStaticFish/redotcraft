@@ -94,6 +94,10 @@ func _category_definition() -> Dictionary:
 					{"type": "render_distance", "label": "Render Distance", "key": "render_distance", "min": 4.0, "max": RENDER_DISTANCE_MAX, "step": 1.0, "format": "%d chunks"},
 					{"type": "slider", "label": "Field of View", "key": "fov", "min": 60.0, "max": 100.0, "step": 1.0, "format": "%d"},
 					{"type": "check", "label": "Fullscreen", "key": "fullscreen", "window": true},
+					{"type": "option", "label": "V-Sync", "key": "vsync", "options": GameConfig.VSYNC_NAMES, "tooltip": "Synchronizes presented frames with the display."},
+					{"type": "option", "label": "FPS Cap", "key": "fps_cap", "options": GameConfig.FPS_CAP_NAMES, "values": GameConfig.FPS_CAP_VALUES, "tooltip": "Unlimited lets the renderer run as fast as it can."},
+					{"type": "check", "label": "Dynamic Resolution", "key": "dynamic_resolution", "tooltip": "Lowers the 3D render scale when the frame rate drops below the target, then raises it back when there is headroom."},
+					{"type": "option", "label": "Dynamic Target", "key": "dynamic_resolution_target", "options": GameConfig.DYNAMIC_RESOLUTION_TARGET_NAMES, "values": GameConfig.DYNAMIC_RESOLUTION_TARGET_VALUES, "depends_on": "dynamic_resolution", "tooltip": "Frame-rate goal for dynamic resolution."},
 				],
 			}
 
@@ -118,19 +122,34 @@ func _style_static() -> void:
 
 
 func _build_rows() -> void:
+	var controls := {}
 	for entry in _category_definition()["rows"]:
+		var control: Control = null
 		match String(entry["type"]):
 			"render_distance":
-				_add_render_distance(entry)
+				control = _add_render_distance(entry)
 			"slider":
-				_add_slider(entry)
+				control = _add_slider(entry)
 			"check":
-				_add_check(entry)
+				control = _add_check(entry)
 			"option":
-				_add_option(entry)
+				control = _add_option(entry)
+		if control != null:
+			controls[entry["key"]] = control
+	# Rows tagged `depends_on` (the dynamic-resolution target) only show while
+	# the controlling checkbox is on.
+	for entry in _category_definition()["rows"]:
+		if not entry.has("depends_on"):
+			continue
+		var target := controls.get(entry["key"]) as Control
+		var source := controls.get(entry["depends_on"]) as CheckBox
+		if target == null or source == null:
+			continue
+		target.visible = bool(GameConfig.get_setting(entry["depends_on"]))
+		source.toggled.connect(func(pressed: bool) -> void: target.visible = pressed)
 
 
-func _add_slider(entry: Dictionary) -> void:
+func _add_slider(entry: Dictionary) -> Control:
 	var key: String = entry["key"]
 	var slider := UITheme.slider_row(
 		_rows_box,
@@ -149,13 +168,16 @@ func _add_slider(entry: Dictionary) -> void:
 			AudioManager.apply_volumes()
 		setting_changed.emit(key, value)
 	)
+	return slider.get_parent() as Control
 
 
-func _add_check(entry: Dictionary) -> void:
+func _add_check(entry: Dictionary) -> Control:
 	var key: String = entry["key"]
 	var check := CheckBox.new()
 	check.text = entry["label"]
 	check.button_pressed = bool(GameConfig.get_setting(key))
+	if entry.has("tooltip"):
+		check.tooltip_text = entry["tooltip"]
 	if _first_focus == null:
 		_first_focus = check
 	check.toggled.connect(func(pressed: bool) -> void:
@@ -165,10 +187,12 @@ func _add_check(entry: Dictionary) -> void:
 		setting_changed.emit(key, pressed)
 	)
 	_rows_box.add_child(check)
+	return check
 
 
-func _add_option(entry: Dictionary) -> void:
+func _add_option(entry: Dictionary) -> Control:
 	var key: String = entry["key"]
+	var values: Array = entry.get("values", [])
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 14)
 	_rows_box.add_child(row)
@@ -176,25 +200,39 @@ func _add_option(entry: Dictionary) -> void:
 	name_label.text = entry["label"]
 	name_label.custom_minimum_size = Vector2(160.0, 0.0)
 	name_label.add_theme_font_override("font", UITheme.font_semi())
+	if entry.has("tooltip"):
+		name_label.tooltip_text = entry["tooltip"]
 	row.add_child(name_label)
 	var option := OptionButton.new()
 	var options: Array = entry["options"]
 	for text in options:
 		option.add_item(text)
-	option.selected = clampi(int(GameConfig.get_setting(key)), 0, options.size() - 1)
+	option.selected = clampi(_option_index(values, GameConfig.get_setting(key)), 0, options.size() - 1)
 	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if entry.has("tooltip"):
+		option.tooltip_text = entry["tooltip"]
 	row.add_child(option)
 	if _first_focus == null:
 		_first_focus = option
 	option.item_selected.connect(func(index: int) -> void:
-		GameConfig.set_setting(key, index)
-		setting_changed.emit(key, index)
+		var value: Variant = values[index] if not values.is_empty() else index
+		GameConfig.set_setting(key, value)
+		setting_changed.emit(key, value)
 	)
+	return row
+
+
+## Option rows without a value table store the option index directly; rows with
+## one (FPS cap, dynamic target) store the mapped engine value.
+func _option_index(values: Array, current: Variant) -> int:
+	if values.is_empty():
+		return maxi(int(current), 0)
+	return maxi(values.find(current), 0)
 
 
 ## Extreme distances get their own toggle and warning, same as the old combined
 ## settings screen.
-func _add_render_distance(entry: Dictionary) -> void:
+func _add_render_distance(entry: Dictionary) -> Control:
 	var key: String = entry["key"]
 	var extreme := bool(GameConfig.get_setting("extreme_render_distance"))
 	var row := HBoxContainer.new()
@@ -241,3 +279,4 @@ func _add_render_distance(entry: Dictionary) -> void:
 			slider.value = RENDER_DISTANCE_MAX
 		warning.visible = pressed
 	)
+	return row

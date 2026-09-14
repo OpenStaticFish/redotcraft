@@ -24,7 +24,8 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
   tunables; `build_config()` returns them and the play screen merges seed/type in.
 - **Settings** opens `settings_menu`, a category hub. Categories are
   `settings_category_panel` instances (`category` property): Display (render
-  distance + extreme toggle, FOV, fullscreen), Graphics (preset + advanced),
+  distance + extreme toggle, FOV, fullscreen, V-Sync, FPS cap, dynamic
+  resolution + target), Graphics (preset + advanced),
   Sound (three buses), Gameplay (mouse sensitivity). `graphics_panel` is the
   nested advanced screen, reachable only from the Graphics category, and is
   itself a hub: each `GraphicsSections.SECTIONS` entry (Lighting, Shadows,

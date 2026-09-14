@@ -12,7 +12,25 @@ const DEFAULT_SETTINGS := {
 	"master_volume": 0.9,
 	"sfx_volume": 1.0,
 	"ambient_volume": 0.8,
+	"vsync": 1,
+	"fps_cap": 0,
+	"dynamic_resolution": false,
+	"dynamic_resolution_target": 60,
 }
+
+# Frame pacing. VSync indexes mirror DisplayServer.VSyncMode exactly, and FPS
+# cap values are real frame rates (`0` is unlimited), so the Display rows map
+# option text to engine values through the parallel value tables.
+const VSYNC_NAMES := ["Off", "On", "Adaptive", "Mailbox"]
+const FPS_CAP_VALUES := [0, 30, 60, 90, 120, 144, 240]
+const FPS_CAP_NAMES := ["Unlimited", "30 FPS", "60 FPS", "90 FPS", "120 FPS", "144 FPS", "240 FPS"]
+const DYNAMIC_RESOLUTION_TARGET_VALUES := [30, 60, 90, 120, 144]
+const DYNAMIC_RESOLUTION_TARGET_NAMES := ["30 FPS", "60 FPS", "90 FPS", "120 FPS", "144 FPS"]
+
+const DYNAMIC_RESOLUTION_MIN_SCALE := 0.5
+const DYNAMIC_RESOLUTION_STEP := 0.05
+const DYNAMIC_RESOLUTION_DOWN_MARGIN := 1.05
+const DYNAMIC_RESOLUTION_UP_MARGIN := 0.85
 
 const PRESET_LOW := 0
 const PRESET_MEDIUM := 1
@@ -138,6 +156,35 @@ func set_setting(key: String, value: Variant) -> void:
 	settings[key] = value
 	if key == "graphics_preset":
 		reset_graphics_to_preset()
+	elif key == "vsync" or key == "fps_cap":
+		apply_frame_pacing()
+
+
+## Applies the pacing settings that the engine can hold at all times. Dynamic
+## resolution is a gameplay-side controller because it reads the live viewport.
+func apply_frame_pacing() -> void:
+	DisplayServer.window_set_vsync_mode(get_vsync_mode())
+	Engine.max_fps = maxi(int(settings.get("fps_cap", DEFAULT_SETTINGS["fps_cap"])), 0)
+
+
+func get_vsync_mode() -> int:
+	return clampi(int(settings.get("vsync", DEFAULT_SETTINGS["vsync"])), 0, VSYNC_NAMES.size() - 1)
+
+
+## Pure dynamic-resolution policy: frame time above the target band steps the
+## 3D render scale down, and clearly-under-budget time steps it back up toward
+## the configured maximum. The budget is the slower of the FPS target and any
+## hard cap (FPS cap or vsync refresh), so a capped frame is not read as GPU
+## load. Kept static so the stepping stays verifiable without a rendering run.
+static func dynamic_resolution_scale(current: float, frame_time: float, target_period: float, max_scale: float, cap_period: float = 0.0) -> float:
+	var ceiling := clampf(max_scale, DYNAMIC_RESOLUTION_MIN_SCALE, 1.0)
+	var budget := maxf(target_period, cap_period)
+	var scale := clampf(current, DYNAMIC_RESOLUTION_MIN_SCALE, ceiling)
+	if frame_time > budget * DYNAMIC_RESOLUTION_DOWN_MARGIN:
+		scale = maxf(scale - DYNAMIC_RESOLUTION_STEP, DYNAMIC_RESOLUTION_MIN_SCALE)
+	elif frame_time < budget * DYNAMIC_RESOLUTION_UP_MARGIN:
+		scale = minf(scale + DYNAMIC_RESOLUTION_STEP, ceiling)
+	return clampf(scale, DYNAMIC_RESOLUTION_MIN_SCALE, ceiling)
 
 
 func reset_graphics_to_preset() -> void:
@@ -213,6 +260,7 @@ func load_settings() -> void:
 			if graphics.has(key):
 				graphics[key] = saved[key]
 	apply_window_mode()
+	apply_frame_pacing()
 
 
 func save_settings() -> void:
