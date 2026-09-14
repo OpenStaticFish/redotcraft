@@ -24,6 +24,13 @@ const KELP_FOREST: int = 15
 const SEAGRASS_MEADOW: int = 16
 const CORAL_REEF: int = 17
 const FROZEN_OCEAN: int = 18
+## Underground regions are appended to preserve every surface/ocean ID. They
+## are classified in three dimensions and never participate in surface climate
+## selection; VoxelPopulator uses them only on exposed cave surfaces.
+const LUSH_CAVES: int = 19
+const DEEP_DARK: int = 20
+const CAVE_BIOME_NONE: int = -1
+const CAVE_REGION_SIZE: int = 96
 
 const DECORATION_NONE: int = 0
 const DECORATION_GRASSLAND: int = 1
@@ -77,6 +84,9 @@ const BLOCK_MUD: int = 18
 const BLOCK_RED_SAND: int = 19
 const BLOCK_TERRACOTTA: int = 25
 const BLOCK_CORAL_SUBSTRATE: int = 52
+const BLOCK_MOSS: int = 62
+const BLOCK_DEEPSTONE: int = 64
+const BLOCK_SCULK: int = 65
 
 var _names: PackedStringArray = PackedStringArray()
 var _temperature_centers: PackedFloat32Array = PackedFloat32Array()
@@ -110,6 +120,8 @@ func _init() -> void:
 	_add("seagrass_meadow", 0.58, 0.70, BLOCK_SAND, BLOCK_CLAY, BLOCK_SAND, 3, Color("#4f9c7a"), DECORATION_SEAGRASS, TYPE_NONE)
 	_add("coral_reef", 0.74, 0.70, BLOCK_SAND, BLOCK_CLAY, BLOCK_SAND, 3, Color("#3fae9a"), DECORATION_REEF, TYPE_NONE)
 	_add("frozen_sea", 0.08, 0.60, BLOCK_GRAVEL, BLOCK_STONE, BLOCK_GRAVEL, 2, Color("#9fc6d4"), DECORATION_FROZEN_SEA, TYPE_NONE)
+	_add("lush_caves", 0.52, 1.0, BLOCK_MOSS, BLOCK_STONE, BLOCK_STONE, 2, Color("#67a855"), DECORATION_NONE, TYPE_NONE)
+	_add("deep_dark", 0.18, 0.38, BLOCK_DEEPSTONE, BLOCK_SCULK, BLOCK_DEEPSTONE, 2, Color("#24525a"), DECORATION_NONE, TYPE_NONE)
 
 
 func biome_count() -> int:
@@ -141,7 +153,7 @@ func is_ocean_biome(biome: int) -> bool:
 ## inheriting a guess from its temperature center. Static so the weather poll
 ## can classify a biome id without constructing a catalog.
 static func is_cold_biome(biome: int) -> bool:
-	match clampi(biome, 0, FROZEN_OCEAN):
+	match biome:
 		SNOW, TAIGA, HIGHLANDS, FROZEN_OCEAN:
 			return true
 	return false
@@ -150,7 +162,64 @@ static func is_cold_biome(biome: int) -> bool:
 ## Wetland biomes get low ground mist particles. Swamps are the only land
 ## biome with standing water and dense cover today.
 static func is_wetland_biome(biome: int) -> bool:
-	return clampi(biome, 0, FROZEN_OCEAN) == SWAMP
+	return biome == SWAMP
+
+
+## Coherent 3D cave-region identity. Surface biomes remain a 2D climate layer;
+## callers must additionally verify that the queried voxel is underground air.
+## Broad global cells keep the result deterministic and worker-safe while the
+## depth gates reserve lush caves for the damp middle band and deep dark for
+## the lowest caverns.
+static func cave_biome_at(seed: int, world_x: int, y: int, world_z: int) -> int:
+	if y < 5 or y > 78:
+		return CAVE_BIOME_NONE
+	var cell_x := floori(float(world_x) / float(CAVE_REGION_SIZE))
+	var cell_z := floori(float(world_z) / float(CAVE_REGION_SIZE))
+	var hash_value := _cave_hash(seed, cell_x, cell_z)
+	var roll := hash_value % 100
+	if y <= 34:
+		if roll < 45:
+			return DEEP_DARK
+		if roll < 90:
+			return LUSH_CAVES
+	elif roll < 90:
+		return LUSH_CAVES
+	return CAVE_BIOME_NONE
+
+
+static func is_cave_biome(biome: int) -> bool:
+	return biome == LUSH_CAVES or biome == DEEP_DARK
+
+
+static func cave_surface_block(biome: int, selector: int = 0) -> int:
+	if biome == LUSH_CAVES:
+		return BLOCK_MOSS
+	if biome == DEEP_DARK:
+		return BLOCK_SCULK if selector % 5 == 0 else BLOCK_DEEPSTONE
+	return BLOCK_STONE
+
+
+static func cave_ambience_color(biome: int) -> Color:
+	if biome == LUSH_CAVES:
+		return Color("#315c3e")
+	if biome == DEEP_DARK:
+		return Color("#102b35")
+	return Color("#242936")
+
+
+static func cave_display_name(biome: int) -> String:
+	if biome == LUSH_CAVES:
+		return "LUSH CAVES"
+	if biome == DEEP_DARK:
+		return "DEEP DARK"
+	return "CAVES"
+
+
+static func _cave_hash(seed: int, x: int, z: int) -> int:
+	var value: int = seed ^ (x * 73856093) ^ (z * 19349663) ^ 0x35A4D19
+	value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0x7fffffff
+	value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0x7fffffff
+	return (value ^ (value >> 16)) & 0x7fffffff
 
 
 func temperature_center(biome: int) -> float:

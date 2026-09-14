@@ -22,7 +22,7 @@ const COMMIT_BUDGET_MS := 5
 const DEBUG_MAP_MAX_RESOLUTION := 128
 const DEBUG_MAP_HEAVY_RESOLUTION := 64
 const DEBUG_MAP_HEAVY_MODES: Array[String] = ["height", "raw_height", "slope"]
-const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4]
+const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4, 128, 64, 32, 16]
 const WATER_TICK_INTERVAL := 0.25
 const WATER_CELLS_PER_TICK := 1024
 const TNT_BLAST_RADIUS := 5
@@ -409,8 +409,7 @@ func _gather_neighbors(pos: Vector2i) -> ChunkMesher.NeighborSet:
 				chunk.lod_sub_id.duplicate(), chunk.lod_water_y.duplicate())
 		else:
 			out.samples[direction] = ChunkMesher.NeighborSample.new(chunk.data.duplicate(), chunk.max_y, chunk.heights.duplicate())
-		if index < 4:
-			out.mask |= (1 << index)
+		out.mask |= (1 << index)
 	return out
 
 
@@ -469,12 +468,13 @@ func _create_chunk_nodes(pos: Vector2i) -> Chunk:
 
 
 func _remesh_on_commit_neighbors(pos: Vector2i) -> void:
-	for index in VoxelDefs.DIRS_4.size():
-		var neighbor: Chunk = _chunks.get(pos + VoxelDefs.DIRS_4[index])
-		if neighbor == null:
+	for index in VoxelDefs.DIRS_8.size():
+		var direction: Vector2i = VoxelDefs.DIRS_8[index]
+		var neighbor: Chunk = _chunks.get(pos + direction)
+		if neighbor == null or neighbor.lod:
 			continue
 		if (neighbor.mask & REBUILD_OPPOSITE_BITS[index]) == 0:
-			_queue_rebuild(pos + VoxelDefs.DIRS_4[index])
+			_queue_rebuild(pos + direction, true)
 
 
 func _queue_rebuild(pos: Vector2i, preserve_if_pending := false) -> void:
@@ -571,6 +571,46 @@ func get_water_ambience(world_position: Vector3) -> Dictionary:
 		"tint": _generator.water_tint_for(biome),
 		"biome": biome,
 	}
+
+
+## Cave-biome ambience is only active in loaded full-detail underground air.
+## A bounded ceiling probe prevents a region label from grading the surface or
+## a broad entrance; it runs beside the already-throttled underwater query.
+func get_cave_ambience(world_position: Vector3) -> Dictionary:
+	var position := Vector3i(floori(world_position.x), floori(world_position.y), floori(world_position.z))
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null or chunk.lod or position.y < 4:
+		return {"active": false, "biome": BiomeCatalog.CAVE_BIOME_NONE, "tint": Color.WHITE, "depth": 0.0}
+	var block_id := get_block_world(position)
+	if block_id != BlockRegistry.BLOCK_AIR and not _blocks.has_flag(block_id, BlockRegistry.FLAG_CROSS):
+		return {"active": false, "biome": BiomeCatalog.CAVE_BIOME_NONE, "tint": Color.WHITE, "depth": 0.0}
+	# Mega-caves can be more than 32 blocks tall. Probe to the loaded column's
+	# actual top so their ambience does not disappear merely because the ceiling
+	# is high above the camera. First require real terrain depth: a tree canopy
+	# or player roof over a surface camera must never activate cave grading.
+	var chunk_position := _chunk_for_block(position)
+	var local_x := position.x - chunk_position.x * VoxelDefs.CHUNK_SIZE
+	var local_z := position.z - chunk_position.y * VoxelDefs.CHUNK_SIZE
+	var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
+	var column_top := mini(chunk.heights[column], VoxelDefs.WORLD_HEIGHT - 1)
+	if float(column_top) - world_position.y < 4.0:
+		return {"active": false, "biome": BiomeCatalog.CAVE_BIOME_NONE, "tint": Color.WHITE, "depth": 0.0}
+	var ceiling_y := -1
+	for y in range(position.y + 1, column_top + 1):
+		var overhead := get_block_world(Vector3i(position.x, y, position.z))
+		if overhead != BlockRegistry.BLOCK_AIR \
+				and not _blocks.has_flag(overhead, BlockRegistry.FLAG_CROSS) \
+				and not _blocks.has_flag(overhead, BlockRegistry.FLAG_LEAVES):
+			ceiling_y = y
+			break
+	if ceiling_y < 0:
+		return {"active": false, "biome": BiomeCatalog.CAVE_BIOME_NONE, "tint": Color.WHITE, "depth": 0.0}
+	var biome := _generator.cave_biome_id_at(position.x, position.y, position.z)
+	if not BiomeCatalog.is_cave_biome(biome):
+		return {"active": false, "biome": biome, "tint": Color.WHITE, "depth": 0.0}
+	var surface_y := float(chunk.heights[column])
+	var depth := clampf((surface_y - world_position.y) / 48.0, 0.0, 1.0)
+	return {"active": true, "biome": biome, "tint": BiomeCatalog.cave_ambience_color(biome), "depth": depth}
 
 
 func break_block(block_position: Vector3i) -> int:
@@ -820,17 +860,13 @@ func _water_place(position: Vector3i, block_id: int) -> void:
 
 func _touch_chunk(chunk_position: Vector2i, block_position: Vector3i) -> void:
 	_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
-	_queue_rebuild(chunk_position)
-	var local_x := block_position.x - chunk_position.x * VoxelDefs.CHUNK_SIZE
-	var local_z := block_position.z - chunk_position.y * VoxelDefs.CHUNK_SIZE
-	if local_x == 0:
-		_queue_rebuild(chunk_position + Vector2i(-1, 0))
-	elif local_x == VoxelDefs.CHUNK_SIZE - 1:
-		_queue_rebuild(chunk_position + Vector2i(1, 0))
-	if local_z == 0:
-		_queue_rebuild(chunk_position + Vector2i(0, -1))
-	elif local_z == VoxelDefs.CHUNK_SIZE - 1:
-		_queue_rebuild(chunk_position + Vector2i(0, 1))
+	_queue_rebuild(chunk_position, true)
+	# A full light volume consumes all eight neighboring chunks. Sky and block
+	# light can travel MAX_LIGHT_LEVEL - 1 cells, so even a non-edge edit can
+	# alter baked light in an adjacent chunk; invalidate the complete 3x3 ring.
+	for direction in VoxelDefs.DIRS_8:
+		if _chunks.has(chunk_position + direction):
+			_queue_rebuild(chunk_position + direction, true)
 
 
 func get_spawn_position() -> Vector3:

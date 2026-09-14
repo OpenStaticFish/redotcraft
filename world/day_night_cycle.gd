@@ -71,6 +71,13 @@ const UNDERWATER_VOLUMETRIC_SCALE := 1.4
 const UNDERWATER_LIGHT_FLOOR := 0.32
 const UNDERWATER_CAUSTIC_STRENGTH := 0.9
 const UNDERWATER_FALLBACK_COLOR := Color(0.06, 0.24, 0.36)
+# Cave-region grading is deliberately subtler in lush caves and nearly removes
+# outdoor ambient light in deep dark. Emissive sculk/crystals remain readable
+# through the baked block-light channel.
+const CAVE_FOG_ADD := 0.012
+const CAVE_VOLUMETRIC_SCALE := 1.22
+const LUSH_CAVE_LIGHT_FLOOR := 0.48
+const DEEP_DARK_LIGHT_FLOOR := 0.16
 # Lightning is a short additive flash on the sun/ambient and fog; `WeatherSystem`
 # schedules the strikes and `Main` calls trigger_lightning().
 const LIGHTNING_DECAY := 2.6
@@ -104,6 +111,10 @@ var base_contrast := 1.04
 var underwater_amount := 0.0
 var underwater_depth := 0.0
 var underwater_color := UNDERWATER_FALLBACK_COLOR
+var cave_amount := 0.0
+var cave_depth := 0.0
+var cave_biome := BiomeCatalog.CAVE_BIOME_NONE
+var cave_color := Color("#242936")
 var lightning_flash := 0.0
 var wind_strength := 0.55
 var _sky_material: ShaderMaterial
@@ -150,6 +161,13 @@ func set_underwater(amount: float, depth: float, tint: Color = UNDERWATER_FALLBA
 	underwater_amount = clampf(amount, 0.0, 1.0)
 	underwater_depth = clampf(depth, 0.0, 1.0)
 	underwater_color = tint
+
+
+func set_cave_ambience(amount: float, depth: float, biome: int, tint: Color) -> void:
+	cave_amount = clampf(amount, 0.0, 1.0)
+	cave_depth = clampf(depth, 0.0, 1.0)
+	cave_biome = biome
+	cave_color = tint
 
 
 func get_clock_text() -> String:
@@ -210,6 +228,16 @@ func _apply() -> void:
 		_sun.light_energy *= lerpf(1.0, UNDERWATER_LIGHT_FLOOR, submerged)
 		if _fill_light:
 			_fill_light.light_energy *= lerpf(1.0, UNDERWATER_LIGHT_FLOOR, submerged)
+	if cave_amount > 0.001 and underwater_amount < 0.5:
+		var cave_mix := cave_amount * lerpf(0.65, 1.0, cave_depth)
+		var light_floor := DEEP_DARK_LIGHT_FLOOR if cave_biome == BiomeCatalog.DEEP_DARK else LUSH_CAVE_LIGHT_FLOOR
+		environment.fog_light_color = environment.fog_light_color.lerp(cave_color, cave_mix)
+		environment.fog_density += CAVE_FOG_ADD * cave_mix
+		environment.volumetric_fog_density *= lerpf(1.0, CAVE_VOLUMETRIC_SCALE, cave_mix)
+		environment.ambient_light_energy *= lerpf(1.0, light_floor, cave_mix)
+		_sun.light_energy *= lerpf(1.0, light_floor, cave_mix)
+		if _fill_light:
+			_fill_light.light_energy *= lerpf(1.0, light_floor, cave_mix)
 	RenderingServer.global_shader_parameter_set("sky_light_strength", lerpf(NIGHT_SKY_LIGHT, 1.0, day_factor) * weather_factor)
 	RenderingServer.global_shader_parameter_set("wind_strength", wind_strength * lerpf(1.0, WIND_RAIN_SCALE, weather_dim))
 	RenderingServer.global_shader_parameter_set("underwater_caustics",

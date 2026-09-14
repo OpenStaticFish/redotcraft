@@ -148,6 +148,14 @@ func water_tint_for(biome_id: int) -> Color:
 	return _biomes.water_tint(biome_id)
 
 
+## Deterministic underground-region lookup shared by population and the
+## throttled camera ambience query. The caller decides whether the voxel is
+## actually inside a cave before applying this 3D region label.
+func cave_biome_id_at(world_x: int, y: int, world_z: int) -> int:
+	_ensure_configured()
+	return BiomeCatalog.cave_biome_at(_config.seed, world_x, y, world_z)
+
+
 func biome_color(biome_id: int) -> Color:
 	_ensure_configured()
 	match biome_id:

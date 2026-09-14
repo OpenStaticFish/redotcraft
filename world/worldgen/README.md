@@ -21,7 +21,8 @@ catalogs/samplers used by worker jobs. A chunk then runs these ordered stages:
    secondary biome into coherent surface and vegetation patches without
    per-block biome dithering.
 5. `VoxelPopulator.populate()` fills strata, carves caves, adds liquids and ore
-   veins, stamps global-cell decorations, then applies player edits last.
+   veins, cave biomes/dressing and geodes, stamps global-cell surface
+   decorations, then applies player edits last.
 6. `VoxelPopulator.populate_lod()` handles distance chunks: it writes compact
    per-column top/sub/water arrays instead of a full voxel volume and skips
    caves, ores, and ground flora. Real tree crowns are baked in using in-field
@@ -52,7 +53,8 @@ ranges live in `world_gen_config.gd`.
 - `regional_erosion`: broad rainfall/transport erosion strength.
 - `hydraulic_erosion`: deterministic 64x64 droplet tiles. This is deliberately
   off by default because cold generation is substantially slower.
-- `cave_density`: worm, cavern, and mega-cave occurrence.
+- `cave_density`: spaghetti thickness plus cross-link, chamber, cavern, and
+  mega-cave frequency. A thin canonical trunk remains at every nonzero value.
 - `tree_density`: multiplier for tree-class decorations only.
 - `decoration_density`: multiplier for all surface decoration.
 
@@ -61,6 +63,52 @@ in `biome_catalog.gd`, and weighted feature sets in `decoration_catalog.gd`.
 The underwater split constants (shelf/abyss depths, patch scales, biome
 temperature/depth gates) live at the top of `terrain_sampler.gd`.
 Keep block IDs below 256 and add placeable blocks through `BlockRegistry` first.
+
+### Caves and geodes
+
+Cave geometry is a hybrid based on the systems used by modern Minecraft and
+Luanti/Minetest. Two absolute-coordinate 3D ridge fields are intersected to
+produce organic, seam-free "spaghetti" tunnels; a low-frequency cheese field
+opens irregular chambers. Those fields are unioned with a global 48-block graph
+in five depth bands. Every graph node owns a curved east-or-south trunk, making
+each route mathematically unbounded instead of a short random walk; deterministic
+cross-links, one vertical connector per column, node chambers, cell caverns, and
+rare mega-caves create loops and changes of scale. Chunks enumerate graph owners
+through a 64-block halo and clip stamps locally, so results do not depend on load
+order. Surface entrances continue from their protected mouth to a canonical
+graph node rather than ending blindly in stone.
+
+Cave biomes are a separate 3D layer in `BiomeCatalog.cave_biome_at()`, not
+surface climate IDs. Broad global regions cover most underground territory:
+lush caves dominate the damp middle depths, while deep dark and lush regions
+share the lowest cavern band. `VoxelPopulator` only applies
+their materials to stone exposed beside cave air: lush regions grow moss and
+hanging cave growth, while deep-dark regions spread deepstone and faintly
+emissive sculk. A sparse four-block lattice finds floors and ceilings for
+dripstone, columns, and shallow pools without a full-volume decoration scan.
+Surface entrances use the same deterministic anchor test as tree exclusion and
+have an 18% candidate rate at default density (about 150 blocks mean spacing
+before biome rejection), making natural access far less dependent on blind
+digging. The HUD and environment ambience scan to the loaded column top, so tall
+mega-caves show their cave-biome identity as well.
+
+Geodes use 72-block global cells plus an 11-block halo (roughly one candidate
+per thirteen cells), so every touched chunk
+clips the same sphere independently. Their shell, calcite lining, hollow center,
+amethyst deposits, and crystal buds run after ores/liquids and before cave
+dressing; player edits remain the final authoritative stage. Generated cave
+textures live in `assets/placeholders/caves/` and are reproducible through
+`tools/gen_underwater_textures.gd` (which owns both generated texture sets).
+
+`ChunkMesher` lights a 3x3 footprint because sky and block light have only 15
+levels and cannot contribute from beyond that pad. Missing neighbor tiles are
+opaque light boundaries until loaded, while face culling still uses the normal
+neighbor snapshot. All eight sampled chunks invalidate one another on commits
+and edits. `tools/worldgen_cave_verify.gd` checks a sealed cavern, a remote cave
+opening and finite falloff, colored crystal emission, exact volume bounds, cave
+materials/vegetation, pools, dripstone, and hollow geode layers. It also follows
+a canonical trunk for 128 macro cells and flood-fills a separately carved 5x5
+chunk fixture, requiring one component to span the region in X/Z and depth.
 
 Large and small offshore islands are separate sparse peak fields layered onto
 effective continentalness at 720- and 135-block scales. They are coast-gated
@@ -208,6 +256,9 @@ to review it; an already-running world retains its configured sampler and chunks
   regression guardrails, not a substitute for visual review.
 - `redot --headless --path . --script res://tools/worldgen_benchmark.gd`
   records full and LOD voxel-generation time for pinned chunks.
+- `redot --headless --path . --script res://tools/worldgen_cave_verify.gd`
+  checks cave-biome classification and dressing, hollow layered geodes, crystal
+  emission, sealed cave darkness, opening falloff, and mesher light bounds.
 - `redot --headless --path . --script res://tools/worldgen_mesh_benchmark.gd`
   records full and LOD mesh CPU time for pinned chunks.
 - `redot --headless --path . --script res://tools/worldgen_tree_verify.gd`

@@ -70,6 +70,7 @@ jobs:
             tools/player_target_verify.tscn \
             tools/worldgen_cactus_verify.gd \
             tools/worldgen_tree_verify.gd \
+            tools/worldgen_cave_verify.gd \
             tools/frame_pacing_verify.gd
 
       - name: Upload check logs

@@ -6,12 +6,14 @@ extends SceneTree
 
 const SIZE := 64
 const OUTPUT_DIR := "res://assets/placeholders/underwater"
+const CAVE_OUTPUT_DIR := "res://assets/placeholders/caves"
 
 var _rng := RandomNumberGenerator.new()
 
 
 func _initialize() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUTPUT_DIR))
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(CAVE_OUTPUT_DIR))
 	_rng.seed = 0xC0A1
 	_save("coral_substrate.png", _coral_substrate())
 	_save("sponge.png", _sponge())
@@ -20,6 +22,15 @@ func _initialize() -> void:
 	_save("coral_fan.png", _coral_fan())
 	_save("coral_branch.png", _coral_branch())
 	_save("anemone.png", _anemone())
+	_save_cave("dripstone.png", _stone_texture(Color("#745b48"), Color("#9a795c"), Color("#493a31")))
+	_save_cave("moss.png", _stone_texture(Color("#416637"), Color("#668d4c"), Color("#293f29")))
+	_save_cave("deepstone.png", _stone_texture(Color("#202732"), Color("#35404c"), Color("#111720")))
+	_save_cave("sculk.png", _speckled_texture(Color("#10272b"), Color("#1b7a83"), Color("#48b2a2")))
+	_save_cave("calcite.png", _stone_texture(Color("#d5d0c2"), Color("#eee9da"), Color("#aaa99f")))
+	_save_cave("geode_shell.png", _stone_texture(Color("#303640"), Color("#4e5965"), Color("#20242d")))
+	_save_cave("amethyst.png", _speckled_texture(Color("#684b86"), Color("#a779cf"), Color("#d5b4f0")))
+	_save_cave("cave_moss.png", _cave_moss())
+	_save_cave("crystal_bud.png", _crystal_bud())
 	print("UNDERWATER TEXTURES: done")
 	quit()
 
@@ -37,6 +48,61 @@ func _save(name: String, image: Image) -> void:
 		push_error("failed to save %s (%d)" % [path, error])
 	else:
 		print("saved ", path)
+
+
+func _save_cave(name: String, image: Image) -> void:
+	var path := "%s/%s" % [CAVE_OUTPUT_DIR, name]
+	var error := image.save_png(path)
+	if error != OK:
+		push_error("failed to save %s (%d)" % [path, error])
+	else:
+		print("saved ", path)
+
+
+func _stone_texture(base: Color, light: Color, dark: Color) -> Image:
+	var image := _new_image()
+	image.fill(base)
+	for index in 110:
+		var color := light if index % 3 == 0 else dark
+		_disc(image, _rng.randi_range(0, SIZE - 1), _rng.randi_range(0, SIZE - 1), _rng.randf_range(0.8, 3.4), color)
+	return image
+
+
+func _speckled_texture(base: Color, middle: Color, bright: Color) -> Image:
+	var image := _stone_texture(base, middle, base.darkened(0.25))
+	for index in 42:
+		var x := _rng.randi_range(1, SIZE - 2)
+		var y := _rng.randi_range(1, SIZE - 2)
+		_put(image, x, y, bright)
+		if index % 3 == 0:
+			_put(image, x + 1, y, middle)
+	return image
+
+
+func _cave_moss() -> Image:
+	var image := _new_image()
+	var colors := [Color("#86b85c"), Color("#5f9142"), Color("#b0d978")]
+	for strand in 11:
+		var x := 4 + strand * 5 + _rng.randi_range(-1, 1)
+		var top := _rng.randi_range(5, 28)
+		_blade(image, float(x), top, SIZE - 1, 1, _rng.randf_range(1.0, 2.5), colors)
+	return image
+
+
+func _crystal_bud() -> Image:
+	var image := _new_image()
+	var dark := Color("#66458f")
+	var body := Color("#a06ed1")
+	var light := Color("#dfc1ff")
+	for crystal in 5:
+		var center := 11 + crystal * 10 + _rng.randi_range(-2, 2)
+		var top := _rng.randi_range(7, 28)
+		for y in range(top, SIZE):
+			var t := float(y - top) / float(SIZE - top)
+			var half_width := maxi(1, roundi(3.0 * t))
+			for x in range(center - half_width, center + half_width + 1):
+				_put(image, x, y, light if x == center - half_width else (dark if x == center + half_width else body))
+	return image
 
 
 func _put(image: Image, x: int, y: int, color: Color) -> void:

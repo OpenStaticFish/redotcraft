@@ -24,13 +24,20 @@ const TREE_GROVE_CELL_SIZE: int = 48
 const TREE_GROVE_SEARCH_RADIUS: int = 1
 const GROUND_COVER_CELL_SIZE: int = 8
 const GROUND_COVER_RADIUS: int = 4
-const CAVE_CELL_SIZE: int = 24
+const CAVE_NETWORK_CELL_SIZE: int = 48
+const CAVE_NETWORK_HALO: int = 64
+const CAVE_NETWORK_BANDS: int = 5
+const CAVE_NETWORK_BASE_Y: int = 14
+const CAVE_NETWORK_BAND_STEP: int = 18
 const ORE_CELL_SIZE: int = 20
 
 var config: WorldGenConfig
 var biomes: BiomeCatalog
 var decorations: DecorationCatalog
 var terrain_sampler: TerrainSampler
+var _cave_spaghetti_a: FastNoiseLite
+var _cave_spaghetti_b: FastNoiseLite
+var _cave_cheese: FastNoiseLite
 
 
 func _init(config_value: WorldGenConfig, biomes_value: BiomeCatalog, sampler_value: TerrainSampler = null) -> void:
@@ -38,6 +45,9 @@ func _init(config_value: WorldGenConfig, biomes_value: BiomeCatalog, sampler_val
 	biomes = biomes_value if biomes_value != null else BiomeCatalogScript.new()
 	terrain_sampler = sampler_value
 	decorations = DecorationCatalogScript.new()
+	_cave_spaghetti_a = _make_cave_noise(1701, 0.018, 2)
+	_cave_spaghetti_b = _make_cave_noise(1877, 0.015, 2)
+	_cave_cheese = _make_cave_noise(1999, 0.009, 3)
 
 
 ## Returns {"data": PackedByteArray, "max_y": int}. Edits deliberately run
@@ -51,12 +61,14 @@ func populate(chunk_pos: Vector2i, field: ChunkTerrainData, edits: Dictionary, f
 	if full_detail:
 		_decorate_floor_patches(data, field, origin_x, origin_z)
 	if full_detail and config.world_type != WorldGenConfigScript.WORLD_TYPE_FLAT and config.cave_density > 0.0:
-		_carve_worm_caves(data, field, origin_x, origin_z)
+		_carve_noise_caves(data, field, origin_x, origin_z)
+		_carve_cave_network(data, field, origin_x, origin_z)
 		_carve_cave_entrances(data, field, origin_x, origin_z)
 		_carve_caverns(data, field, origin_x, origin_z)
 		_fill_underground_liquids(data, field, origin_x, origin_z)
 		_place_ore_veins(data, origin_x, origin_z)
-		_decorate_caves(data, origin_x, origin_z)
+		_place_geodes(data, field, origin_x, origin_z)
+		_decorate_caves(data, field, origin_x, origin_z)
 	if full_detail and config.decoration_density > 0.0:
 		max_y = _decorate(data, field, origin_x, origin_z, max_y)
 		max_y = _decorate_underwater(data, field, origin_x, origin_z, max_y)
@@ -257,32 +269,103 @@ func _badlands_stratum(world_x: int, y: int, world_z: int) -> int:
 	return BlockRegistryScript.BLOCK_RED_SAND if band < 3 else BlockRegistryScript.BLOCK_TERRACOTTA
 
 
-## A handful of connected, cell-anchored segments are substantially cheaper
-## than sampling a hash/noise function for every underground voxel.
-func _carve_worm_caves(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> void:
-	var first_x: int = WorldGenHashScript.floor_div(origin_x - 24, CAVE_CELL_SIZE)
-	var last_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE + 24, CAVE_CELL_SIZE)
-	var first_z: int = WorldGenHashScript.floor_div(origin_z - 24, CAVE_CELL_SIZE)
-	var last_z: int = WorldGenHashScript.floor_div(origin_z + VoxelDefsScript.CHUNK_SIZE + 24, CAVE_CELL_SIZE)
+## Minecraft-style noise caves: the intersection of two continuous 3D ridges
+## forms spaghetti tunnels that do not have feature endpoints or chunk seams.
+## A lower-frequency "cheese" field opens occasional broad chambers. This is
+## deliberately combined with the graph below: the field supplies organic
+## local complexity while the graph guarantees routes that continue forever.
+func _carve_noise_caves(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> void:
+	var tunnel_width := clampf(0.055 + 0.035 * config.cave_density, 0.04, 0.16)
+	var chamber_threshold := clampf(0.62 - 0.07 * config.cave_density, 0.44, 0.62)
+	for local_z in VoxelDefsScript.CHUNK_SIZE:
+		var world_z := origin_z + local_z
+		for local_x in VoxelDefsScript.CHUNK_SIZE:
+			var field_index := ChunkTerrainDataScript.cell_index(local_x, local_z)
+			var surface_limit := _surface_height(field, field_index) - SURFACE_CLEARANCE - 1
+			if field.river[field_index] >= 0.62:
+				surface_limit = mini(surface_limit, VoxelDefsScript.SEA_LEVEL - 3)
+			var last_y := mini(surface_limit, VoxelDefsScript.SEA_LEVEL + 52)
+			if last_y < 4:
+				continue
+			var world_x := origin_x + local_x
+			for y in range(4, last_y + 1):
+				var voxel_index := _index(local_x, y, local_z)
+				if not _is_carvable_stone(data[voxel_index]):
+					continue
+				var high_taper := clampf(float(VoxelDefsScript.SEA_LEVEL + 52 - y) / 24.0, 0.35, 1.0)
+				var ridge_a := absf(_cave_spaghetti_a.get_noise_3d(world_x, y, world_z))
+				var ridge_b := absf(_cave_spaghetti_b.get_noise_3d(world_x, y, world_z))
+				var spaghetti := maxf(ridge_a, ridge_b) < tunnel_width * high_taper
+				var depth_bias := clampf(float(y - 12) / 72.0, 0.0, 1.0) * 0.10
+				var cheese := _cave_cheese.get_noise_3d(world_x, y, world_z) > chamber_threshold + depth_bias
+				if spaghetti or cheese:
+					data[voxel_index] = BlockRegistryScript.BLOCK_AIR
+
+
+## A deterministic global graph supplies the long-distance structure missing
+## from pure random walks. Every node owns one east/south edge, so following a
+## trunk can never reach a dead end; optional cross-links, vertical connectors,
+## curved midpoints, and node chambers keep the lattice from reading as a grid.
+func _carve_cave_network(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> void:
+	var first_x := WorldGenHashScript.floor_div(origin_x - CAVE_NETWORK_HALO, CAVE_NETWORK_CELL_SIZE)
+	var last_x := WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + CAVE_NETWORK_HALO, CAVE_NETWORK_CELL_SIZE)
+	var first_z := WorldGenHashScript.floor_div(origin_z - CAVE_NETWORK_HALO, CAVE_NETWORK_CELL_SIZE)
+	var last_z := WorldGenHashScript.floor_div(origin_z + VoxelDefsScript.CHUNK_SIZE - 1 + CAVE_NETWORK_HALO, CAVE_NETWORK_CELL_SIZE)
 	for cell_z in range(first_z, last_z + 1):
 		for cell_x in range(first_x, last_x + 1):
-			for cell_y in range(0, 5):
-				var anchor_hash: int = WorldGenHashScript.hash_3d(config.seed + 701, cell_x, cell_y, cell_z)
-				var chance: float = float(anchor_hash % 1000) / 1000.0
-				if chance >= minf(0.66, 0.20 * config.cave_density):
-					continue
-				var point := Vector3i(
-					cell_x * CAVE_CELL_SIZE + 2 + anchor_hash % (CAVE_CELL_SIZE - 4),
-					cell_y * CAVE_CELL_SIZE + 5 + (anchor_hash / 11) % 14,
-					cell_z * CAVE_CELL_SIZE + 2 + (anchor_hash / 97) % (CAVE_CELL_SIZE - 4)
-				)
-				var segment_count: int = 2 + anchor_hash % 3
-				for segment in range(segment_count):
-					var step_hash: int = WorldGenHashScript.hash_3d(config.seed + 719 + segment, cell_x, cell_y, cell_z)
-					var next := point + Vector3i((step_hash % 13) - 6, ((step_hash / 17) % 9) - 4, ((step_hash / 241) % 13) - 6)
-					next.y = clampi(next.y, 4, VoxelDefsScript.SEA_LEVEL + 44)
-					_stamp_tunnel(data, field, point, next, 2 + step_hash % 2)
-					point = next
+			for band in CAVE_NETWORK_BANDS:
+				var node := _cave_network_node(cell_x, band, cell_z)
+				var route_hash := WorldGenHashScript.hash_3d(config.seed + 719, cell_x, band, cell_z)
+				var primary_offset := Vector2i(1, 0) if (route_hash & 1) == 0 else Vector2i(0, 1)
+				_stamp_cave_network_edge(data, field, node,
+					_cave_network_node(cell_x + primary_offset.x, band, cell_z + primary_offset.y), route_hash)
+				if float(route_hash % 1000) / 1000.0 < minf(0.72, 0.24 * config.cave_density):
+					var branch_offset := Vector2i(0, 1) if primary_offset.x != 0 else Vector2i(1, 0)
+					_stamp_cave_network_edge(data, field, node,
+						_cave_network_node(cell_x + branch_offset.x, band, cell_z + branch_offset.y), route_hash + 43)
+				var connector_band := WorldGenHashScript.hash_2d(config.seed + 757, cell_x, cell_z) % (CAVE_NETWORK_BANDS - 1)
+				if band == connector_band:
+					_stamp_cave_network_edge(data, field, node, _cave_network_node(cell_x, band + 1, cell_z), route_hash + 89)
+				if float((route_hash / 97) % 1000) / 1000.0 < minf(0.30, 0.10 * config.cave_density):
+					_carve_ellipsoid(data, field, node, 6 + route_hash % 5, 3 + (route_hash / 7) % 4, 6 + (route_hash / 17) % 5)
+
+
+func _cave_network_node(cell_x: int, band: int, cell_z: int) -> Vector3i:
+	var node_hash := WorldGenHashScript.hash_3d(config.seed + 701, cell_x, band, cell_z)
+	return Vector3i(
+		cell_x * CAVE_NETWORK_CELL_SIZE + 8 + node_hash % (CAVE_NETWORK_CELL_SIZE - 16),
+		clampi(CAVE_NETWORK_BASE_Y + band * CAVE_NETWORK_BAND_STEP + ((node_hash / 47) % 11) - 5, 5, VoxelDefsScript.SEA_LEVEL + 58),
+		cell_z * CAVE_NETWORK_CELL_SIZE + 8 + (node_hash / 131) % (CAVE_NETWORK_CELL_SIZE - 16))
+
+
+func _stamp_cave_network_edge(data: PackedByteArray, field: ChunkTerrainData, start: Vector3i, finish: Vector3i, route_hash: int) -> void:
+	var midpoint := Vector3i((start.x + finish.x) / 2, (start.y + finish.y) / 2, (start.z + finish.z) / 2)
+	var bend := ((route_hash / 13) % 19) - 9
+	if absi(finish.x - start.x) >= absi(finish.z - start.z):
+		midpoint.z += bend
+	else:
+		midpoint.x += bend
+	midpoint.y = clampi(midpoint.y + ((route_hash / 251) % 11) - 5, 5, VoxelDefsScript.SEA_LEVEL + 58)
+	var base_radius := 1 if config.cave_density < 0.6 else (3 if config.cave_density > 1.75 else 2)
+	var radius := base_radius + route_hash % 2
+	_stamp_tunnel(data, field, start, midpoint, radius)
+	_stamp_tunnel(data, field, midpoint, finish, base_radius + (route_hash / 17) % 2)
+
+
+func _make_cave_noise(seed_salt: int, frequency: float, octaves: int) -> FastNoiseLite:
+	var noise := FastNoiseLite.new()
+	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	noise.frequency = frequency
+	noise.fractal_type = FastNoiseLite.FRACTAL_FBM
+	noise.fractal_octaves = octaves
+	noise.fractal_lacunarity = 2.0
+	noise.fractal_gain = 0.5
+	noise.seed = WorldGenHashScript.hash_1d(config.seed, seed_salt)
+	return noise
+
+
+func _is_carvable_stone(block_id: int) -> bool:
+	return block_id == BlockRegistryScript.BLOCK_STONE or block_id == BlockRegistryScript.BLOCK_COBBLESTONE
 
 
 func _stamp_tunnel(data: PackedByteArray, field: ChunkTerrainData, start: Vector3i, finish: Vector3i, radius: int) -> void:
@@ -296,14 +379,14 @@ func _stamp_tunnel(data: PackedByteArray, field: ChunkTerrainData, start: Vector
 		_carve_ellipsoid(data, field, point, radius, radius, radius)
 
 
-## Sparse global-cell entrances descend diagonally into the worm band. Every
-## neighboring chunk evaluates the same origin and clips the same tunnel, so an
-## opening crossing a border never depends on generation order.
+## Sparse global-cell entrances descend into a canonical graph node. The mouth
+## alone may cut surface blocks; its continuation uses normal cave clearance.
+## Every touched chunk reproduces the route, independent of generation order.
 func _carve_cave_entrances(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> void:
 	if terrain_sampler == null:
 		return
 	const entrance_cell_size := 64
-	const entrance_halo := 24
+	const entrance_halo := CAVE_NETWORK_HALO
 	var first_x := WorldGenHashScript.floor_div(origin_x - entrance_halo, entrance_cell_size)
 	var last_x := WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + entrance_halo, entrance_cell_size)
 	var first_z := WorldGenHashScript.floor_div(origin_z - entrance_halo, entrance_cell_size)
@@ -311,7 +394,7 @@ func _carve_cave_entrances(data: PackedByteArray, field: ChunkTerrainData, origi
 	for cell_z in range(first_z, last_z + 1):
 		for cell_x in range(first_x, last_x + 1):
 			var hash_value := WorldGenHashScript.hash_2d(config.seed + 773, cell_x, cell_z)
-			if float(hash_value % 1000) / 1000.0 >= minf(0.12, 0.04 * config.cave_density):
+			if float(hash_value % 1000) / 1000.0 >= minf(0.45, 0.18 * config.cave_density):
 				continue
 			var world_x := cell_x * entrance_cell_size + 8 + hash_value % 48
 			var world_z := cell_z * entrance_cell_size + 8 + (hash_value / 53) % 48
@@ -321,8 +404,13 @@ func _carve_cave_entrances(data: PackedByteArray, field: ChunkTerrainData, origi
 			var direction_x := -1 if ((hash_value / 101) & 1) == 0 else 1
 			var direction_z := -1 if ((hash_value / 211) & 1) == 0 else 1
 			var start := Vector3i(world_x, ground.x + 1, world_z)
-			var finish := Vector3i(world_x + direction_x * 8, ground.x - 12, world_z + direction_z * 8)
-			_stamp_entrance_tunnel(data, field, start, finish)
+			var mouth_finish := Vector3i(world_x + direction_x * 8, ground.x - 12, world_z + direction_z * 8)
+			_stamp_entrance_tunnel(data, field, start, mouth_finish)
+			var network_cell_x := WorldGenHashScript.floor_div(mouth_finish.x, CAVE_NETWORK_CELL_SIZE)
+			var network_cell_z := WorldGenHashScript.floor_div(mouth_finish.z, CAVE_NETWORK_CELL_SIZE)
+			var target_band := clampi(WorldGenHashScript.floor_div(ground.x - 26 - CAVE_NETWORK_BASE_Y, CAVE_NETWORK_BAND_STEP), 0, CAVE_NETWORK_BANDS - 1)
+			var network_node := _cave_network_node(network_cell_x, target_band, network_cell_z)
+			_stamp_tunnel(data, field, mouth_finish, network_node, 2 + hash_value % 2)
 
 
 func _stamp_entrance_tunnel(data: PackedByteArray, field: ChunkTerrainData, start: Vector3i, finish: Vector3i) -> void:
@@ -461,28 +549,191 @@ func _place_ore_veins(data: PackedByteArray, origin_x: int, origin_z: int) -> vo
 				_stamp_ore_segment(data, origin_x, origin_z, start, finish, ore)
 
 
-## Sparse deterministic cave details: damp floor patches plus stone teeth on
-## cave ceilings/floors. Anchors use global cells, so formations cross chunk
-## boundaries without depending on generation order.
-func _decorate_caves(data: PackedByteArray, origin_x: int, origin_z: int) -> void:
+## Sparse deterministic cave details. A global four-block lattice samples open
+## chambers instead of scanning every underground voxel. The nearest floor and
+## ceiling drive paired dripstone, columns, biome materials/vegetation, and
+## shallow pools; all writes remain inside the current chunk-owned array.
+func _decorate_caves(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> void:
 	for local_z in range(2, VoxelDefsScript.CHUNK_SIZE, 4):
 		for local_x in range(2, VoxelDefsScript.CHUNK_SIZE, 4):
 			var world_x := origin_x + local_x
 			var world_z := origin_z + local_z
-			for y in range(6, VoxelDefsScript.SEA_LEVEL + 32, 5):
+			var field_index := ChunkTerrainDataScript.cell_index(local_x, local_z)
+			# Cave dressing must remain below the protected surface band. Without
+			# this guard, an outdoor air sample can find the terrain (or ocean
+			# water) beneath it and mistake that one-sided boundary for a cavern,
+			# producing lattice rows of moss and dripstone across the landscape.
+			var underground_limit := _surface_height(field, field_index) - SURFACE_CLEARANCE - 1
+			for y in range(6, VoxelDefsScript.SEA_LEVEL + 32, 4):
+				if y > underground_limit:
+					continue
 				var air_index := _index(local_x, y, local_z)
 				if data[air_index] != BlockRegistryScript.BLOCK_AIR:
 					continue
 				var hash_value := WorldGenHashScript.hash_3d(config.seed + 1061, world_x, y, world_z)
-				if data[_index(local_x, y - 1, local_z)] == BlockRegistryScript.BLOCK_STONE and hash_value % 9 == 0:
-					data[_index(local_x, y - 1, local_z)] = BlockRegistryScript.BLOCK_MYCELIUM if hash_value % 3 == 0 else BlockRegistryScript.BLOCK_MUD
-				if data[_index(local_x, y + 1, local_z)] == BlockRegistryScript.BLOCK_STONE and hash_value % 13 == 0:
-					var length := 1 + hash_value % 3
-					for offset in range(length):
-						var target_y := y - offset
-						if target_y <= 2 or data[_index(local_x, target_y, local_z)] != BlockRegistryScript.BLOCK_AIR:
-							break
-						data[_index(local_x, target_y, local_z)] = BlockRegistryScript.BLOCK_TERRACOTTA
+				var floor_y := _cave_solid_y(data, local_x, y, local_z, -1, 8)
+				var ceiling_y := _cave_solid_y(data, local_x, y, local_z, 1, 10)
+				if floor_y < 1 and ceiling_y < 1:
+					continue
+				var cave_biome := BiomeCatalogScript.cave_biome_at(config.seed, world_x, y, world_z)
+				if floor_y >= 1 and _is_cave_stone(data[_index(local_x, floor_y, local_z)]):
+					if cave_biome != BiomeCatalogScript.CAVE_BIOME_NONE and hash_value % 3 != 0:
+						_paint_cave_floor_patch(data, local_x, floor_y, local_z, cave_biome, hash_value)
+					elif hash_value % 11 == 0:
+						data[_index(local_x, floor_y, local_z)] = BlockRegistryScript.BLOCK_MYCELIUM if hash_value % 2 == 0 else BlockRegistryScript.BLOCK_MUD
+				if cave_biome == BiomeCatalogScript.LUSH_CAVES:
+					_decorate_lush_cave(data, local_x, local_z, floor_y, ceiling_y, hash_value)
+				elif cave_biome == BiomeCatalogScript.DEEP_DARK:
+					_decorate_deep_dark(data, local_x, local_z, floor_y, ceiling_y, hash_value)
+				if (floor_y >= 1 or ceiling_y >= 1) and hash_value % 13 == 0:
+					_stamp_dripstone(data, local_x, local_z, floor_y, ceiling_y, hash_value)
+				if floor_y >= 4 and local_x >= 2 and local_x <= VoxelDefsScript.CHUNK_SIZE - 3 \
+						and local_z >= 2 and local_z <= VoxelDefsScript.CHUNK_SIZE - 3 and hash_value % 41 == 0:
+					_stamp_small_pool(data, local_x, floor_y + 1, local_z, hash_value)
+
+
+func _cave_solid_y(data: PackedByteArray, local_x: int, start_y: int, local_z: int, direction: int, reach: int) -> int:
+	for distance in range(1, reach + 1):
+		var y := start_y + distance * direction
+		if y <= 1 or y >= VoxelDefsScript.WORLD_HEIGHT - 1:
+			break
+		if data[_index(local_x, y, local_z)] != BlockRegistryScript.BLOCK_AIR:
+			return y
+	return -1
+
+
+func _is_cave_stone(block_id: int) -> bool:
+	return block_id in [BlockRegistryScript.BLOCK_STONE, BlockRegistryScript.BLOCK_DEEPSTONE,
+		BlockRegistryScript.BLOCK_MOSS, BlockRegistryScript.BLOCK_SCULK]
+
+
+## Five-wide patches turn the four-block cave lattice into readable material
+## regions rather than isolated checkerboard pixels. Each neighboring column
+## independently finds a floor within one block of the anchor, preserving
+## slopes and never filling cave air.
+func _paint_cave_floor_patch(data: PackedByteArray, center_x: int, floor_y: int, center_z: int, cave_biome: int, hash_value: int) -> void:
+	for z in range(maxi(center_z - 2, 0), mini(center_z + 2, VoxelDefsScript.CHUNK_SIZE - 1) + 1):
+		for x in range(maxi(center_x - 2, 0), mini(center_x + 2, VoxelDefsScript.CHUNK_SIZE - 1) + 1):
+			for y_offset in [0, -1, 1]:
+				var target_y: int = floor_y + int(y_offset)
+				if target_y <= 1 or target_y + 1 >= VoxelDefsScript.WORLD_HEIGHT:
+					continue
+				var index := _index(x, target_y, z)
+				if not _is_cave_stone(data[index]) or data[_index(x, target_y + 1, z)] != BlockRegistryScript.BLOCK_AIR:
+					continue
+				var selector := WorldGenHashScript.hash_3d(config.seed + 1073 + hash_value, x, target_y, z)
+				data[index] = BiomeCatalogScript.cave_surface_block(cave_biome, selector)
+				break
+
+
+func _decorate_lush_cave(data: PackedByteArray, local_x: int, local_z: int, floor_y: int, ceiling_y: int, hash_value: int) -> void:
+	if floor_y >= 1:
+		var plant_y := floor_y + 1
+		if plant_y < VoxelDefsScript.WORLD_HEIGHT and data[_index(local_x, plant_y, local_z)] == BlockRegistryScript.BLOCK_AIR and hash_value % 3 == 0:
+			data[_index(local_x, plant_y, local_z)] = BlockRegistryScript.BLOCK_CAVE_MOSS
+	if ceiling_y >= 1 and hash_value % 5 == 0:
+		var hanging_y := ceiling_y - 1
+		if data[_index(local_x, hanging_y, local_z)] == BlockRegistryScript.BLOCK_AIR:
+			data[_index(local_x, hanging_y, local_z)] = BlockRegistryScript.BLOCK_CAVE_MOSS
+
+
+func _decorate_deep_dark(data: PackedByteArray, local_x: int, local_z: int, floor_y: int, ceiling_y: int, hash_value: int) -> void:
+	for surface_y in [floor_y, ceiling_y]:
+		if surface_y >= 1 and _is_cave_stone(data[_index(local_x, surface_y, local_z)]) and hash_value % 4 != 0:
+			data[_index(local_x, surface_y, local_z)] = BlockRegistryScript.BLOCK_SCULK if hash_value % 2 == 0 else BlockRegistryScript.BLOCK_DEEPSTONE
+
+
+func _stamp_dripstone(data: PackedByteArray, local_x: int, local_z: int, floor_y: int, ceiling_y: int, hash_value: int) -> void:
+	var gap := ceiling_y - floor_y - 1 if floor_y >= 1 and ceiling_y >= 1 else 10
+	var ceiling_length := mini(1 + hash_value % 4, gap) if ceiling_y >= 1 else 0
+	var floor_length := mini(1 + (hash_value / 7) % 3, maxi(gap - ceiling_length, 0)) if floor_y >= 1 else 0
+	if floor_y >= 1 and ceiling_y >= 1 and gap <= 7 and hash_value % 3 == 0:
+		ceiling_length = gap
+		floor_length = 0
+	for offset in ceiling_length:
+		var y := ceiling_y - 1 - offset
+		if data[_index(local_x, y, local_z)] != BlockRegistryScript.BLOCK_AIR:
+			break
+		data[_index(local_x, y, local_z)] = BlockRegistryScript.BLOCK_DRIPSTONE
+	for offset in floor_length:
+		var y := floor_y + 1 + offset
+		if data[_index(local_x, y, local_z)] != BlockRegistryScript.BLOCK_AIR:
+			break
+		data[_index(local_x, y, local_z)] = BlockRegistryScript.BLOCK_DRIPSTONE
+
+
+func _stamp_small_pool(data: PackedByteArray, center_x: int, water_y: int, center_z: int, hash_value: int) -> void:
+	var radius := 1 + hash_value % 2
+	for z in range(center_z - radius, center_z + radius + 1):
+		for x in range(center_x - radius, center_x + radius + 1):
+			if (x - center_x) * (x - center_x) + (z - center_z) * (z - center_z) > radius * radius:
+				continue
+			if data[_index(x, water_y, z)] == BlockRegistryScript.BLOCK_AIR \
+					and data[_index(x, water_y - 1, z)] != BlockRegistryScript.BLOCK_AIR:
+				data[_index(x, water_y, z)] = BlockRegistryScript.BLOCK_WATER
+
+
+## Rare global-cell geodes are evaluated with a radius halo, so the same sphere
+## is clipped consistently by every touched chunk. A dark shell encloses a pale
+## calcite lining, amethyst deposits, a hollow center, and emissive crystal buds.
+func _place_geodes(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> void:
+	const cell_size := 72
+	const halo := 11
+	var first_x := WorldGenHashScript.floor_div(origin_x - halo, cell_size)
+	var last_x := WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + halo, cell_size)
+	var first_z := WorldGenHashScript.floor_div(origin_z - halo, cell_size)
+	var last_z := WorldGenHashScript.floor_div(origin_z + VoxelDefsScript.CHUNK_SIZE - 1 + halo, cell_size)
+	for cell_z in range(first_z, last_z + 1):
+		for cell_x in range(first_x, last_x + 1):
+			var hash_value := WorldGenHashScript.hash_2d(config.seed + 1327, cell_x, cell_z)
+			if hash_value % 13 != 0:
+				continue
+			var center := Vector3i(cell_x * cell_size + 12 + hash_value % 48,
+				10 + (hash_value / 29) % 31, cell_z * cell_size + 12 + (hash_value / 71) % 48)
+			_stamp_geode(data, field, center, 6 + hash_value % 4, hash_value)
+
+
+func _stamp_geode(data: PackedByteArray, field: ChunkTerrainData, center: Vector3i, radius: int, seed_hash: int) -> void:
+	var origin_x := field.chunk_x * VoxelDefsScript.CHUNK_SIZE
+	var origin_z := field.chunk_z * VoxelDefsScript.CHUNK_SIZE
+	for world_z in range(maxi(center.z - radius, origin_z), mini(center.z + radius, origin_z + VoxelDefsScript.CHUNK_SIZE - 1) + 1):
+		var local_z := world_z - origin_z
+		for world_x in range(maxi(center.x - radius, origin_x), mini(center.x + radius, origin_x + VoxelDefsScript.CHUNK_SIZE - 1) + 1):
+			var local_x := world_x - origin_x
+			var field_index := ChunkTerrainDataScript.cell_index(local_x, local_z)
+			var max_geode_y := _surface_height(field, field_index) - SURFACE_CLEARANCE - 2
+			for y in range(maxi(2, center.y - radius), mini(center.y + radius, max_geode_y) + 1):
+				var offset := Vector3(float(world_x - center.x), float(y - center.y), float(world_z - center.z))
+				var distance := offset.length() / float(radius)
+				if distance > 1.0:
+					continue
+				var index := _index(local_x, y, local_z)
+				var existing := data[index]
+				if distance >= 0.82:
+					if existing == BlockRegistryScript.BLOCK_STONE:
+						data[index] = BlockRegistryScript.BLOCK_GEODE_SHELL
+				elif distance >= 0.66:
+					if existing != BlockRegistryScript.BLOCK_BEDROCK:
+						var crystal_hash := WorldGenHashScript.hash_3d(config.seed + 1361 + seed_hash, world_x, y, world_z)
+						data[index] = BlockRegistryScript.BLOCK_AMETHYST if crystal_hash % 5 == 0 else BlockRegistryScript.BLOCK_CALCITE
+				elif existing != BlockRegistryScript.BLOCK_BEDROCK:
+					data[index] = BlockRegistryScript.BLOCK_AIR
+	# Buds occupy hollow cells adjacent to the crystalline lining.
+	for world_z in range(maxi(center.z - radius + 2, origin_z), mini(center.z + radius - 2, origin_z + VoxelDefsScript.CHUNK_SIZE - 1) + 1):
+		var local_z := world_z - origin_z
+		for world_x in range(maxi(center.x - radius + 2, origin_x), mini(center.x + radius - 2, origin_x + VoxelDefsScript.CHUNK_SIZE - 1) + 1):
+			var local_x := world_x - origin_x
+			for y in range(maxi(3, center.y - radius + 2), mini(VoxelDefsScript.WORLD_HEIGHT - 2, center.y + radius - 2) + 1):
+				var index := _index(local_x, y, local_z)
+				if data[index] != BlockRegistryScript.BLOCK_AIR or WorldGenHashScript.hash_3d(config.seed + 1399, world_x, y, world_z) % 17 != 0:
+					continue
+				for direction in [Vector3i.UP, Vector3i.DOWN, Vector3i.LEFT, Vector3i.RIGHT, Vector3i.FORWARD, Vector3i.BACK]:
+					var neighbor: Vector3i = Vector3i(local_x, y, local_z) + Vector3i(direction)
+					if neighbor.x < 0 or neighbor.x >= VoxelDefsScript.CHUNK_SIZE or neighbor.z < 0 or neighbor.z >= VoxelDefsScript.CHUNK_SIZE:
+						continue
+					if data[_index(neighbor.x, neighbor.y, neighbor.z)] == BlockRegistryScript.BLOCK_AMETHYST:
+						data[index] = BlockRegistryScript.BLOCK_CRYSTAL_BUD
+						break
 
 
 func _ore_for_anchor(hash_value: int, y: int) -> int:
@@ -785,7 +1036,7 @@ func _tree_root_is_near_cave_entrance(world_x: int, world_z: int) -> bool:
 	for cell_z in range(first_z, last_z + 1):
 		for cell_x in range(first_x, last_x + 1):
 			var hash_value: int = WorldGenHashScript.hash_2d(config.seed + 773, cell_x, cell_z)
-			if float(hash_value % 1000) / 1000.0 >= minf(0.12, 0.04 * config.cave_density):
+			if float(hash_value % 1000) / 1000.0 >= minf(0.45, 0.18 * config.cave_density):
 				continue
 			var start_x: int = cell_x * entrance_cell_size + 8 + hash_value % 48
 			var start_z: int = cell_z * entrance_cell_size + 8 + (hash_value / 53) % 48
