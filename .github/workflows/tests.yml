@@ -5,10 +5,9 @@ name: PR tests
 # shard results stay readable. Branch protection should require only the
 # "PR tests" job below, so shards can be rebalanced without touching the rule.
 #
-# Note: this workflow must exist on the base branch before pull_request events
-# run it (GitHub uses the base branch copy), and workflow_dispatch only appears
-# once it is on the default branch. To exercise it before merging, temporarily
-# add a `push: branches: [<branch>]` trigger and remove it before merge.
+# Note: pull_request events use the workflow file from the pull request's
+# merge commit, so this workflow runs on its own PR. Manual workflow_dispatch
+# only becomes available once the file is on the default branch.
 #
 # Known follow-ups before making this required:
 #   - tools/stream_full_verify.gd caps its wait at 240 * 0.25s (60s); slow
@@ -19,9 +18,6 @@ name: PR tests
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  # TEMPORARY: bootstraps the workflow on this feature branch before merge.
-  push:
-    branches: [t3code/add-pr-test-runner-workflow]
   workflow_dispatch:
 
 permissions:
