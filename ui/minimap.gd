@@ -190,7 +190,7 @@ func _update_mode_label() -> void:
 
 func _build_ui() -> void:
 	var root: Control = $Root
-	root.theme = UITheme.build()
+	UITheme.apply(root)
 
 	_panel = PanelContainer.new()
 	_panel.name = "Panel"
@@ -221,14 +221,14 @@ func _build_ui() -> void:
 	title.name = "Title"
 	title.text = "MAP"
 	title.add_theme_font_override("font", UITheme.font_eyebrow())
-	title.add_theme_font_size_override("font_size", UITheme.SIZE_EYEBROW)
+	UITheme.apply_font_size(title, UITheme.SIZE_EYEBROW)
 	title.add_theme_color_override("font_color", UITheme.EMBER)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	_mode_label = Label.new()
 	_mode_label.name = "Mode"
 	_mode_label.add_theme_font_override("font", UITheme.font_semi())
-	_mode_label.add_theme_font_size_override("font_size", 11)
+	UITheme.apply_font_size(_mode_label, 11)
 	_mode_label.add_theme_color_override("font_color", UITheme.MUTED)
 	_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	header.add_child(_mode_label)
@@ -276,7 +276,7 @@ func _build_ui() -> void:
 	compass.offset_top = 1.0
 	compass.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	compass.add_theme_font_override("font", UITheme.font_semi())
-	compass.add_theme_font_size_override("font_size", 11)
+	UITheme.apply_font_size(compass, 11)
 	compass.add_theme_color_override("font_color", Color(UITheme.INK_DIM.r, UITheme.INK_DIM.g, UITheme.INK_DIM.b, 0.65))
 	compass.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.8))
 	compass.add_theme_constant_override("shadow_offset_x", 1)
@@ -285,7 +285,7 @@ func _build_ui() -> void:
 
 	_caption = Label.new()
 	_caption.name = "Caption"
-	_caption.add_theme_font_size_override("font_size", 11)
+	UITheme.apply_font_size(_caption, 11)
 	_caption.add_theme_color_override("font_color", UITheme.MUTED)
 	_caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_caption.text = "map unavailable"

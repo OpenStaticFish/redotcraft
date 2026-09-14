@@ -407,7 +407,7 @@ func _on_viewport_resized() -> void:
 
 func _build_ui() -> void:
 	var root: Control = $Root
-	root.theme = UITheme.build()
+	UITheme.apply(root)
 
 	_dim = ColorRect.new()
 	_dim.name = "Dim"
@@ -440,7 +440,7 @@ func _build_ui() -> void:
 	_mode_label = Label.new()
 	_mode_label.name = "Mode"
 	_mode_label.add_theme_font_override("font", UITheme.font_semi())
-	_mode_label.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_mode_label, 13)
 	_mode_label.add_theme_color_override("font_color", UITheme.EMBER)
 	_mode_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(_mode_label)
@@ -500,7 +500,7 @@ func _build_ui() -> void:
 	compass.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	compass.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	compass.add_theme_font_override("font", UITheme.font_semi())
-	compass.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(compass, 13)
 	compass.add_theme_color_override("font_color", Color(UITheme.INK_DIM.r, UITheme.INK_DIM.g, UITheme.INK_DIM.b, 0.7))
 	compass.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.85))
 	compass.add_theme_constant_override("shadow_offset_x", 1)
@@ -510,7 +510,7 @@ func _build_ui() -> void:
 	_caption = Label.new()
 	_caption.name = "Caption"
 	_caption.add_theme_font_override("font", UITheme.font_semi())
-	_caption.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_caption, 13)
 	_caption.add_theme_color_override("font_color", UITheme.MUTED)
 	_caption.text = "map unavailable"
 	box.add_child(_caption)
@@ -518,7 +518,7 @@ func _build_ui() -> void:
 	_position_label = Label.new()
 	_position_label.name = "Position"
 	_position_label.add_theme_font_override("font", UITheme.font_semi())
-	_position_label.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_position_label, 13)
 	_position_label.add_theme_color_override("font_color", UITheme.CYAN)
 	_position_label.text = " "
 	box.add_child(_position_label)
@@ -527,7 +527,7 @@ func _build_ui() -> void:
 	hint.name = "Hint"
 	hint.text = "scroll or + / - zoom  ·  drag or arrow keys pan  ·  N mode  ·  M / ESC close"
 	hint.add_theme_font_override("font", UITheme.font_semi())
-	hint.add_theme_font_size_override("font_size", 12)
+	UITheme.apply_font_size(hint, 12)
 	hint.add_theme_color_override("font_color", UITheme.FAINT)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(hint)
