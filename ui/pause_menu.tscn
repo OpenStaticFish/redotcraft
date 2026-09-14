@@ -61,7 +61,7 @@ text = "Quit Game"
 layout_mode = 2
 theme_override_colors/font_color = Color(0.722, 0.78, 0.757, 1)
 theme_override_font_sizes/font_size = 13
-text = "WASD move   SPACE jump   double-tap SPACE to fly\nSHIFT sprint / descend   CTRL fast fly   LMB mine   RMB place\n1-9 / 0 or wheel select block   E inventory\nF1 hide HUD   F2 screenshot   P photo camera   F3 worldgen map   ESC pause"
+text = "WASD move   SPACE jump   double-tap SPACE to fly\nSHIFT sprint / descend   CTRL fast fly   LMB mine   RMB place\n1-9 / 0 or wheel select block   E inventory   M map   ] minimap   N map mode\nF1 hide HUD   F2 screenshot   P photo camera   F3 worldgen map   ESC pause"
 horizontal_alignment = 1
 
 [node name="SettingsMenu" parent="." instance=ExtResource("2_settings")]

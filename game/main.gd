@@ -4,6 +4,8 @@ extends Node3D
 const PauseMenuScene := preload("res://ui/pause_menu.tscn")
 const ShadowCaptureScript := preload("res://game/shadow_capture.gd")
 const WorldgenOverlayScene := preload("res://ui/worldgen_overlay.tscn")
+const MinimapScene := preload("res://ui/minimap.tscn")
+const MapOverlayScene := preload("res://ui/map_overlay.tscn")
 
 const HOTBAR: Array[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 27]
 const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32, 27: 32}
@@ -50,6 +52,9 @@ var _underwater_target := 0.0
 var _underwater_sample_time := 0.0
 var _worldgen_overlay: WorldgenOverlay
 var _photo_mode: PhotoMode
+var _minimap: Minimap
+var _map_overlay: MapOverlay
+var _minimap_restore := false
 var _selection_chip: Label
 var _hotbar_slot_size := SLOT_WIDTH
 var _hotbar_icon_size := SLOT_ICON
@@ -81,12 +86,19 @@ func _ready() -> void:
 	add_child(_worldgen_overlay)
 	_worldgen_overlay.initialize(world, player)
 	_worldgen_overlay.status_requested.connect(set_status)
+	_minimap = MinimapScene.instantiate() as Minimap
+	add_child(_minimap)
+	_minimap.initialize(world, player)
+	_minimap.status_requested.connect(set_status)
+	_map_overlay = MapOverlayScene.instantiate() as MapOverlay
+	add_child(_map_overlay)
+	_map_overlay.initialize(world, player)
 	_weather.setup(player.camera, _day_night)
 	_weather.weather_changed.connect(_on_weather_changed)
 	_inventory_overlay.weather_toggled.connect(_on_weather_toggled)
 	player.set_selected_block(HOTBAR[selected_slot])
 	_update_inventory_display()
-	set_status("WASD move   double-tap SPACE to fly   ESC pause")
+	set_status("WASD move   double-tap SPACE to fly   E inventory   M map   ] minimap   ESC pause")
 	var shadow_capture := ShadowCaptureScript.new()
 	shadow_capture.name = "ShadowCapture"
 	shadow_capture.state_provider = _get_shadow_capture_state
@@ -140,6 +152,16 @@ func _get_shadow_capture_state() -> Dictionary:
 			"overlay_visible": _worldgen_overlay != null and _worldgen_overlay.visible,
 			"map_mode": _worldgen_overlay.get_mode() if _worldgen_overlay != null else "",
 		},
+		"minimap": {
+			"visible": _minimap != null and _minimap.visible,
+			"mode": _minimap.get_mode() if _minimap != null else "",
+			"pending": _minimap.is_pending() if _minimap != null else false,
+		},
+		"map_overlay": {
+			"visible": _map_overlay != null and _map_overlay.visible,
+			"mode": _map_overlay.get_mode() if _map_overlay != null else "",
+			"pending": _map_overlay.is_pending() if _map_overlay != null else false,
+		},
 	}
 
 
@@ -148,6 +170,10 @@ func _exit_tree() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Photo mode owns its keys and promises a clean view; leave the minimap,
+	# debug overlay, and modal map for after the camera is dismissed.
+	if _photo_mode != null and _photo_mode.is_camera_active():
+		return
 	if event.is_action_pressed("debug_worldgen"):
 		get_viewport().set_input_as_handled()
 		if _worldgen_overlay != null:
@@ -156,6 +182,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		if _worldgen_overlay != null:
 			_worldgen_overlay.cycle_mode()
+	elif event.is_action_pressed("minimap"):
+		get_viewport().set_input_as_handled()
+		if _minimap != null:
+			_minimap.toggle()
+	elif event.is_action_pressed("minimap_mode"):
+		get_viewport().set_input_as_handled()
+		if _minimap != null:
+			_minimap.cycle_mode()
+	elif event.is_action_pressed("map_overlay"):
+		get_viewport().set_input_as_handled()
+		if _map_overlay != null:
+			_map_overlay.open()
 
 
 func _process(delta: float) -> void:
@@ -513,11 +551,16 @@ func _update_slot_styles() -> void:
 
 
 func activate_pause() -> void:
+	if _map_overlay != null and _map_overlay.visible:
+		_map_overlay.close()
+		return
 	if _pause_menu:
 		_pause_menu.open_menu()
 
 
 func _on_inventory_opened() -> void:
+	if _map_overlay != null and _map_overlay.visible:
+		_map_overlay.close()
 	_inventory_overlay.show_inventory(inventory, world)
 	_inventory_overlay.set_weather_state(_weather.is_raining())
 	get_tree().paused = true
@@ -551,10 +594,17 @@ func _on_photo_camera_changed(active: bool, camera: Camera3D) -> void:
 	world.setup_player(camera if active else player, not active)
 	player.set_photo_mode(active)
 	_weather.set_camera(camera if active else player.camera)
-	if active and _worldgen_overlay != null and _worldgen_overlay.visible:
-		# The nonmodal F3 map would sit over the photo composition; close it
-		# silently and let F3 reopen it after the camera is dismissed.
-		_worldgen_overlay.visible = false
+	if active:
+		# The minimap and the nonmodal F3 map would sit over the composition;
+		# hide them and close the overlay, restoring the minimap's own toggle
+		# state afterwards.
+		_minimap_restore = _minimap != null and _minimap.visible
+		if _minimap != null:
+			_minimap.visible = false
+		if _worldgen_overlay != null and _worldgen_overlay.visible:
+			_worldgen_overlay.visible = false
+	elif _minimap != null:
+		_minimap.visible = _minimap_restore
 
 
 func _active_camera() -> Camera3D:
