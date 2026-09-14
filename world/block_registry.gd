@@ -53,6 +53,13 @@ const BLOCK_LAVA := 48
 const BLOCK_BROWN_MUSHROOM := 49
 const BLOCK_RED_MUSHROOM := 50
 const BLOCK_MELON := 51
+const BLOCK_CORAL_SUBSTRATE := 52
+const BLOCK_SEAGRASS := 53
+const BLOCK_KELP := 54
+const BLOCK_CORAL_FAN := 55
+const BLOCK_CORAL_BRANCH := 56
+const BLOCK_SPONGE := 57
+const BLOCK_ANEMONE := 58
 
 const FLAG_OPAQUE := 1
 const FLAG_CUTOUT := 2
@@ -115,9 +122,28 @@ const BLOCK_DEFS := [
 	[49, "BROWN MUSHROOM", "brown_mushroom_block.png", "brown_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS],
 	[50, "RED MUSHROOM", "red_mushroom_block.png", "red_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS],
 	[51, "MELON", "melon_top.png", "melon_side.png", "melon_side.png", FLAG_OPAQUE],
+	[52, "CORAL SUBSTRATE", "coral_substrate.png", "coral_substrate.png", "coral_substrate.png", FLAG_OPAQUE],
+	[53, "SEAGRASS", "seagrass.png", "seagrass.png", "seagrass.png", FLAG_CUTOUT | FLAG_CROSS],
+	[54, "KELP", "kelp.png", "kelp.png", "kelp.png", FLAG_CUTOUT | FLAG_CROSS],
+	[55, "CORAL FAN", "coral_fan.png", "coral_fan.png", "coral_fan.png", FLAG_CUTOUT | FLAG_CROSS],
+	[56, "CORAL BRANCH", "coral_branch.png", "coral_branch.png", "coral_branch.png", FLAG_CUTOUT | FLAG_CROSS],
+	[57, "SPONGE", "sponge.png", "sponge.png", "sponge.png", FLAG_OPAQUE],
+	[58, "ANEMONE", "anemone.png", "anemone.png", "anemone.png", FLAG_CUTOUT | FLAG_CROSS],
 ]
 
 const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
+## RedotCraft-generated placeholders live beside the copied ZigCraft set so the
+## upstream directory stays an unmodified copy.
+const UNDERWATER_TEXTURE_ROOT := "res://assets/placeholders/underwater/"
+const EXTRA_TEXTURE_PATHS := {
+	"coral_substrate.png": UNDERWATER_TEXTURE_ROOT + "coral_substrate.png",
+	"seagrass.png": UNDERWATER_TEXTURE_ROOT + "seagrass.png",
+	"kelp.png": UNDERWATER_TEXTURE_ROOT + "kelp.png",
+	"coral_fan.png": UNDERWATER_TEXTURE_ROOT + "coral_fan.png",
+	"coral_branch.png": UNDERWATER_TEXTURE_ROOT + "coral_branch.png",
+	"sponge.png": UNDERWATER_TEXTURE_ROOT + "sponge.png",
+	"anemone.png": UNDERWATER_TEXTURE_ROOT + "anemone.png",
+}
 const WATER_TEXTURE_PATH := TEXTURE_ROOT + "water.png"
 const WATER_SHADER_PATH := "res://assets/placeholders/zigcraft/water.gdshader"
 const BLOCK_SHADER_PATH := "res://world/block.gdshader"
@@ -254,7 +280,7 @@ func _build_texture_array() -> Dictionary:
 	var tile_lookup := {}
 	for index in texture_names.size():
 		var texture_name := texture_names[index]
-		var image := _load_image(TEXTURE_ROOT + texture_name)
+		var image := _load_image(_texture_path(texture_name))
 		image = _prepare_solid_texture(image, texture_name)
 		if image.get_width() != TILE_PX or image.get_height() != TILE_PX:
 			image.resize(TILE_PX, TILE_PX, Image.INTERPOLATE_NEAREST)
@@ -268,6 +294,10 @@ func _build_texture_array() -> Dictionary:
 	texture_array.create_from_images(images)
 	_build_material(texture_array, images[0] if not images.is_empty() else null)
 	return tile_lookup
+
+
+func _texture_path(texture_name: String) -> String:
+	return EXTRA_TEXTURE_PATHS.get(texture_name, TEXTURE_ROOT + texture_name)
 
 
 func _prepare_solid_texture(image: Image, texture_name: String) -> Image:

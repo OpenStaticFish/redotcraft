@@ -60,6 +60,15 @@ const NIGHT_SKY_LIGHT := 0.05
 const VOLUMETRIC_FOG_NIGHT_SCALE := 1.25
 const VOLUMETRIC_FOG_DAWN_SCALE := 1.6
 const RAIN_VOLUMETRIC_SCALE := 1.5
+# Underwater ambience: `underwater_amount` is the surfaced/submerged blend and
+# `underwater_depth` is 0 at the surface, 1 at UNDERWATER_MAX_DEPTH. Fog, sun,
+# ambient, and caustics are all graded from those two values.
+const UNDERWATER_MAX_DEPTH := 18.0
+const UNDERWATER_FOG_ADD := 0.018
+const UNDERWATER_VOLUMETRIC_SCALE := 1.4
+const UNDERWATER_LIGHT_FLOOR := 0.32
+const UNDERWATER_CAUSTIC_STRENGTH := 0.9
+const UNDERWATER_FALLBACK_COLOR := Color(0.06, 0.24, 0.36)
 
 @export var sun_path := NodePath("../Sun")
 @export var fill_light_path := NodePath("../SkyFill")
@@ -82,6 +91,9 @@ var base_fog_density := 0.006
 var base_volumetric_fog_density := 0.006
 var base_saturation := 1.08
 var base_contrast := 1.04
+var underwater_amount := 0.0
+var underwater_depth := 0.0
+var underwater_color := UNDERWATER_FALLBACK_COLOR
 var _sky_material: ShaderMaterial
 var _moon_phase := 0.5
 
@@ -110,6 +122,14 @@ func set_time(hours: float) -> void:
 
 func set_weather_dim(value: float) -> void:
 	weather_dim = clampf(value, 0.0, 1.0)
+
+
+## Ambient grading while the camera is submerged. `tint` is the biome's water
+## grading color; depth is normalized so the abyss is darkest and murkiest.
+func set_underwater(amount: float, depth: float, tint: Color = UNDERWATER_FALLBACK_COLOR) -> void:
+	underwater_amount = clampf(amount, 0.0, 1.0)
+	underwater_depth = clampf(depth, 0.0, 1.0)
+	underwater_color = tint
 
 
 func get_clock_text() -> String:
@@ -148,7 +168,23 @@ func _apply() -> void:
 	environment.adjustment_enabled = true
 	environment.adjustment_saturation = base_saturation * lerpf(NIGHT_SATURATION, 1.0, day_factor)
 	environment.adjustment_contrast = base_contrast * lerpf(NIGHT_CONTRAST, 1.0, day_factor)
+	# Underwater grading: darken sun/ambient, thicken fog, and project caustics
+	# only while submerged. The depth mix keeps shallow water readable and the
+	# abyss genuinely dark.
+	if underwater_amount > 0.001:
+		var depth_mix := lerpf(0.45, 1.0, underwater_depth)
+		var submerged := underwater_amount * depth_mix
+		var fog_target := underwater_color.lerp(Color(0.015, 0.05, 0.11), underwater_depth * 0.85)
+		environment.fog_light_color = environment.fog_light_color.lerp(fog_target, submerged)
+		environment.fog_density += UNDERWATER_FOG_ADD * submerged
+		environment.volumetric_fog_density *= lerpf(1.0, UNDERWATER_VOLUMETRIC_SCALE, submerged)
+		environment.ambient_light_energy *= lerpf(1.0, UNDERWATER_LIGHT_FLOOR, submerged)
+		_sun.light_energy *= lerpf(1.0, UNDERWATER_LIGHT_FLOOR, submerged)
+		if _fill_light:
+			_fill_light.light_energy *= lerpf(1.0, UNDERWATER_LIGHT_FLOOR, submerged)
 	RenderingServer.global_shader_parameter_set("sky_light_strength", lerpf(NIGHT_SKY_LIGHT, 1.0, day_factor) * weather_factor)
+	RenderingServer.global_shader_parameter_set("underwater_caustics",
+		underwater_amount * (1.0 - underwater_depth) * UNDERWATER_CAUSTIC_STRENGTH * day_factor * weather_factor)
 	if _clouds:
 		var cloud_tint := CLOUD_DAY_TINT.lerp(CLOUD_NIGHT_TINT, night_amount)
 		_clouds.set_sky_tint(cloud_tint.lerp(RAIN_CLOUD_NIGHT.lerp(RAIN_CLOUD_DAY, day_factor), weather_dim))

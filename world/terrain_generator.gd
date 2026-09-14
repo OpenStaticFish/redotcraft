@@ -135,6 +135,19 @@ func sample_point(world_x: int, world_z: int) -> Dictionary:
 	return sample
 
 
+## Cheap dominant-biome identity for ambient grading: no raw/slope work, so it
+## is safe to call a few times per second for underwater fog and tint.
+func biome_id_at(world_x: int, world_z: int) -> int:
+	_ensure_configured()
+	return _sampler.sample_decoration_ground(world_x, world_z).y
+
+
+## Water grading color for a biome; matches the water mesh's vertex tint.
+func water_tint_for(biome_id: int) -> Color:
+	_ensure_configured()
+	return _biomes.water_tint(biome_id)
+
+
 func biome_color(biome_id: int) -> Color:
 	_ensure_configured()
 	match biome_id:
@@ -142,6 +155,14 @@ func biome_color(biome_id: int) -> Color:
 			return Color("#356f9d")
 		BiomeCatalog.DEEP_OCEAN:
 			return Color("#183f70")
+		BiomeCatalog.KELP_FOREST:
+			return Color("#2e6b4f")
+		BiomeCatalog.SEAGRASS_MEADOW:
+			return Color("#6dbf7a")
+		BiomeCatalog.CORAL_REEF:
+			return Color("#e0709a")
+		BiomeCatalog.FROZEN_OCEAN:
+			return Color("#cfeef5")
 		BiomeCatalog.BEACH:
 			return Color("#d8c884")
 		BiomeCatalog.RIVER:
@@ -237,7 +258,7 @@ func find_spawn_position() -> Vector3:
 				var sample: Dictionary = _sampler.sample_point(point.x, point.y)
 				var biome: int = int(sample["biome_id"])
 				var height: float = float(sample["final_height"])
-				if biome in [BiomeCatalog.OCEAN, BiomeCatalog.DEEP_OCEAN, BiomeCatalog.BEACH, BiomeCatalog.RIVER, BiomeCatalog.SWAMP]:
+				if _biomes.is_ocean_biome(biome) or biome in [BiomeCatalog.BEACH, BiomeCatalog.RIVER, BiomeCatalog.SWAMP]:
 					continue
 				var slope: float = float(sample["slope"])
 				var score := height - slope * 8.0 - float(radius) * 0.12

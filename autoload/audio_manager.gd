@@ -29,6 +29,10 @@ const BREAK_DB := -9.0
 const PLACE_DB := -11.0
 const RAIN_DB := -20.0
 const SILENT_DB := -80.0
+# Submerging the camera muffles the whole mix; the cutoff is restored when the
+# camera surfaces. A low-pass on Master keeps this independent of every cue.
+const SURFACE_CUTOFF_HZ := 20500.0
+const UNDERWATER_CUTOFF_HZ := 620.0
 
 var _sfx_pool: Array[AudioStreamPlayer] = []
 var _ui_pool: Array[AudioStreamPlayer] = []
@@ -39,6 +43,8 @@ var _block_materials := {}
 var _pool_cursor := 0
 var _rain_player: AudioStreamPlayer
 var _rain_tween: Tween
+var _underwater_filter: AudioEffectLowPassFilter
+var _underwater_active := false
 var _rng := RandomNumberGenerator.new()
 
 
@@ -87,12 +93,14 @@ func _build_block_materials() -> void:
 			BlockRegistry.BLOCK_MANGROVE_LEAVES, BlockRegistry.BLOCK_TALL_GRASS, BlockRegistry.BLOCK_YELLOW_FLOWER,
 			BlockRegistry.BLOCK_RED_FLOWER, BlockRegistry.BLOCK_DEAD_BUSH, BlockRegistry.BLOCK_VINE,
 			BlockRegistry.BLOCK_BROWN_MUSHROOM, BlockRegistry.BLOCK_RED_MUSHROOM, BlockRegistry.BLOCK_MYCELIUM,
-			BlockRegistry.BLOCK_MELON],
+			BlockRegistry.BLOCK_MELON, BlockRegistry.BLOCK_SEAGRASS, BlockRegistry.BLOCK_KELP,
+			BlockRegistry.BLOCK_CORAL_FAN, BlockRegistry.BLOCK_CORAL_BRANCH, BlockRegistry.BLOCK_SPONGE,
+			BlockRegistry.BLOCK_ANEMONE],
 		"dirt": [BlockRegistry.BLOCK_DIRT, BlockRegistry.BLOCK_CLAY, BlockRegistry.BLOCK_MUD],
 		"stone": [BlockRegistry.BLOCK_STONE, BlockRegistry.BLOCK_COBBLESTONE, BlockRegistry.BLOCK_BEDROCK,
 			BlockRegistry.BLOCK_COAL_ORE, BlockRegistry.BLOCK_IRON_ORE, BlockRegistry.BLOCK_GOLD_ORE,
 			BlockRegistry.BLOCK_TERRACOTTA, BlockRegistry.BLOCK_GLOWSTONE, BlockRegistry.BLOCK_GLASS,
-			BlockRegistry.BLOCK_TORCH],
+			BlockRegistry.BLOCK_TORCH, BlockRegistry.BLOCK_CORAL_SUBSTRATE],
 		"sand": [BlockRegistry.BLOCK_SAND, BlockRegistry.BLOCK_RED_SAND],
 		"snow": [BlockRegistry.BLOCK_SNOW],
 		"gravel": [BlockRegistry.BLOCK_GRAVEL],
@@ -159,6 +167,26 @@ func set_rain(active: bool) -> void:
 		_rain_tween.kill()
 	_rain_tween = create_tween()
 	_rain_tween.tween_property(_rain_player, "volume_db", RAIN_DB if active else SILENT_DB, 1.5)
+
+
+## Muffles the mix while the camera is submerged and restores it on surfacing.
+## The filter is created lazily so headless verification never touches the bus.
+func set_underwater(active: bool) -> void:
+	if active == _underwater_active:
+		return
+	_underwater_active = active
+	if _underwater_filter == null:
+		var master := AudioServer.get_bus_index(BUS_MASTER)
+		if master == -1:
+			return
+		_underwater_filter = AudioEffectLowPassFilter.new()
+		_underwater_filter.cutoff_hz = SURFACE_CUTOFF_HZ
+		AudioServer.add_bus_effect(master, _underwater_filter)
+	_underwater_filter.cutoff_hz = UNDERWATER_CUTOFF_HZ if active else SURFACE_CUTOFF_HZ
+
+
+func is_underwater() -> bool:
+	return _underwater_active
 
 
 func apply_volumes() -> void:

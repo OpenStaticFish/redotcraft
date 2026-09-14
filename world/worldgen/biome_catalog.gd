@@ -17,6 +17,13 @@ const TAIGA: int = 11
 const BADLANDS: int = 12
 const MEADOW: int = 13
 const HIGHLANDS: int = 14
+## Underwater split. OCEAN/DEEP_OCEAN keep their original IDs so existing
+## references and saved worlds stay valid; the climate/depth companions are
+## appended. Selection lives in TerrainSampler._underwater_biome().
+const KELP_FOREST: int = 15
+const SEAGRASS_MEADOW: int = 16
+const CORAL_REEF: int = 17
+const FROZEN_OCEAN: int = 18
 
 const DECORATION_NONE: int = 0
 const DECORATION_GRASSLAND: int = 1
@@ -35,6 +42,14 @@ const DECORATION_TAIGA: int = 13
 const DECORATION_SNOWFIELD: int = 14
 const DECORATION_RIVERBANK: int = 15
 const DECORATION_BEACH: int = 16
+## Underwater species sets. The land lottery ignores these, so the sea keeps a
+## decoration identity without stamping land features into water.
+const DECORATION_SHELF: int = 17
+const DECORATION_REEF: int = 18
+const DECORATION_KELP: int = 19
+const DECORATION_SEAGRASS: int = 20
+const DECORATION_ABYSSAL: int = 21
+const DECORATION_FROZEN_SEA: int = 22
 
 const TYPE_NONE: int = 0
 const TYPE_OAK: int = 1
@@ -46,6 +61,11 @@ const TYPE_ACACIA: int = 6
 const TYPE_SPRUCE: int = 7
 const TYPE_BOULDER: int = 8
 
+## Waterline sediment stays depth-led so a sand beach never meets a different
+## substrate at the waterline; the old biome-dither rule began gravel directly
+## beside a beach.
+const SHELF_SAND_DEPTH: int = 6
+
 const BLOCK_GRASS: int = 1
 const BLOCK_DIRT: int = 2
 const BLOCK_STONE: int = 3
@@ -56,6 +76,7 @@ const BLOCK_CLAY: int = 17
 const BLOCK_MUD: int = 18
 const BLOCK_RED_SAND: int = 19
 const BLOCK_TERRACOTTA: int = 25
+const BLOCK_CORAL_SUBSTRATE: int = 52
 
 var _names: PackedStringArray = PackedStringArray()
 var _temperature_centers: PackedFloat32Array = PackedFloat32Array()
@@ -75,8 +96,8 @@ func _init() -> void:
 	_add("desert", 0.80, 0.16, BLOCK_SAND, BLOCK_SAND, BLOCK_SAND, 4, Color("#c8b45a"), DECORATION_DESERT, TYPE_CACTUS)
 	_add("snow", 0.12, 0.58, BLOCK_SNOW, BLOCK_DIRT, BLOCK_GRAVEL, 3, Color("#c5d8d2"), DECORATION_SNOWFIELD, TYPE_SPRUCE)
 	_add("swamp", 0.62, 0.88, BLOCK_MUD, BLOCK_DIRT, BLOCK_CLAY, 4, Color("#557a3c"), DECORATION_SWAMP, TYPE_REEDS)
-	_add("ocean", 0.52, 0.62, BLOCK_SAND, BLOCK_SAND, BLOCK_GRAVEL, 3, Color("#4b8797"), DECORATION_NONE, TYPE_NONE)
-	_add("deep_ocean", 0.46, 0.65, BLOCK_GRAVEL, BLOCK_STONE, BLOCK_GRAVEL, 2, Color("#3e7185"), DECORATION_NONE, TYPE_NONE)
+	_add("shelf_sea", 0.52, 0.62, BLOCK_SAND, BLOCK_SAND, BLOCK_GRAVEL, 3, Color("#4b8797"), DECORATION_SHELF, TYPE_NONE)
+	_add("deep_sea", 0.46, 0.65, BLOCK_GRAVEL, BLOCK_STONE, BLOCK_GRAVEL, 2, Color("#3e7185"), DECORATION_ABYSSAL, TYPE_NONE)
 	_add("beach", 0.62, 0.45, BLOCK_SAND, BLOCK_SAND, BLOCK_SAND, 3, Color("#b9ac62"), DECORATION_BEACH, TYPE_NONE)
 	_add("river", 0.50, 0.70, BLOCK_SAND, BLOCK_DIRT, BLOCK_GRAVEL, 2, Color("#548c6b"), DECORATION_RIVERBANK, TYPE_REEDS)
 	_add("jungle", 0.74, 0.80, BLOCK_GRASS, BLOCK_DIRT, BLOCK_MUD, 4, Color("#3d8d36"), DECORATION_TROPICAL, TYPE_JUNGLE_TREE)
@@ -85,6 +106,10 @@ func _init() -> void:
 	_add("badlands", 0.82, 0.32, BLOCK_RED_SAND, BLOCK_TERRACOTTA, BLOCK_RED_SAND, 5, Color("#b76b3f"), DECORATION_BADLANDS, TYPE_CACTUS)
 	_add("meadow", 0.46, 0.66, BLOCK_GRASS, BLOCK_DIRT, BLOCK_GRAVEL, 3, Color("#7fb65b"), DECORATION_MEADOW, TYPE_BIRCH)
 	_add("highlands", 0.34, 0.46, BLOCK_STONE, BLOCK_STONE, BLOCK_GRAVEL, 2, Color("#6f8e5d"), DECORATION_ALPINE, TYPE_BOULDER)
+	_add("kelp_forest", 0.32, 0.72, BLOCK_GRAVEL, BLOCK_STONE, BLOCK_GRAVEL, 2, Color("#3f6b5a"), DECORATION_KELP, TYPE_NONE)
+	_add("seagrass_meadow", 0.58, 0.70, BLOCK_SAND, BLOCK_CLAY, BLOCK_SAND, 3, Color("#4f9c7a"), DECORATION_SEAGRASS, TYPE_NONE)
+	_add("coral_reef", 0.74, 0.70, BLOCK_SAND, BLOCK_CLAY, BLOCK_SAND, 3, Color("#3fae9a"), DECORATION_REEF, TYPE_NONE)
+	_add("frozen_sea", 0.08, 0.60, BLOCK_GRAVEL, BLOCK_STONE, BLOCK_GRAVEL, 2, Color("#9fc6d4"), DECORATION_FROZEN_SEA, TYPE_NONE)
 
 
 func biome_count() -> int:
@@ -100,6 +125,15 @@ func id_for_name(biome_name: String) -> int:
 		if _names[biome] == biome_name:
 			return biome
 	return PLAINS
+
+
+## Every biome that classifies open water. Spawn search, cave entrances, and
+## decoration exclusions share this so a new sea biome cannot be forgotten.
+func is_ocean_biome(biome: int) -> bool:
+	match _safe_id(biome):
+		OCEAN, DEEP_OCEAN, KELP_FOREST, SEAGRASS_MEADOW, CORAL_REEF, FROZEN_OCEAN:
+			return true
+	return false
 
 
 func temperature_center(biome: int) -> float:
@@ -122,17 +156,50 @@ func underwater_block(biome: int) -> int:
 	return _underwater_blocks[_safe_id(biome)]
 
 
-## A depth-led sediment rule keeps a sandy coastal shelf continuous when a
-## climate biome gives way to ocean. Biome IDs are deliberately not used for
-## shallow water: their dithered/coast-transition boundary previously made
-## gravel begin immediately beside a sand beach.
+## Past the shelf edge each sea biome lays down its own sediment: living coral
+## substrate, fine meadow silt, rocky kelp ground, and abyssal ooze. The
+## waterline stays depth-led so a sand beach never meets a foreign substrate.
 func seabed_block(biome: int, water_depth: int) -> int:
 	var depth := maxi(water_depth, 0)
+	if depth <= SHELF_SAND_DEPTH:
+		return BLOCK_SAND
+	match _safe_id(biome):
+		CORAL_REEF:
+			return BLOCK_SAND if depth <= 8 else BLOCK_CORAL_SUBSTRATE
+		SEAGRASS_MEADOW:
+			return BLOCK_SAND if depth <= 10 else BLOCK_CLAY
+		KELP_FOREST:
+			return BLOCK_GRAVEL
+		FROZEN_OCEAN:
+			return BLOCK_CLAY if depth <= 10 else BLOCK_GRAVEL
+		DEEP_OCEAN:
+			return BLOCK_CLAY
 	if depth <= 11:
 		return BLOCK_SAND
 	if _safe_id(biome) == RIVER and depth <= 14:
 		return BLOCK_CLAY
 	return BLOCK_GRAVEL
+
+
+## Substrate directly below the surface layer. Sedimentary seafloors keep a
+## distinct buried layer (sand over clay, silt over gravel) so exposed seabed
+## steps read as layered ground, while reef rock and kelp ground stay solid.
+func seabed_subsurface(biome: int, water_depth: int) -> int:
+	var depth := maxi(water_depth, 0)
+	match _safe_id(biome):
+		CORAL_REEF:
+			return BLOCK_CORAL_SUBSTRATE
+		KELP_FOREST:
+			return BLOCK_STONE
+		SEAGRASS_MEADOW:
+			return BLOCK_CLAY
+		FROZEN_OCEAN:
+			return BLOCK_GRAVEL
+		DEEP_OCEAN:
+			return BLOCK_GRAVEL
+		OCEAN:
+			return BLOCK_CLAY if depth > SHELF_SAND_DEPTH else BLOCK_SAND
+	return seabed_block(biome, water_depth)
 
 
 ## Thick enough to keep normal shelf faces sedimentary rather than exposing a
@@ -157,6 +224,14 @@ func water_tint(biome: int) -> Color:
 			return Color(0.72, 0.84, 1.08, 1.0)
 		OCEAN:
 			return Color(0.82, 0.94, 1.08, 1.0)
+		CORAL_REEF:
+			return Color(0.68, 1.10, 1.02, 1.0)
+		SEAGRASS_MEADOW:
+			return Color(0.78, 1.06, 0.94, 1.0)
+		KELP_FOREST:
+			return Color(0.70, 0.96, 0.88, 1.0)
+		FROZEN_OCEAN:
+			return Color(0.80, 0.98, 1.18, 1.0)
 		SWAMP:
 			return Color(0.68, 0.86, 0.62, 1.0)
 		RIVER:

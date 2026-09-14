@@ -115,3 +115,7 @@ sky_light_strength={
 "type": "float",
 "value": 1.0
 }
+underwater_caustics={
+"type": "float",
+"value": 0.0
+}

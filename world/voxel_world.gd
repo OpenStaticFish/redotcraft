@@ -517,6 +517,36 @@ func is_water_at(world_position: Vector3) -> bool:
 	return _blocks.is_water_id(get_block_world(Vector3i(floori(world_position.x), floori(world_position.y), floori(world_position.z))))
 
 
+## Ambient snapshot for the underwater pass: whether the camera is submerged,
+## its depth below the local water surface, and the biome's water grading tint.
+## The upward water scan is bounded and only runs on the throttled ambience
+## update, so it never sits in a per-frame path.
+func get_water_ambience(world_position: Vector3) -> Dictionary:
+	var block_x := floori(world_position.x)
+	var block_z := floori(world_position.z)
+	var block_y := floori(world_position.y)
+	var block_id := get_block_world(Vector3i(block_x, block_y, block_z))
+	if not _blocks.is_water_id(block_id):
+		# A camera inside a cross plant is still inside the water column; treat
+		# it as submerged whenever water sits directly above so the overlay and
+		# fog do not pop while swimming through vegetation.
+		if not _blocks.has_flag(block_id, BlockRegistry.FLAG_CROSS) \
+				or not _blocks.is_water_id(get_block_world(Vector3i(block_x, block_y + 1, block_z))):
+			return {"submerged": false, "depth": 0.0, "tint": Color.WHITE, "biome": -1}
+	var surface_y := block_y
+	while surface_y - block_y < 48 and surface_y + 1 < VoxelDefs.WORLD_HEIGHT \
+			and _blocks.is_water_id(get_block_world(Vector3i(block_x, surface_y + 1, block_z))):
+		surface_y += 1
+	var depth := float(surface_y - block_y) + (1.0 - (world_position.y - floorf(world_position.y)))
+	var biome := _generator.biome_id_at(block_x, block_z)
+	return {
+		"submerged": true,
+		"depth": maxf(depth, 0.0),
+		"tint": _generator.water_tint_for(biome),
+		"biome": biome,
+	}
+
+
 func break_block(block_position: Vector3i) -> int:
 	if block_position.y <= 0:
 		return BlockRegistry.BLOCK_AIR
