@@ -143,7 +143,20 @@ func set_hud_visible(visible: bool) -> void:
 		# F1 inside photo mode is an explicit choice; keep it after exiting.
 		_hud_restore = visible
 	_apply_hud(visible)
-	status_requested.emit("HUD %s — F1 toggles" % ("shown" if visible else "hidden"))
+	status_requested.emit("HUD %s — %s toggles" % [
+		"shown" if visible else "hidden",
+		_toggle_key_label(),
+	])
+
+
+## Resolved through the tree instead of an autoload identifier so the
+## dependency-free verifier harness can still compile this script.
+func _toggle_key_label() -> String:
+	var tree := get_tree()
+	var config := tree.root.get_node_or_null("GameConfig") if tree != null else null
+	if config != null and config.has_method("input_key"):
+		return String(config.input_key("hud_toggle"))
+	return "F1"
 
 
 func is_hud_visible() -> bool:
