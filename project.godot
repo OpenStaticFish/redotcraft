@@ -159,3 +159,7 @@ underwater_caustics={
 "type": "float",
 "value": 0.0
 }
+wind_strength={
+"type": "float",
+"value": 0.0
+}

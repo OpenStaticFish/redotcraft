@@ -9,7 +9,9 @@ file warns once and plays silence.
 - `sfx/block_break_<1..2>.ogg` (one uniform cue for every block)
 - `sfx/block_place_<1..2>.ogg` (one uniform cue for every block)
 - `sfx/ui_{click,hover,confirm,cancel}.ogg`
-- `ambient/rain_loop.ogg`
+- `ambient/rain_loop.ogg` (weather: rain bed)
+- `ambient/wind_loop.ogg` (weather: cold/snow biome wind bed)
+- `ambient/thunder_1.ogg` (weather: lightning clap)
 
 Footstep materials: grass, dirt, stone, sand, snow, gravel, wood, water.
 
@@ -31,12 +33,20 @@ Kenney UI Audio (CC0): `click1` (UI click), `rollover1` (hover),
 
 Rain (loopable) (OpenGameArt, CC0): `1.ogg` -> `ambient/rain_loop.ogg`.
 
+Wind (OpenGameArt, CC0): `wind1.wav` -> `ambient/wind_loop.ogg` (60 s loop).
+
+Thunder (OpenGameArt, CC0, `sfx_100_v2` pack): `sfx100v2_thunder_01.ogg`
+-> `ambient/thunder_1.ogg`.
+
 ## Sources and licensing
 
 - VoxeLibre `mcl_sounds` (mix of CC BY-SA 3.0, CC BY 3.0, CC0):
   https://github.com/VoxeLibre/VoxeLibre — `mods/CORE/mcl_sounds`
 - Kenney UI Audio (CC0): https://kenney.nl/assets/ui-audio
 - Rain (loopable), CC0: https://opengameart.org/content/rain-loopable
+- Wind, CC0, by Luke.RUSTLTD: https://opengameart.org/content/wind1
+- Thunder, CC0, by rubberduck (`100 CC0 SFX #2`):
+  https://opengameart.org/content/100-cc0-sfx-2
 
 License texts: `LICENSE-voxelibre-mcl-sounds.txt`,
 `LICENSE-kenney-ui-audio.txt`.

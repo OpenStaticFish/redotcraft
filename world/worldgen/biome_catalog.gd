@@ -136,6 +136,23 @@ func is_ocean_biome(biome: int) -> bool:
 	return false
 
 
+## Cold biomes fall as snow (not rain) and carry a wind ambience bed. The set
+## is intentionally small and explicit so a new biome opts in rather than
+## inheriting a guess from its temperature center. Static so the weather poll
+## can classify a biome id without constructing a catalog.
+static func is_cold_biome(biome: int) -> bool:
+	match clampi(biome, 0, FROZEN_OCEAN):
+		SNOW, TAIGA, HIGHLANDS, FROZEN_OCEAN:
+			return true
+	return false
+
+
+## Wetland biomes get low ground mist particles. Swamps are the only land
+## biome with standing water and dense cover today.
+static func is_wetland_biome(biome: int) -> bool:
+	return clampi(biome, 0, FROZEN_OCEAN) == SWAMP
+
+
 func temperature_center(biome: int) -> float:
 	return _temperature_centers[_safe_id(biome)]
 

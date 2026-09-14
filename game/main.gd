@@ -95,7 +95,10 @@ func _ready() -> void:
 	add_child(_map_overlay)
 	_map_overlay.initialize(world, player)
 	_weather.setup(player.camera, _day_night)
+	_weather.set_world(world)
 	_weather.weather_changed.connect(_on_weather_changed)
+	_weather.lightning.connect(_on_lightning)
+	_weather.ambience_changed.connect(_on_weather_ambience)
 	_inventory_overlay.weather_toggled.connect(_on_weather_toggled)
 	player.set_selected_block(HOTBAR[selected_slot])
 	_update_inventory_display()
@@ -598,7 +601,22 @@ func _on_weather_toggled() -> void:
 
 func _on_weather_changed(state: int) -> void:
 	set_status("Weather: %s" % ("Rain" if state == WeatherSystem.State.RAIN else "Sunny"))
-	AudioManager.set_rain(state == WeatherSystem.State.RAIN)
+	# Cold biomes hear the wind bed rather than rain, even while precipitating.
+	AudioManager.set_rain(state == WeatherSystem.State.RAIN and not _weather.is_snowing())
+
+
+## Lightning flash plus a thunder clap. Lightning is muted in cold biomes by
+## WeatherSystem, so this only fires for rain storms.
+func _on_lightning(strength: float) -> void:
+	_day_night.trigger_lightning(strength)
+	AudioManager.play_thunder(strength)
+
+
+## The camera entered/left a cold or wetland biome; keep the wind bed in step
+## and swap the rain bed for wind (or back) if it is currently precipitating.
+func _on_weather_ambience(cold: bool, _wetland: bool) -> void:
+	AudioManager.set_wind(cold)
+	AudioManager.set_rain(_weather.is_raining() and not cold)
 
 
 func _on_photo_camera_changed(active: bool, camera: Camera3D) -> void:

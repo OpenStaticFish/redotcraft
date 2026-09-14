@@ -764,6 +764,12 @@ func get_biome_name(world_position: Vector3) -> String:
 	return _generator.biome_name(world_position)
 
 
+## Cheap dominant-biome id for ambience grading (weather precipitation, wind
+## bed, mist). No raw/slope work, so it is safe on the throttled weather poll.
+func get_biome_id(world_position: Vector3) -> int:
+	return _generator.biome_id_at(floori(world_position.x), floori(world_position.z))
+
+
 func get_worldgen_stats() -> Dictionary:
 	var full_chunks := 0
 	var lod_chunks := 0
