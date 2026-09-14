@@ -68,7 +68,7 @@ func _refresh_hint() -> void:
 		if sprint_key == descend_key
 		else "%s sprint   %s descend" % [sprint_key, descend_key]
 	)
-	_hint.text = "%s move   %s jump   double-tap %s to fly\n%s   %s fast fly   LMB mine   RMB place\n1-9 / 0 or wheel select block   %s inventory   %s map   %s minimap   %s map mode" % [
+	_hint.text = "%s move   %s jump   double-tap %s to fly\n%s   %s fast fly   LMB mine   RMB place\n1-9 / 0 or wheel select block   %s inventory   %s map   %s minimap   %s map mode\n%s hide HUD   %s screenshot   %s photo camera   %s worldgen map   ESC pause" % [
 		GameConfig.input_move_hint(),
 		jump_key,
 		jump_key,
@@ -78,6 +78,10 @@ func _refresh_hint() -> void:
 		GameConfig.input_key("map_overlay"),
 		GameConfig.input_key("minimap"),
 		GameConfig.input_key("minimap_mode"),
+		GameConfig.input_key("hud_toggle"),
+		GameConfig.input_key("screenshot"),
+		GameConfig.input_key("photo_camera"),
+		GameConfig.input_key("debug_worldgen"),
 	]
 
 

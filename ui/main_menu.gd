@@ -207,11 +207,14 @@ func _restyle_buttons() -> void:
 func _restyle_footer() -> void:
 	_footer.add_theme_color_override("font_color", UITheme.FAINT)
 	UITheme.apply_font_size(_footer, 13)
-	_footer.text = "%s move · %s jump · double-tap %s fly · %s inventory · %s map · %s minimap · %s worldgen map · ESC pause" % [
+	_footer.text = "%s move · %s jump · double-tap %s fly · %s inventory · %s HUD · %s screenshot · %s photo · %s map · %s minimap · %s worldgen map · ESC pause" % [
 		GameConfig.input_move_hint(),
 		GameConfig.input_key("jump"),
 		GameConfig.input_key("jump"),
 		GameConfig.input_key("inventory"),
+		GameConfig.input_key("hud_toggle"),
+		GameConfig.input_key("screenshot"),
+		GameConfig.input_key("photo_camera"),
 		GameConfig.input_key("map_overlay"),
 		GameConfig.input_key("minimap"),
 		GameConfig.input_key("debug_worldgen"),
