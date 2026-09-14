@@ -295,6 +295,13 @@ func _collect_jobs() -> void:
 			continue
 		WorkerThreadPool.wait_for_task_completion(job.task)
 		_pending.erase(pos)
+		if _dirty.has(pos):
+			# An edit invalidated this job's neighbor snapshot while it was running.
+			# Discard the stale result and immediately schedule a fresh build.
+			if _desired.has(pos) and not _gen_queued.has(pos):
+				_gen_queue.push_front(pos)
+				_gen_queued[pos] = true
+			continue
 		if job.slot.has("result") and job.slot["result"] != null:
 			_record_job_metrics(job.slot, job.lod)
 			_commit_queue.append(CommitItem.new(pos, job.slot["result"], job.version, job.config_revision, job.lod))
@@ -470,8 +477,12 @@ func _remesh_on_commit_neighbors(pos: Vector2i) -> void:
 			_queue_rebuild(pos + VoxelDefs.DIRS_4[index])
 
 
-func _queue_rebuild(pos: Vector2i) -> void:
-	if _pending.has(pos) or _gen_queued.has(pos):
+func _queue_rebuild(pos: Vector2i, preserve_if_pending := false) -> void:
+	if _pending.has(pos):
+		if preserve_if_pending:
+			_dirty[pos] = true
+		return
+	if _gen_queued.has(pos):
 		return
 	_dirty[pos] = true
 	_gen_queue.push_front(pos)
@@ -630,44 +641,63 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 	var changed_chunks: Dictionary = {}
 	var rebuild_chunks: Dictionary = {}
 	var water_shell: Array[Vector3i] = []
+	var interior_water: Dictionary = {}
 	var removed := 0
-	var min_y := maxi(center.y - safe_radius, 1)
-	var max_y := mini(center.y + safe_radius, VoxelDefs.WORLD_HEIGHT - 1)
-	for y in range(min_y, max_y + 1):
-		var dy := y - center.y
-		for z in range(center.z - safe_radius, center.z + safe_radius + 1):
-			var dz := z - center.z
-			for x in range(center.x - safe_radius, center.x + safe_radius + 1):
-				var dx := x - center.x
-				var distance_squared := dx * dx + dy * dy + dz * dz
-				if distance_squared > radius_squared:
-					continue
+	var shell_inner_squared := (safe_radius - 1) * (safe_radius - 1)
+	# Walk vertical runs so the horizontal chunk lookup and local data offset are
+	# computed once per column rather than once per removed voxel. This keeps the
+	# large nuke carve responsive without complicating edits with a coroutine.
+	for z in range(center.z - safe_radius, center.z + safe_radius + 1):
+		var dz := z - center.z
+		for x in range(center.x - safe_radius, center.x + safe_radius + 1):
+			var dx := x - center.x
+			var horizontal_squared := dx * dx + dz * dz
+			if horizontal_squared > radius_squared:
+				continue
+			var chunk_position := _chunk_for_block(Vector3i(x, center.y, z))
+			var chunk: Chunk = _chunks.get(chunk_position)
+			if chunk == null or chunk.lod:
+				continue
+			var local_x := x - chunk_position.x * VoxelDefs.CHUNK_SIZE
+			var local_z := z - chunk_position.y * VoxelDefs.CHUNK_SIZE
+			var column_index := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
+			var vertical_radius := floori(sqrt(float(radius_squared - horizontal_squared)))
+			var min_y := maxi(center.y - vertical_radius, 1)
+			var max_y := mini(center.y + vertical_radius, VoxelDefs.WORLD_HEIGHT - 1)
+			var column_changed := false
+			for y in range(min_y, max_y + 1):
 				var position := Vector3i(x, y, z)
-				var chunk_position := _chunk_for_block(position)
-				var chunk: Chunk = _chunks.get(chunk_position)
-				if chunk == null or chunk.lod:
-					continue
-				var index := _data_index(position)
+				var index := column_index + y * VoxelDefs.DATA_STRIDE_Y
 				var block_id: int = chunk.data[index]
+				if _blocks.is_water_id(block_id):
+					interior_water[position] = true
+					continue
 				if not _blocks.is_breakable(block_id):
 					continue
 				chunk.data[index] = BlockRegistry.BLOCK_AIR
-				_record_edit(position, BlockRegistry.BLOCK_AIR)
+				_record_edit_in_chunk(position, BlockRegistry.BLOCK_AIR, chunk_position)
 				removed += 1
+				column_changed = true
+				var dy := y - center.y
+				if horizontal_squared + dy * dy >= shell_inner_squared:
+					water_shell.append(position)
+			if column_changed:
 				changed_chunks[chunk_position] = true
 				rebuild_chunks[chunk_position] = true
-				_collect_edge_rebuilds(rebuild_chunks, chunk_position, position)
-				if distance_squared >= (safe_radius - 1) * (safe_radius - 1):
-					water_shell.append(position)
+				_collect_edge_rebuilds(rebuild_chunks, chunk_position, Vector3i(x, center.y, z))
 	for chunk_position in changed_chunks:
 		_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
 	for chunk_position in rebuild_chunks:
-		_queue_rebuild(chunk_position)
+		# Edge neighbors also need fresh face culling. Preserve this request if
+		# their current job already captured the pre-explosion neighbor snapshot.
+		_queue_rebuild(chunk_position, true)
 	for position in water_shell:
 		for offset in WATER_NEIGHBOR_OFFSETS:
 			if _blocks.is_water_id(get_block_world(position + offset)):
 				_seed_water(position)
 				break
+	for position in interior_water:
+		_seed_water(position)
 	return removed
 
 
@@ -685,8 +715,11 @@ func _collect_edge_rebuilds(rebuilds: Dictionary, chunk_position: Vector2i, bloc
 
 
 func _record_edit(block_position: Vector3i, block_id: int) -> void:
+	_record_edit_in_chunk(block_position, block_id, _chunk_for_block(block_position))
+
+
+func _record_edit_in_chunk(block_position: Vector3i, block_id: int, chunk_position: Vector2i) -> void:
 	_edited_blocks[block_position] = block_id
-	var chunk_position := _chunk_for_block(block_position)
 	var bucket = _edits_by_chunk.get(chunk_position)
 	if bucket == null:
 		bucket = {}
