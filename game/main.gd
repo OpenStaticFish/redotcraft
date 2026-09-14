@@ -599,10 +599,16 @@ func _on_weather_toggled() -> void:
 	_inventory_overlay.set_weather_state(_weather.is_raining())
 
 
-func _on_weather_changed(state: int) -> void:
-	set_status("Weather: %s" % ("Rain" if state == WeatherSystem.State.RAIN else "Sunny"))
+func _on_weather_changed(_state: int) -> void:
+	var label := "Sunny"
+	match _weather.get_precipitation():
+		WeatherSystem.Precipitation.RAIN:
+			label = "Rain"
+		WeatherSystem.Precipitation.SNOW:
+			label = "Snow"
+	set_status("Weather: %s" % label)
 	# Cold biomes hear the wind bed rather than rain, even while precipitating.
-	AudioManager.set_rain(state == WeatherSystem.State.RAIN and not _weather.is_snowing())
+	AudioManager.set_rain(_weather.is_raining() and not _weather.is_snowing())
 
 
 ## Lightning flash plus a thunder clap. Lightning is muted in cold biomes by

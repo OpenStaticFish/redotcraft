@@ -135,10 +135,6 @@ func trigger_lightning(strength: float = 1.0) -> void:
 	lightning_flash = maxf(lightning_flash, clampf(strength, 0.2, 1.0))
 
 
-func set_wind_strength(value: float) -> void:
-	wind_strength = maxf(value, 0.0)
-
-
 func set_time(hours: float) -> void:
 	time_hours = fposmod(hours, 24.0)
 	_apply()

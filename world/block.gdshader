@@ -20,8 +20,9 @@ void vertex() {
 	light_data = CUSTOM0;
 	texture_layer = CUSTOM1.x;
 	vec3 base_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	// COLOR.a carries the per-block wind weight (0 for solid blocks). The
-	// height anchor roots each block's base so only the canopy/leaf tips sway.
+	// COLOR.a carries the per-block wind weight (0 for solid blocks). VERTEX.y
+	// is world height here, so the anchor ramps wind in over the first 8 blocks
+	// and sways the canopy as a whole while ground clutter barely moves.
 	float wind = COLOR.a;
 	if (wind > 0.001 && wind_strength > 0.001) {
 		float anchor = clamp(VERTEX.y, 0.0, 8.0) * 0.125;

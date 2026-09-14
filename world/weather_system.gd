@@ -33,6 +33,9 @@ const LIGHTNING_MAX_INTERVAL := 16.0
 # Snow falls slowly and drifts; mist is a large, near-static soft quad field.
 const SNOW_FALL_SPEED := Vector3(0.25, -1.4, 0.15)
 const MIST_RISE_SPEED := Vector3(0.08, 0.02, 0.05)
+# Clear-sky cold biomes keep a light snowfall (this fraction of SNOW_PARTICLES);
+# the rain toggle ramps it to a full snowstorm.
+const SNOW_AMBIENT_RATIO := 0.35
 
 @export var transition_seconds := 2.0
 @export var rain_color := Color(0.62, 0.72, 0.88, 0.32)
@@ -162,11 +165,14 @@ func _update_biome() -> void:
 
 func _update_particles() -> void:
 	var precipitating := state == State.RAIN and not _covered
-	# Cold biomes keep a light snowfall even when clear; the rain toggle just
-	# thickens it (snow replaces rain rather than falling through it).
+	# Cold biomes keep a light snowfall even when clear; the rain toggle ramps
+	# it to a full snowstorm (snow replaces rain rather than falling through).
 	_snow.emitting = _cold and not _covered
+	_snow.amount_ratio = lerpf(SNOW_AMBIENT_RATIO, 1.0, rain_amount)
 	_rain.emitting = precipitating and not _cold
-	_mist.emitting = _wetland
+	# Ground mist shares the cover check: a swamp's fog should not follow the
+	# camera under a roof or into a cave.
+	_mist.emitting = _wetland and not _covered
 
 
 ## Thunder only during rain, above ground, and outside cold (snow) biomes.

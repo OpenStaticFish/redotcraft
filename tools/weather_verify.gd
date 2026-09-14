@@ -52,15 +52,26 @@ func _check_particles() -> void:
 
 	weather._cold = true
 	weather._wetland = false
+	weather._covered = false
+	weather.rain_amount = 0.0
 	weather._update_particles()
 	_expect(weather._snow.emitting, "snow field should emit in a cold biome")
 	_expect(not weather._rain.emitting, "rain field should stay off in a cold biome")
+	_expect(is_equal_approx(weather._snow.amount_ratio, WeatherSystemScript.SNOW_AMBIENT_RATIO),
+		"clear-sky cold biome should use ambient snow density")
+	weather.rain_amount = 1.0
+	weather._update_particles()
+	_expect(weather._snow.amount_ratio > 0.99, "a snowstorm should use full snow density")
 
 	weather._cold = false
 	weather._wetland = true
 	weather._update_particles()
 	_expect(weather._mist.emitting, "mist field should emit in a wetland biome")
 	_expect(not weather._snow.emitting, "snow field should stop outside a cold biome")
+	weather._covered = true
+	weather._update_particles()
+	_expect(not weather._mist.emitting, "mist should pause under cover")
+	weather._covered = false
 
 	weather.free()
 
@@ -104,10 +115,8 @@ func _check_lightning_flash() -> void:
 	_expect(float(day.lightning_flash) >= 0.79, "trigger_lightning should raise the flash")
 	day._process(0.1)
 	_expect(float(day.lightning_flash) < 0.8, "the lightning flash should decay")
-	day.set_wind_strength(0.0)
-	_expect(is_equal_approx(float(day.wind_strength), 0.0), "set_wind_strength should clamp to zero")
-	day.set_wind_strength(0.7)
-	_expect(is_equal_approx(float(day.wind_strength), 0.7), "set_wind_strength should store the value")
+	day.wind_strength = 0.7
+	_expect(is_equal_approx(float(day.wind_strength), 0.7), "DayNightCycle should expose the wind-strength hook")
 	day.free()
 
 
