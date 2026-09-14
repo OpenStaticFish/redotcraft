@@ -256,7 +256,7 @@ func find_spawn_position() -> Vector3:
 			for coarse: Vector2i in candidates:
 				var point := coarse * 8
 				var sample: Dictionary = _sampler.sample_point(point.x, point.y)
-				var biome: int = int(sample["biome_id"])
+				var biome: int = int(sample["dominant_biome_id"])
 				var height: float = float(sample["final_height"])
 				if _biomes.is_ocean_biome(biome) or biome in [BiomeCatalog.BEACH, BiomeCatalog.RIVER, BiomeCatalog.SWAMP]:
 					continue

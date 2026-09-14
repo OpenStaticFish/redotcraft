@@ -63,7 +63,7 @@ func _init() -> void:
 	_check(transition_share >= 0.08, "ecotones became too narrow (%.3f of samples)" % transition_share)
 	_check(transition_share <= 0.55, "ecotones swallowed biome interiors (%.3f of samples)" % transition_share)
 	_check(secondary_share >= 0.03, "ecotones no longer blend secondary surface/vegetation patches (%.3f)" % secondary_share)
-	_check(secondary_coherence >= 0.05, "secondary ecotone ownership fragmented into isolated columns (%.3f coherence)" % secondary_coherence)
+	_check(secondary_coherence >= 0.08, "secondary ecotone ownership fragmented into isolated columns (%.3f coherence)" % secondary_coherence)
 	for biome in TARGETS:
 		_check(centers.has(biome), "could not find interior for %s" % BiomeCatalog.new().name_for(biome))
 	if centers.size() == TARGETS.size():

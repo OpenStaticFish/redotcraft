@@ -83,13 +83,16 @@ const RIVER_FLOODPLAIN_CORRIDOR: float = 0.12
 # Meander warp, as fractions of macro_scale: wavelength and lateral amplitude.
 const RIVER_MEANDER_SCALE: float = 0.34
 const RIVER_MEANDER_AMOUNT: float = 0.12
-# Independent sparse peak fields raise effective continentalness offshore. A
-# large-scale channel creates substantial landmasses and a short-scale channel
-# adds islets; both fade before the mainland coast so continents remain intact.
+# Independent sparse peak fields raise effective continentalness offshore. Their
+# absolute scales are intentional: islands remain recognizable exploration-scale
+# landmarks when the continent-size slider changes. A large-scale channel creates
+# substantial landmasses and a short-scale channel adds islets; both fade before
+# the mainland coast so continents remain intact.
 const LARGE_ISLAND_SCALE: float = 720.0
 const SMALL_ISLAND_SCALE: float = 135.0
-# Ecotones use a slow independent field, rather than a per-column hash, so
-# secondary surfaces and vegetation arrive in broad organic patches.
+# Ecotones likewise use an absolute walk-scale: changing biome territory size
+# should not turn transition vegetation into continent-sized monocultures. The
+# independent field avoids per-column hashes and forms broad organic patches.
 const ECOTONE_PATCH_SCALE: float = 160.0
 # build_field has four successively smaller grids. Float64 packed arrays retain
 # point-query precision while making every coordinate's neighbourhood independent
@@ -458,6 +461,11 @@ func sample_debug_point(mode: String, x: int, z: int) -> Dictionary:
 		return {"temperature": climate.x}
 	if mode == "moisture":
 		return {"moisture": climate.y}
+	# The cheap climate modes above intentionally use pre-erosion terrain. The
+	# biome map must match generated ecotone ownership, whose terrain affinity is
+	# based on final height, so pay for the exact query only on this mode.
+	height = _final_height_at(x, z)
+	climate = _climate_at(x, z, height, river_value)
 	var choice := _biome_choice(climate.x, climate.y)
 	var profile_position := _profile_position_at(x, z, continental)
 	var profile := clampi(floori(profile_position), TerrainProfileCatalog.PLAINS, TerrainProfileCatalog.RIDGED_MOUNTAINS)
@@ -942,8 +950,8 @@ func _climate_at(x: int, z: int, height: float, river_value: float) -> Vector2:
 
 ## x=closest climate biome, y=second closest, z=blend weight toward y (0..255).
 ## ChunkTerrainData stores both choices for continuous tint blending. Discrete
-## surfaces and decorations use the primary biome so borders form broad,
-## coherent ecotones instead of one-block checkerboards.
+## surfaces and decorations use the coherent dominant biome chosen by
+## _ecotone_choice() instead of one-block dithering.
 func _biome_choice(temperature_value: float, moisture_value: float) -> Vector3i:
 	var first: int = BiomeCatalog.PLAINS
 	var second: int = BiomeCatalog.FOREST
