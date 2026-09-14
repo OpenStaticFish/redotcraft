@@ -77,6 +77,12 @@ func _style_static() -> void:
 	_grid.add_theme_constant_override("v_separation", 8)
 	_hint.add_theme_color_override("font_color", UITheme.MUTED)
 	_hint.add_theme_font_size_override("font_size", 13)
+	_refresh_hint()
+
+
+## The close hint follows the live inventory binding.
+func _refresh_hint() -> void:
+	_hint.text = "Press %s or ESC to close" % GameConfig.input_key("inventory")
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -91,6 +97,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func open_panel() -> void:
 	_apply_responsive_layout()
+	_refresh_hint()
 	visible = true
 	Motion.dim_in(_dim)
 	Motion.pop_in(_panel)

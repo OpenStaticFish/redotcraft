@@ -207,11 +207,21 @@ func _restyle_buttons() -> void:
 func _restyle_footer() -> void:
 	_footer.add_theme_color_override("font_color", UITheme.FAINT)
 	_footer.add_theme_font_size_override("font_size", 13)
-	_footer.text = "WASD move · SPACE jump · double-tap SPACE fly · E inventory · F3 worldgen map · ESC pause"
+	_footer.text = "%s%s%s%s move · %s jump · double-tap %s fly · %s inventory · %s worldgen map · ESC pause" % [
+		GameConfig.input_key("move_forward"),
+		GameConfig.input_key("move_left"),
+		GameConfig.input_key("move_backward"),
+		GameConfig.input_key("move_right"),
+		GameConfig.input_key("jump"),
+		GameConfig.input_key("jump"),
+		GameConfig.input_key("inventory"),
+		GameConfig.input_key("debug_worldgen"),
+	]
 
 
 func _on_panel_closed() -> void:
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	_restyle_footer()
 	if _panel_focus_return != null and is_instance_valid(_panel_focus_return):
 		_panel_focus_return.grab_focus()
 

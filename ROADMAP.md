@@ -185,7 +185,7 @@ Current state: the TerraForged-inspired staged pipeline is live under `world/wor
 - [ ] LAN/co-op multiplayer — authoritative host, chunk streaming to peers, player-state sync, and a join/lobby UI. Nothing is networked today; `VoxelWorld`'s main-thread scene mutation, worker chunk jobs, and per-edit versioning are the design constraints
 
 ## Accessibility and input
-- [ ] Key rebinding — remap and persist every `project.godot` `[input]` action through `GameConfig.settings`; the InputMap is hardcoded today
+- [x] Key rebinding — `GameConfig.settings["input_bindings"]` stores one physical key per action and persists it in `settings.cfg`; `apply_input_bindings()` rewrites the InputMap at load and `set_input_binding()` applies remaps live, with `ProjectSettings` keeping the project defaults for "Reset to Defaults". Settings gained a Controls category whose rows cover every non-`ui_*` `[input]` action (known actions get labels and groups, unknown ones are appended), capture a key on click (Esc or a mouse click cancels), summarize shared keys instead of rejecting the intentional Space/Shift pairs, and update the menu, pause, HUD status, and inventory hints from the live bindings. `tools/input_rebind_verify.gd` covers action coverage, apply/reset, conflict lookup, the settings.cfg round-trip, and the panel's capture flow
 - [ ] Gamepad support — joypad bindings, dead zones, and button prompts; there are no joypad events in `project.godot`
 - [ ] Motion and camera options — invert Y, separate X/Y sensitivity, and a reduced-motion toggle that disables `ui/motion.gd` tweens
 - [ ] UI scale and text size — scale HUD and menus independently of resolution

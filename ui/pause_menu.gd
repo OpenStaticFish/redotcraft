@@ -52,6 +52,30 @@ func _style_static() -> void:
 	UITheme.style_button_ghost(_quit_button)
 	_hint.add_theme_color_override("font_color", UITheme.MUTED)
 	_hint.add_theme_font_size_override("font_size", 13)
+	_refresh_hint()
+
+
+## Control hints follow the active bindings, so a remap in Settings is visible
+## the next time the menu opens.
+func _refresh_hint() -> void:
+	var jump_key := GameConfig.input_key("jump")
+	var sprint_key := GameConfig.input_key("sprint")
+	var descend_key := GameConfig.input_key("fly_down")
+	var vertical := (
+		"%s sprint / descend" % sprint_key
+		if sprint_key == descend_key
+		else "%s sprint   %s descend" % [sprint_key, descend_key]
+	)
+	_hint.text = "%s%s%s%s move   %s jump   double-tap %s to fly\n%s   %s fast fly   LMB mine   RMB place\n1-9 / 0 or wheel select block" % [
+		GameConfig.input_key("move_forward"),
+		GameConfig.input_key("move_left"),
+		GameConfig.input_key("move_backward"),
+		GameConfig.input_key("move_right"),
+		jump_key,
+		jump_key,
+		vertical,
+		GameConfig.input_key("fly_boost"),
+	]
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -66,6 +90,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func open_menu() -> void:
+	_refresh_hint()
 	visible = true
 	get_tree().paused = true
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)

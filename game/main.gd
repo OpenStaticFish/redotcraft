@@ -85,7 +85,13 @@ func _ready() -> void:
 	_inventory_overlay.weather_toggled.connect(_on_weather_toggled)
 	player.set_selected_block(HOTBAR[selected_slot])
 	_update_inventory_display()
-	set_status("WASD move   double-tap SPACE to fly   ESC pause")
+	set_status("%s%s%s%s move   double-tap %s to fly   ESC pause" % [
+		GameConfig.input_key("move_forward"),
+		GameConfig.input_key("move_left"),
+		GameConfig.input_key("move_backward"),
+		GameConfig.input_key("move_right"),
+		GameConfig.input_key("jump"),
+	])
 	var shadow_capture := ShadowCaptureScript.new()
 	shadow_capture.name = "ShadowCapture"
 	shadow_capture.state_provider = _get_shadow_capture_state
