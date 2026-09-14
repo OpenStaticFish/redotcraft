@@ -15,6 +15,10 @@ var _opacity: PackedByteArray = PackedByteArray()
 var _cross: PackedByteArray = PackedByteArray()
 var _leaves: PackedByteArray = PackedByteArray()
 var _tinted: PackedByteArray = PackedByteArray()
+# Per-block wind weight written into vertex color alpha and read by the block
+# shader's wind sway. Leaves sway most; cross foliage sways a little; solid
+# blocks are 0 so the shader can skip them.
+var _wind: PackedFloat32Array = PackedFloat32Array()
 var _water_level: PackedByteArray = PackedByteArray()
 var _layer_top: PackedInt32Array = PackedInt32Array()
 var _layer_bottom: PackedInt32Array = PackedInt32Array()
@@ -322,7 +326,7 @@ func _append_lod_block_face(face: int, x: int, y: int, z: int, block_id: int, ti
 		result.verts.append(Vector3(x + offset.x, y + offset.y, z + offset.z))
 		result.normals.append(Vector3(normal))
 		result.uvs.append(face_uvs[corner])
-		result.colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, 1.0))
+		result.colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, _wind[block_id]))
 		result.layers.push_back(float(layer))
 		result.light.append_array(PackedFloat32Array([0.0, 0.0, 0.0, 1.0]))
 	result.indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
@@ -370,7 +374,7 @@ func make_block_mesh(block_id: int) -> ArrayMesh:
 			verts.append(Vector3(offset.x, offset.y, offset.z) - Vector3(0.5, 0.5, 0.5))
 			normals.append(Vector3(normal))
 			uvs.append(face_uvs[corner])
-			colors.append(Color(shade, shade, shade, 1.0))
+			colors.append(Color(shade, shade, shade, _wind[block_id]))
 			light.append_array(PackedFloat32Array([0.0, 0.0, 0.0, 1.0]))
 			layers.push_back(float(layer))
 		indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
@@ -405,6 +409,7 @@ func _build_light_tables() -> void:
 	_cross.resize(256)
 	_leaves.resize(256)
 	_tinted.resize(256)
+	_wind.resize(256)
 	_water_level.resize(256)
 	_layer_top.resize(256)
 	_layer_bottom.resize(256)
@@ -417,6 +422,12 @@ func _build_light_tables() -> void:
 		_cross[id] = 1 if _blocks.has_flag(id, BlockRegistry.FLAG_CROSS) else 0
 		_leaves[id] = 1 if _blocks.has_flag(id, BlockRegistry.FLAG_LEAVES) else 0
 		_tinted[id] = 1 if _blocks.has_flag(id, BlockRegistry.FLAG_TINTED) else 0
+		if _blocks.has_flag(id, BlockRegistry.FLAG_LEAVES):
+			_wind[id] = 1.0
+		elif _blocks.has_flag(id, BlockRegistry.FLAG_CROSS) and not _blocks.has_flag(id, BlockRegistry.FLAG_EMISSIVE):
+			_wind[id] = 0.6
+		else:
+			_wind[id] = 0.0
 		_water_level[id] = _blocks.water_level(id)
 		if id == BlockRegistry.BLOCK_AIR or _blocks.is_valid_id(id):
 			_layer_top[id] = _blocks.layer_for(id, 0)
@@ -880,7 +891,7 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 				g_sum += int(volume.block_g[light_index])
 				b_sum += int(volume.block_b[light_index])
 		var light := shade * float(VoxelDefs.AO_LEVELS[3 - occlusion])
-		result.colors.append(Color(light * tint.r, light * tint.g, light * tint.b, 1.0))
+		result.colors.append(Color(light * tint.r, light * tint.g, light * tint.b, _wind[block_id]))
 		var inverse := 1.0 / (float(maxi(light_count, 1)) * float(MAX_LEVEL))
 		result.light.push_back(float(r_sum) * inverse)
 		result.light.push_back(float(g_sum) * inverse)
@@ -905,7 +916,7 @@ func _append_cross_block(origin: Vector3, block_id: int, block_light: Color, sky
 			result.verts.append(origin + offset)
 			result.normals.append(Vector3.UP)
 			result.uvs.append(CROSS_UVS[corner])
-			result.colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, 1.0))
+			result.colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, _wind[block_id]))
 			result.layers.push_back(float(layer))
 			result.light.push_back(block_light.r)
 			result.light.push_back(block_light.g)

@@ -51,9 +51,12 @@ func _verify() -> void:
 	manager.play_ui("not_a_cue")
 	manager.play_footstep("water", Vector3.ZERO)
 	manager.set_rain(true)
+	manager.set_wind(true)
+	manager.play_thunder()
 	manager.apply_volumes()
-	if manager._rain_tween != null and manager._rain_tween.is_valid():
-		manager._rain_tween.kill()
+	for tween in manager._bed_tweens.values():
+		if tween != null and tween.is_valid():
+			tween.kill()
 
 	for child in get_root().get_children():
 		if child is AudioStreamPlayer3D:
@@ -81,6 +84,8 @@ func _expected_bases() -> Array[String]:
 	for kind in ["click", "hover", "confirm", "cancel"]:
 		bases.append("res://assets/audio/sfx/ui_%s" % kind)
 	bases.append("res://assets/audio/ambient/rain_loop")
+	bases.append("res://assets/audio/ambient/wind_loop")
+	bases.append("res://assets/audio/ambient/thunder_1")
 	return bases
 
 

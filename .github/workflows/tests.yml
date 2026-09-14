@@ -62,6 +62,7 @@ jobs:
         run: |
           bash .github/scripts/run_checks.sh \
             tools/audio_verify.gd \
+            tools/weather_verify.gd \
             tools/ui_flow_verify.gd \
             tools/ui_scale_verify.gd \
             tools/input_rebind_verify.gd \

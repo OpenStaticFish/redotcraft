@@ -27,8 +27,13 @@ const WORLD_POOL_SIZE := 12
 const FOOTSTEP_DB := -13.0
 const BREAK_DB := -9.0
 const PLACE_DB := -11.0
-const RAIN_DB := -20.0
+const RAIN_DB := -12.0
+const WIND_DB := -15.0
+const THUNDER_DB := -4.0
 const SILENT_DB := -80.0
+# Weather beds loop for as long as their state holds; thunder is a one-shot.
+const AMBIENT_BEDS := {"rain": "rain_loop.ogg", "wind": "wind_loop.ogg"}
+const THUNDER_STREAM := "thunder_1.ogg"
 # Submerging the camera muffles the whole mix; the cutoff is restored when the
 # camera surfaces. A low-pass on Master keeps this independent of every cue.
 const SURFACE_CUTOFF_HZ := 20500.0
@@ -41,8 +46,9 @@ var _streams := {}
 var _missing := {}
 var _block_materials := {}
 var _pool_cursor := 0
-var _rain_player: AudioStreamPlayer
-var _rain_tween: Tween
+var _bed_players: Dictionary = {}
+var _bed_tweens: Dictionary = {}
+var _thunder_player: AudioStreamPlayer
 var _underwater_filter: AudioEffectLowPassFilter
 var _underwater_active := false
 var _rng := RandomNumberGenerator.new()
@@ -79,8 +85,11 @@ func _preload_streams() -> void:
 	for kind in UI_SOUNDS:
 		total += 1
 		_get_stream("%s/ui_%s.ogg" % [SFX_DIR, kind])
+	for bed_file in AMBIENT_BEDS.values():
+		total += 1
+		_get_stream("%s/%s" % [AMBIENT_DIR, bed_file])
 	total += 1
-	_get_stream("%s/rain_loop.ogg" % AMBIENT_DIR)
+	_get_stream("%s/%s" % [AMBIENT_DIR, THUNDER_STREAM])
 	print("AudioManager: %d recorded cues loaded" % total)
 
 
@@ -151,22 +160,54 @@ func play_ui(kind: String) -> void:
 	_play_in_pool(_ui_pool, stream, 0.0)
 
 
-## Fades the rain bed in or out. The CC0 rain loop is an OGG, so looping is
-## enabled on the stream at first use.
+## Fades the rain bed in or out.
 func set_rain(active: bool) -> void:
-	if _rain_player == null or not is_inside_tree():
+	_set_bed("rain", active, RAIN_DB)
+
+
+## Fades the cold-biome wind bed in or out. Snow and highlands share it; the
+## caller decides when the camera has entered or left a cold biome.
+func set_wind(active: bool) -> void:
+	_set_bed("wind", active, WIND_DB)
+
+
+## One-shot thunder clap for a lightning strike. Played non-positionally on the
+## Ambient bus with a small random pitch so repeated strikes do not phase.
+func play_thunder(volume_scale: float = 1.0) -> void:
+	if _thunder_player == null or not is_inside_tree():
 		return
-	var stream := _get_stream("%s/rain_loop.ogg" % AMBIENT_DIR)
+	var stream := _get_stream("%s/%s" % [AMBIENT_DIR, THUNDER_STREAM])
+	if stream == null:
+		return
+	_thunder_player.stream = stream
+	_thunder_player.pitch_scale = _rng.randf_range(0.92, 1.06)
+	_thunder_player.volume_db = THUNDER_DB + linear_to_db(clampf(volume_scale, 0.05, 1.0))
+	_thunder_player.play()
+
+
+## Generic looping weather bed: loads the recorded OGG, starts it silent on
+## first use, then tweens to the target volume (or silence when inactive).
+func _set_bed(bed: String, active: bool, active_db: float) -> void:
+	if not AMBIENT_BEDS.has(bed) or not is_inside_tree():
+		return
+	var player: AudioStreamPlayer = _bed_players.get(bed)
+	if player == null:
+		return
+	var stream := _get_stream("%s/%s" % [AMBIENT_DIR, AMBIENT_BEDS[bed]])
+	if stream == null:
+		return
 	if stream is AudioStreamOggVorbis:
 		stream.loop = true
-	_rain_player.stream = stream
-	if not _rain_player.playing:
-		_rain_player.volume_db = SILENT_DB
-		_rain_player.play()
-	if _rain_tween != null and _rain_tween.is_valid():
-		_rain_tween.kill()
-	_rain_tween = create_tween()
-	_rain_tween.tween_property(_rain_player, "volume_db", RAIN_DB if active else SILENT_DB, 1.5)
+	player.stream = stream
+	if not player.playing:
+		player.volume_db = SILENT_DB
+		player.play()
+	var tween: Tween = _bed_tweens.get(bed)
+	if tween != null and tween.is_valid():
+		tween.kill()
+	tween = create_tween()
+	_bed_tweens[bed] = tween
+	tween.tween_property(player, "volume_db", active_db if active else SILENT_DB, 1.5)
 
 
 ## Muffles the mix while the camera is submerged and restores it on surfacing.
@@ -228,10 +269,18 @@ func _build_pools() -> void:
 		player.bus = BUS_SFX
 		add_child(player)
 		_ui_pool.append(player)
-	_rain_player = AudioStreamPlayer.new()
-	_rain_player.bus = BUS_AMBIENT
-	_rain_player.volume_db = SILENT_DB
-	add_child(_rain_player)
+	for bed in AMBIENT_BEDS.keys():
+		var player := AudioStreamPlayer.new()
+		player.name = "Bed_%s" % bed
+		player.bus = BUS_AMBIENT
+		player.volume_db = SILENT_DB
+		add_child(player)
+		_bed_players[bed] = player
+	_thunder_player = AudioStreamPlayer.new()
+	_thunder_player.name = "Thunder"
+	_thunder_player.bus = BUS_AMBIENT
+	_thunder_player.volume_db = SILENT_DB
+	add_child(_thunder_player)
 
 
 func _variation(prefix: String, variations: int) -> AudioStream:

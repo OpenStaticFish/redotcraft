@@ -71,6 +71,14 @@ const UNDERWATER_VOLUMETRIC_SCALE := 1.4
 const UNDERWATER_LIGHT_FLOOR := 0.32
 const UNDERWATER_CAUSTIC_STRENGTH := 0.9
 const UNDERWATER_FALLBACK_COLOR := Color(0.06, 0.24, 0.36)
+# Lightning is a short additive flash on the sun/ambient and fog; `WeatherSystem`
+# schedules the strikes and `Main` calls trigger_lightning().
+const LIGHTNING_DECAY := 2.6
+const LIGHTNING_AMBIENT_GAIN := 2.4
+const LIGHTNING_SUN_GAIN := 1.6
+const LIGHTNING_COLOR := Color(0.85, 0.9, 1.0)
+# Wind sway is a vertex displacement in block.gdshader; rain adds gustiness.
+const WIND_RAIN_SCALE := 1.8
 
 @export var sun_path := NodePath("../Sun")
 @export var fill_light_path := NodePath("../SkyFill")
@@ -96,6 +104,8 @@ var base_contrast := 1.04
 var underwater_amount := 0.0
 var underwater_depth := 0.0
 var underwater_color := UNDERWATER_FALLBACK_COLOR
+var lightning_flash := 0.0
+var wind_strength := 0.55
 var _sky_material: ShaderMaterial
 var _moon_phase := 0.5
 
@@ -114,7 +124,15 @@ func _process(delta: float) -> void:
 		var step := minf(delta, 0.25)
 		time_hours = fposmod(time_hours + step * 24.0 / day_length_seconds, 24.0)
 		_moon_phase = fposmod(_moon_phase + step / day_length_seconds / LUNAR_CYCLE_DAYS, 1.0)
+	if lightning_flash > 0.0:
+		lightning_flash = move_toward(lightning_flash, 0.0, delta * LIGHTNING_DECAY)
 	_apply()
+
+
+## Raises a lightning flash; higher values are kept so overlapping strikes do
+## not cancel. LIGHTNING_DECAY fades it back to zero in a few frames.
+func trigger_lightning(strength: float = 1.0) -> void:
+	lightning_flash = maxf(lightning_flash, clampf(strength, 0.2, 1.0))
 
 
 func set_time(hours: float) -> void:
@@ -170,6 +188,14 @@ func _apply() -> void:
 	environment.adjustment_enabled = true
 	environment.adjustment_saturation = base_saturation * lerpf(NIGHT_SATURATION, 1.0, day_factor)
 	environment.adjustment_contrast = base_contrast * lerpf(NIGHT_CONTRAST, 1.0, day_factor)
+	# Lightning lifts the sun, ambient, and fog toward a cool white for a few
+	# frames. Applied after the time grade so it reads as a flash, not a grade.
+	if lightning_flash > 0.001:
+		var flash := lightning_flash
+		_sun.light_energy += flash * LIGHTNING_SUN_GAIN
+		environment.ambient_light_color = environment.ambient_light_color.lerp(LIGHTNING_COLOR, flash * 0.7)
+		environment.ambient_light_energy += flash * LIGHTNING_AMBIENT_GAIN
+		environment.fog_light_color = environment.fog_light_color.lerp(LIGHTNING_COLOR, flash * 0.4)
 	# Underwater grading: darken sun/ambient, thicken fog, and project caustics
 	# only while submerged. The depth mix keeps shallow water readable and the
 	# abyss genuinely dark.
@@ -185,6 +211,7 @@ func _apply() -> void:
 		if _fill_light:
 			_fill_light.light_energy *= lerpf(1.0, UNDERWATER_LIGHT_FLOOR, submerged)
 	RenderingServer.global_shader_parameter_set("sky_light_strength", lerpf(NIGHT_SKY_LIGHT, 1.0, day_factor) * weather_factor)
+	RenderingServer.global_shader_parameter_set("wind_strength", wind_strength * lerpf(1.0, WIND_RAIN_SCALE, weather_dim))
 	RenderingServer.global_shader_parameter_set("underwater_caustics",
 		underwater_amount * (1.0 - underwater_depth) * UNDERWATER_CAUSTIC_STRENGTH * day_factor * weather_factor)
 	if _clouds:

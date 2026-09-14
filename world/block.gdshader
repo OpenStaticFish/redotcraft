@@ -7,6 +7,9 @@ uniform float min_light : hint_range(0.0, 1.0) = 0.05;
 // Camera-submerged strength (0 above water), driven by DayNightCycle. Caustics
 // are projected from the water surface onto sky-lit upward faces.
 global uniform float underwater_caustics;
+// Wind sway strength (0 disables), driven by DayNightCycle. Only vertices whose
+// COLOR.a is set by the mesher (leaves and cross foliage) move.
+global uniform float wind_strength;
 
 varying vec4 light_data;
 varying float texture_layer;
@@ -16,6 +19,19 @@ varying float up_face;
 void vertex() {
 	light_data = CUSTOM0;
 	texture_layer = CUSTOM1.x;
+	vec3 base_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	// COLOR.a carries the per-block wind weight (0 for solid blocks). VERTEX.y
+	// is world height here, so the anchor ramps wind in over the first 8 blocks
+	// and sways the canopy as a whole while ground clutter barely moves.
+	float wind = COLOR.a;
+	if (wind > 0.001 && wind_strength > 0.001) {
+		float anchor = clamp(VERTEX.y, 0.0, 8.0) * 0.125;
+		float phase = base_world.x * 0.35 + base_world.z * 0.3;
+		float sway = sin(phase + TIME * 1.5) + 0.5 * sin(phase * 1.7 + TIME * 2.3);
+		float cross = cos(phase * 0.9 + TIME * 1.2);
+		VERTEX.x += wind * wind_strength * anchor * sway * 0.06;
+		VERTEX.z += wind * wind_strength * anchor * cross * 0.05;
+	}
 	world_position = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	up_face = step(0.5, NORMAL.y);
 }
