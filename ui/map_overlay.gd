@@ -82,6 +82,7 @@ var _position_label: Label
 func _ready() -> void:
 	_build_ui()
 	visible = false
+	get_viewport().size_changed.connect(_on_viewport_resized)
 
 
 func initialize(world: VoxelWorld, player: Player) -> void:
@@ -100,6 +101,9 @@ func open() -> void:
 	Motion.pop_in(_panel)
 	_focus_player()
 	_update_header()
+	# The map surface is the modal's focus owner so ui_cancel/focus routing has
+	# a concrete target, matching the other modals.
+	_map_clip.grab_focus()
 	_request_raster()
 
 
@@ -312,15 +316,27 @@ func _update_caption() -> void:
 
 ## A raster is stale when the mode changed, the view outgrew its coverage, or
 ## the view center drifted past the margin the raster was expanded with.
+##
+## The span check compares against the span the request will actually bake, not
+## the raw target: the world API quantizes pixels to whole strides, so the
+## produced span is always MAP_SAMPLES * stride. Comparing the unquantized
+## target would never converge at deep zoom (where one stride step exceeds the
+## tolerance) and would rebuild the texture every frame.
 func _needs_raster() -> bool:
 	if not _has_raster:
 		return true
 	if _baked_mode != MAP_MODES[_mode_index]:
 		return true
-	var desired := _view_span * RASTER_MARGIN
-	if absf(_baked_span - desired) > desired * RASTER_SPAN_TOLERANCE:
+	var quantized := float(MAP_SAMPLES * _raster_stride())
+	if absf(_baked_span - quantized) > quantized * RASTER_SPAN_TOLERANCE:
 		return true
 	return (_view_center - _baked_center).length() > _baked_span * RASTER_PAN_THRESHOLD
+
+
+## Stride the next request will ask for; shared so the staleness check and the
+## request can never disagree about the baked span.
+func _raster_stride() -> int:
+	return clampi(roundi(_view_span * RASTER_MARGIN / float(MAP_SAMPLES)), 1, 32)
 
 
 ## Starts or polls the worker raster for the current view; the world API keeps
@@ -333,7 +349,7 @@ func _request_raster() -> void:
 		_caption.text = "request_debug_map() unavailable on VoxelWorld"
 		return
 	var center := Vector2i(roundi(_view_center.x), roundi(_view_center.y))
-	var stride := clampi(roundi(_view_span * RASTER_MARGIN / float(MAP_SAMPLES)), 1, 32)
+	var stride := _raster_stride()
 	var payload: Variant = _world.call(
 		"request_debug_map", MAP_MODES[_mode_index], center, MAP_SAMPLES, stride, MAP_DETAIL)
 	if not (payload is Dictionary):
@@ -344,30 +360,26 @@ func _request_raster() -> void:
 		_map_pending = true
 		_caption.text = "%s sampling…" % MAP_MODES[_mode_index].to_upper()
 		return
-	var pixels: Variant = dictionary.get("pixels", PackedColorArray())
-	var width := int(dictionary.get("width", 0))
-	var height := int(dictionary.get("height", 0))
-	if not (pixels is PackedColorArray) or width <= 0 or height <= 0 \
-			or (pixels as PackedColorArray).size() < width * height:
+	var texture := MapView.texture_from_payload(dictionary)
+	if texture == null:
 		_map_pending = false
 		_caption.text = "invalid map payload"
 		return
 	_map_pending = false
-	var image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, MapView.to_rgba8(pixels))
-	_map_image.texture = ImageTexture.create_from_image(image)
+	_map_image.texture = texture
+	var payload_stride := int(dictionary.get("stride", stride))
 	_baked_center = Vector2(center)
-	_baked_span = float(width * int(dictionary.get("stride", stride)))
+	_baked_span = float(int(dictionary.get("width", 0)) * payload_stride)
 	_baked_mode = MAP_MODES[_mode_index]
-	_baked_stride = int(dictionary.get("stride", stride))
+	_baked_stride = payload_stride
 	_has_raster = true
 	_caption_span = 0
 	_update_caption()
-	if _player != null:
-		_position_label.text = "%s  ·  XYZ %d %d %d" % [
-			_world.get_biome_name(_player.global_position),
-			floori(_player.global_position.x),
-			floori(_player.global_position.y),
-			floori(_player.global_position.z)]
+	_position_label.text = "%s  ·  XYZ %d %d %d" % [
+		_world.get_biome_name(_player.global_position),
+		floori(_player.global_position.x),
+		floori(_player.global_position.y),
+		floori(_player.global_position.z)]
 	_update_view()
 
 
@@ -385,6 +397,12 @@ func _apply_size() -> void:
 	var available := minf(viewport.x - MAP_PADDING_X, viewport.y - MAP_PADDING_Y)
 	var side := clampf(floorf(maxf(available, MAP_MIN_SIZE) / 16.0) * 16.0, MAP_MIN_SIZE, MAP_MAX_SIZE)
 	_map_clip.custom_minimum_size = Vector2(side, side)
+
+
+## Re-fits the frame when the window changes size while the atlas is open.
+func _on_viewport_resized() -> void:
+	if visible:
+		_apply_size()
 
 
 func _build_ui() -> void:
@@ -445,6 +463,7 @@ func _build_ui() -> void:
 	_map_clip.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_map_clip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_map_clip.clip_contents = true
+	_map_clip.focus_mode = Control.FOCUS_ALL
 	_map_clip.mouse_filter = Control.MOUSE_FILTER_STOP
 	_map_clip.mouse_default_cursor_shape = Control.CURSOR_MOVE
 	frame.add_child(_map_clip)
@@ -455,7 +474,7 @@ func _build_ui() -> void:
 	_map_image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_map_image.stretch_mode = TextureRect.STRETCH_SCALE
 	_map_image.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	_map_image.texture = _make_placeholder_texture()
+	_map_image.texture = MapView.placeholder_texture()
 	_map_clip.add_child(_map_image)
 
 	_marker = Node2D.new()
@@ -512,21 +531,3 @@ func _build_ui() -> void:
 	hint.add_theme_color_override("font_color", UITheme.FAINT)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(hint)
-
-
-func _make_placeholder_texture() -> ImageTexture:
-	var even := Color(0.05, 0.09, 0.10, 1.0)
-	var odd := Color(0.07, 0.12, 0.13, 1.0)
-	var bytes := PackedByteArray()
-	bytes.resize(16 * 16 * 4)
-	var write := 0
-	for y in 16:
-		for x in 16:
-			var color := even if (((x >> 2) + (y >> 2)) % 2 == 0) else odd
-			bytes[write] = int(color.r8)
-			bytes[write + 1] = int(color.g8)
-			bytes[write + 2] = int(color.b8)
-			bytes[write + 3] = 255
-			write += 4
-	var image := Image.create_from_data(16, 16, false, Image.FORMAT_RGBA8, bytes)
-	return ImageTexture.create_from_image(image)

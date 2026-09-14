@@ -800,9 +800,11 @@ func request_debug_map(mode: String, center: Vector2i, sample_size: int, stride:
 	if _debug_task < 0:
 		_debug_key = key
 		_debug_slot = {}
+		# The F3 overlay's small rasters stay ahead of streaming; the larger
+		# HUD/atlas rasters queue normally so they cannot stall chunk jobs.
 		_debug_task = WorkerThreadPool.add_task(
 			_run_debug_map_job.bind(mode, center, resolution, safe_stride, _debug_slot),
-			true,
+			resolution <= 32,
 			"worldgen_debug_map")
 	return {"pending": true, "width": resolution, "height": resolution}
 

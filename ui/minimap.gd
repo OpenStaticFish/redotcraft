@@ -146,20 +146,18 @@ func _rebuild_map() -> void:
 		_map_pending = true
 		_caption.text = "%s sampling…" % MAP_MODES[_mode_index].to_upper()
 		return
-	var pixels: Variant = dictionary.get("pixels", PackedColorArray())
-	var width := int(dictionary.get("width", 0))
-	var height := int(dictionary.get("height", 0))
-	if not (pixels is PackedColorArray) or width <= 0 or height <= 0 \
-			or (pixels as PackedColorArray).size() < width * height:
+	var texture := MapView.texture_from_payload(dictionary)
+	if texture == null:
 		_map_pending = false
 		_caption.text = "invalid map payload"
 		return
 	_map_pending = false
 	_map_center = center
-	var image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, MapView.to_rgba8(pixels))
-	_map_rect.texture = ImageTexture.create_from_image(image)
+	_map_rect.texture = texture
 	var payload_stride := clampi(int(dictionary.get("stride", MAP_STRIDE)), 1, 64)
-	_map_span = Vector2i(width * payload_stride, height * payload_stride)
+	_map_span = Vector2i(
+		int(dictionary.get("width", 0)) * payload_stride,
+		int(dictionary.get("height", 0)) * payload_stride)
 	_caption.text = "%d×%d b · 1 px = %d b" % [_map_span.x, _map_span.y, payload_stride]
 	_update_marker()
 
@@ -253,7 +251,7 @@ func _build_ui() -> void:
 	_map_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_map_rect.stretch_mode = TextureRect.STRETCH_SCALE
 	_map_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	_map_rect.texture = _make_placeholder_texture()
+	_map_rect.texture = MapView.placeholder_texture()
 	frame.add_child(_map_rect)
 
 	_marker = Node2D.new()
@@ -294,24 +292,6 @@ func _build_ui() -> void:
 	box.add_child(_caption)
 
 	_ignore_mouse_recursively(root)
-
-
-func _make_placeholder_texture() -> ImageTexture:
-	var even := Color(0.05, 0.09, 0.10, 1.0)
-	var odd := Color(0.07, 0.12, 0.13, 1.0)
-	var bytes := PackedByteArray()
-	bytes.resize(16 * 16 * 4)
-	var write := 0
-	for y in 16:
-		for x in 16:
-			var color := even if (((x >> 2) + (y >> 2)) % 2 == 0) else odd
-			bytes[write] = int(color.r8)
-			bytes[write + 1] = int(color.g8)
-			bytes[write + 2] = int(color.b8)
-			bytes[write + 3] = 255
-			write += 4
-	var image := Image.create_from_data(16, 16, false, Image.FORMAT_RGBA8, bytes)
-	return ImageTexture.create_from_image(image)
 
 
 ## Nothing in this layer may intercept the mouse: the root control covers the

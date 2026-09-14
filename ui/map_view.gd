@@ -44,3 +44,42 @@ static func elide(text: String, limit: int) -> String:
 	if text.length() <= limit:
 		return text
 	return text.substr(0, limit) + "…"
+
+
+## Validates a finished `request_debug_map` payload and converts its pixels to
+## a texture. Returns null while the request is still pending or the payload is
+## malformed; both map surfaces share the conversion so the contract lives in
+## one place.
+static func texture_from_payload(payload: Variant) -> ImageTexture:
+	if not (payload is Dictionary):
+		return null
+	var dictionary: Dictionary = payload
+	if bool(dictionary.get("pending", false)):
+		return null
+	var pixels: Variant = dictionary.get("pixels", PackedColorArray())
+	var width := int(dictionary.get("width", 0))
+	var height := int(dictionary.get("height", 0))
+	if not (pixels is PackedColorArray) or width <= 0 or height <= 0 \
+			or (pixels as PackedColorArray).size() < width * height:
+		return null
+	var image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, to_rgba8(pixels))
+	return ImageTexture.create_from_image(image)
+
+
+## Checkerboard stand-in shown before the first raster arrives.
+static func placeholder_texture() -> ImageTexture:
+	var even := Color(0.05, 0.09, 0.10, 1.0)
+	var odd := Color(0.07, 0.12, 0.13, 1.0)
+	var bytes := PackedByteArray()
+	bytes.resize(16 * 16 * 4)
+	var write := 0
+	for y in 16:
+		for x in 16:
+			var color := even if (((x >> 2) + (y >> 2)) % 2 == 0) else odd
+			bytes[write] = int(color.r8)
+			bytes[write + 1] = int(color.g8)
+			bytes[write + 2] = int(color.b8)
+			bytes[write + 3] = 255
+			write += 4
+	var image := Image.create_from_data(16, 16, false, Image.FORMAT_RGBA8, bytes)
+	return ImageTexture.create_from_image(image)

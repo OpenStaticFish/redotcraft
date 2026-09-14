@@ -71,12 +71,17 @@ func _run() -> void:
 	minimap.toggle()
 	_expect(not minimap.visible, "toggle did not hide the minimap")
 
-	# The full map owns the pause state while it is open.
+	# The full map owns the pause state while it is open and gives its surface
+	# the modal focus owner.
 	_expect(not map_overlay.visible, "map overlay should start hidden")
 	map_overlay.open()
 	await process_frame
 	_expect(map_overlay.visible, "open() did not show the map overlay")
 	_expect(paused, "open() should pause the tree")
+	_expect(map_overlay._map_clip.focus_mode == Control.FOCUS_ALL,
+		"atlas map surface is not focusable")
+	_expect(root.gui_get_focus_owner() == map_overlay._map_clip,
+		"open() did not give the atlas surface focus")
 	map_overlay.cycle_mode()
 	_expect(map_overlay.get_mode() == expected_modes[1], "map overlay did not cycle while open")
 	map_overlay.close()
@@ -121,6 +126,32 @@ func _run() -> void:
 		map_overlay._zoom_at(map_overlay._map_clip.size * 0.5, 1.0 / 1.25)
 	_expect(is_equal_approx(map_overlay._view_span_target, 128.0),
 		"zoom-in target did not clamp at the minimum span")
+	map_overlay.close()
+	await process_frame
+
+	# Raster convergence: the staleness check must compare the view against the
+	# span the request will actually bake (whole strides), not the unquantized
+	# target. At the minimum span the old comparison never matched, so the
+	# atlas rebuilt its texture every idle frame.
+	map_overlay.open()
+	await process_frame
+	await process_frame
+	map_overlay._view_span = 128.0
+	map_overlay._view_span_target = 128.0
+	var min_stride: int = map_overlay._raster_stride()
+	_expect(min_stride == 2, "minimum-span raster stride changed")
+	map_overlay._zooming = false
+	map_overlay._baked_mode = map_overlay.get_mode()
+	map_overlay._baked_center = map_overlay._view_center
+	map_overlay._baked_span = float(128 * min_stride)
+	map_overlay._baked_stride = min_stride
+	map_overlay._has_raster = true
+	_expect(not map_overlay._needs_raster(),
+		"quantized raster span should satisfy the staleness check at minimum zoom")
+	map_overlay._baked_span += 128.0
+	_expect(map_overlay._needs_raster(),
+		"a raster one stride step off should still be considered stale")
+	map_overlay._has_raster = false
 	map_overlay.close()
 	await process_frame
 
