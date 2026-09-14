@@ -600,6 +600,14 @@ func _on_weather_toggled() -> void:
 
 
 func _on_weather_changed(_state: int) -> void:
+	_refresh_weather_status()
+	# Cold biomes hear the wind bed rather than rain, even while precipitating.
+	AudioManager.set_rain(_weather.is_raining() and not _weather.is_snowing())
+
+
+## Labels the current weather from the biome-aware precipitation identity, so a
+## cold biome reports "Snow" rather than the raw rain toggle.
+func _refresh_weather_status() -> void:
 	var label := "Sunny"
 	match _weather.get_precipitation():
 		WeatherSystem.Precipitation.RAIN:
@@ -607,8 +615,6 @@ func _on_weather_changed(_state: int) -> void:
 		WeatherSystem.Precipitation.SNOW:
 			label = "Snow"
 	set_status("Weather: %s" % label)
-	# Cold biomes hear the wind bed rather than rain, even while precipitating.
-	AudioManager.set_rain(_weather.is_raining() and not _weather.is_snowing())
 
 
 ## Lightning flash plus a thunder clap. Lightning is muted in cold biomes by
@@ -623,6 +629,9 @@ func _on_lightning(strength: float) -> void:
 func _on_weather_ambience(cold: bool, _wetland: bool) -> void:
 	AudioManager.set_wind(cold)
 	AudioManager.set_rain(_weather.is_raining() and not cold)
+	# Crossing into/out of a cold biome only changes the label while raining.
+	if _weather.is_raining():
+		_refresh_weather_status()
 
 
 func _on_photo_camera_changed(active: bool, camera: Camera3D) -> void:
