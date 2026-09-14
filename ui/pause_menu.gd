@@ -3,6 +3,7 @@ extends CanvasLayer
 
 signal resumed
 signal setting_changed(key: String, value: Variant)
+signal settings_closed
 signal new_world_requested
 signal quit_requested
 
@@ -24,7 +25,10 @@ func _ready() -> void:
 	_settings_button.pressed.connect(func() -> void: _settings_menu.open_panel())
 	_new_world_button.pressed.connect(func() -> void: new_world_requested.emit())
 	_quit_button.pressed.connect(func() -> void: quit_requested.emit())
-	_settings_menu.closed.connect(func() -> void: _settings_button.grab_focus())
+	_settings_menu.closed.connect(func() -> void:
+		_settings_button.grab_focus()
+		settings_closed.emit()
+	)
 	_settings_menu.setting_changed.connect(func(key: String, value: Variant) -> void: setting_changed.emit(key, value))
 
 
@@ -66,11 +70,8 @@ func _refresh_hint() -> void:
 		if sprint_key == descend_key
 		else "%s sprint   %s descend" % [sprint_key, descend_key]
 	)
-	_hint.text = "%s%s%s%s move   %s jump   double-tap %s to fly\n%s   %s fast fly   LMB mine   RMB place\n1-9 / 0 or wheel select block   %s inventory   %s map   %s minimap   %s map mode" % [
-		GameConfig.input_key("move_forward"),
-		GameConfig.input_key("move_left"),
-		GameConfig.input_key("move_backward"),
-		GameConfig.input_key("move_right"),
+	_hint.text = "%s move   %s jump   double-tap %s to fly\n%s   %s fast fly   LMB mine   RMB place\n1-9 / 0 or wheel select block   %s inventory   %s map   %s minimap   %s map mode" % [
+		GameConfig.input_move_hint(),
 		jump_key,
 		jump_key,
 		vertical,

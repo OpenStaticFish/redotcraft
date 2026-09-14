@@ -5,12 +5,18 @@
 ## Run:
 ##   redot --headless --path . --script res://tools/input_rebind_verify.gd
 ##
+## The check snapshots user://settings.cfg before touching bindings and restores
+## the exact bytes at the end, so a developer's real settings survive.
+##
 ## Nodes stay untyped and scenes are loaded at runtime: a --script SceneTree
 ## parses before autoloads exist, so naming UI classes at parse time fails.
 extends SceneTree
 
+const SETTINGS_PATH := "user://settings.cfg"
+
 var _failures := 0
-var _original_bindings: Dictionary = {}
+var _settings_existed := false
+var _settings_backup := PackedByteArray()
 
 
 func _initialize() -> void:
@@ -23,8 +29,7 @@ func _run() -> void:
 		push_error("input_rebind_verify: GameConfig autoload is missing")
 		quit(1)
 		return
-	var saved: Dictionary = config.settings["input_bindings"]
-	_original_bindings = saved.duplicate()
+	_backup_settings_file()
 	config.reset_input_bindings()
 
 	_check_defaults(config)
@@ -32,11 +37,13 @@ func _run() -> void:
 	_check_apply_and_reset(config)
 	_check_conflicts(config)
 	_check_required_labels(config)
+	_check_multi_default_safety(config)
 	_check_persistence(config)
 	await _check_controls_panel(config)
+	await _check_pause_settings_signal()
 
-	config.settings["input_bindings"] = _original_bindings
-	config.apply_input_bindings()
+	_restore_settings_file()
+	config.load_settings()
 
 	if _failures == 0:
 		print("INPUT REBIND VERIFY: PASS")
@@ -44,6 +51,21 @@ func _run() -> void:
 		return
 	print("INPUT REBIND VERIFY: FAIL (%d)" % _failures)
 	quit(1)
+
+
+func _backup_settings_file() -> void:
+	_settings_existed = FileAccess.file_exists(SETTINGS_PATH)
+	if _settings_existed:
+		_settings_backup = FileAccess.get_file_as_bytes(SETTINGS_PATH)
+
+
+func _restore_settings_file() -> void:
+	if _settings_existed:
+		var file := FileAccess.open(SETTINGS_PATH, FileAccess.WRITE)
+		if file != null:
+			file.store_buffer(_settings_backup)
+	else:
+		DirAccess.remove_absolute(SETTINGS_PATH)
 
 
 func _check_defaults(config: Node) -> void:
@@ -54,6 +76,7 @@ func _check_defaults(config: Node) -> void:
 	_expect(config.default_input_binding("inventory") == KEY_E, "inventory should default to E")
 	_expect(config.default_input_binding("jump") == KEY_SPACE, "jump should default to Space")
 	_expect(config.key_label(KEY_W) == "W", "key_label should render a physical key name")
+	_expect(config.key_label(KEY_BRACKETRIGHT) == "]", "key_label should prefer punctuation glyphs")
 
 
 func _check_coverage(config: Node) -> void:
@@ -96,27 +119,48 @@ func _check_conflicts(config: Node) -> void:
 func _check_required_labels(config: Node) -> void:
 	_expect(config.input_action_label("move_forward") == "Move Forward", "known actions should keep their display label")
 	_expect(config.input_action_label("some_future_action") == "Some Future Action", "unknown actions should get a generated label")
+	_expect(config.input_move_hint() == "WASD", "single-character move keys should compact to WASD")
+	config.set_input_binding("move_forward", KEY_UP)
+	_expect(config.input_move_hint() == "Up/A/S/D", "multi-character move keys should be slash-joined")
+	config.reset_input_bindings()
+
+
+## Latent case: an action whose project default declares two keys must keep
+## both after the default is re-applied (no override stored).
+func _check_multi_default_safety(config: Node) -> void:
+	ProjectSettings.set_setting("input/rebind_probe", {
+		"deadzone": 0.5,
+		"events": [_key_event(KEY_W, true), _key_event(KEY_UP, false)],
+	})
+	InputMap.add_action("rebind_probe")
+	config.apply_input_binding("rebind_probe")
+	var keycodes: Array[int] = []
+	for event in InputMap.action_get_events("rebind_probe"):
+		if event is InputEventKey:
+			var key := event as InputEventKey
+			keycodes.append(key.physical_keycode if key.physical_keycode != 0 else key.keycode)
+	_expect(keycodes.has(KEY_W) and keycodes.has(KEY_UP), "a multi-key default should keep every key")
+	_expect(config.default_input_binding("rebind_probe") == KEY_W, "the first default key should be reported")
+	InputMap.erase_action("rebind_probe")
+	ProjectSettings.set_setting("input/rebind_probe", null)
+
+
+func _key_event(keycode: int, physical: bool) -> InputEventKey:
+	var event := InputEventKey.new()
+	if physical:
+		event.physical_keycode = keycode
+	else:
+		event.keycode = keycode
+	return event
 
 
 func _check_persistence(config: Node) -> void:
-	var path := "user://settings.cfg"
-	var existed := FileAccess.file_exists(path)
-	var backup := FileAccess.get_file_as_bytes(path) if existed else PackedByteArray()
 	config.set_input_binding("inventory", KEY_TAB)
-	config.save_settings()
 	config.settings["input_bindings"] = {}
 	config.apply_input_bindings()
 	config.load_settings()
 	_expect(config.get_input_binding("inventory") == KEY_TAB, "settings.cfg did not round-trip the binding")
 	_expect(_event_matches("inventory", KEY_TAB), "loading settings did not apply the saved binding")
-	# Restore whatever the user had before this check.
-	if existed:
-		var file := FileAccess.open(path, FileAccess.WRITE)
-		if file != null:
-			file.store_buffer(backup)
-	else:
-		DirAccess.remove_absolute(path)
-	config.load_settings()
 
 
 func _check_controls_panel(config: Node) -> void:
@@ -165,6 +209,24 @@ func _check_controls_panel(config: Node) -> void:
 	controls.close_panel()
 	settings_menu.close_panel()
 	menu.queue_free()
+	await process_frame
+
+
+## The in-game status toast refreshes off PauseMenu.settings_closed, so check
+## the pause menu forwards its nested Settings close through that signal.
+func _check_pause_settings_signal() -> void:
+	var pause: Node = load("res://ui/pause_menu.tscn").instantiate()
+	root.add_child(pause)
+	await process_frame
+	var emitted := [false]
+	pause.settings_closed.connect(func() -> void: emitted[0] = true)
+	var settings_menu: Node = pause.get_node("SettingsMenu")
+	settings_menu.open_panel()
+	await process_frame
+	settings_menu.close_panel()
+	await process_frame
+	_expect(emitted[0], "closing Settings in the pause menu should emit settings_closed")
+	pause.queue_free()
 	await process_frame
 
 

@@ -56,6 +56,22 @@ const INPUT_ACTION_DEFS := [
 	{"action": "debug_worldgen_mode", "label": "Overlay Map Mode", "group": "Debug"},
 ]
 
+# Punctuation glyphs for key badges and hints, so labels stay printable
+# ("]" instead of "BracketRight") on every platform.
+const KEY_LABELS := {
+	KEY_BRACKETLEFT: "[",
+	KEY_BRACKETRIGHT: "]",
+	KEY_SEMICOLON: ";",
+	KEY_APOSTROPHE: "'",
+	KEY_COMMA: ",",
+	KEY_PERIOD: ".",
+	KEY_SLASH: "/",
+	KEY_BACKSLASH: "\\",
+	KEY_MINUS: "-",
+	KEY_EQUAL: "=",
+	KEY_QUOTELEFT: "`",
+}
+
 const PRESET_LOW := 0
 const PRESET_MEDIUM := 1
 const PRESET_HIGH := 2
@@ -264,21 +280,32 @@ func get_input_binding(action: String) -> int:
 
 
 func default_input_binding(action: String) -> int:
+	var events := default_input_events(action)
+	for event in events:
+		if event.physical_keycode != 0:
+			return event.physical_keycode
+		if event.keycode != 0:
+			return event.keycode
+	return 0
+
+
+## Copies the project's declared key events for `action`, so an action with
+## several defaults (or a reset after an override) keeps every key.
+func default_input_events(action: String) -> Array[InputEventKey]:
+	var events: Array[InputEventKey] = []
 	var definition: Variant = ProjectSettings.get_setting("input/%s" % action, {})
 	if typeof(definition) != TYPE_DICTIONARY:
-		return 0
+		return events
 	for event in definition.get("events", []):
 		if event is InputEventKey:
-			var key := event as InputEventKey
-			if key.physical_keycode != 0:
-				return key.physical_keycode
-			if key.keycode != 0:
-				return key.keycode
-	return 0
+			events.append((event as InputEventKey).duplicate())
+	return events
 
 
 ## Stores and applies one binding. Binding a key back to its default removes
 ## the override instead of freezing it, so project.godot stays authoritative.
+## Saved immediately: a rebind is the most expensive setting to lose to a
+## crash or a direct window close.
 func set_input_binding(action: String, keycode: int) -> void:
 	if keycode == 0 or not InputMap.has_action(action):
 		return
@@ -289,12 +316,14 @@ func set_input_binding(action: String, keycode: int) -> void:
 		overrides[action] = keycode
 	settings["input_bindings"] = overrides
 	apply_input_binding(action)
+	save_settings()
 
 
 func reset_input_bindings() -> void:
 	settings["input_bindings"] = {}
 	for definition in rebindable_actions():
 		apply_input_binding(definition["action"])
+	save_settings()
 
 
 func apply_input_bindings() -> void:
@@ -305,17 +334,19 @@ func apply_input_bindings() -> void:
 func apply_input_binding(action: String) -> void:
 	if not InputMap.has_action(action):
 		return
-	var keycode := get_input_binding(action)
-	if keycode == 0:
-		return
-	# Replace only the keyboard events so any future joypad/mouse bindings on
-	# the action survive a rebind.
+	# Replace only the keyboard events so any joypad/mouse bindings on the
+	# action survive a rebind.
 	for existing in InputMap.action_get_events(action):
 		if existing is InputEventKey:
 			InputMap.action_erase_event(action, existing)
-	var event := InputEventKey.new()
-	event.physical_keycode = keycode
-	InputMap.action_add_event(action, event)
+	var overrides: Dictionary = settings.get("input_bindings", {})
+	if overrides.has(action):
+		var event := InputEventKey.new()
+		event.physical_keycode = int(overrides[action])
+		InputMap.action_add_event(action, event)
+		return
+	for event in default_input_events(action):
+		InputMap.action_add_event(action, event)
 
 
 ## Actions (excluding `exclude_action`) currently sharing `keycode`.
@@ -337,11 +368,34 @@ func has_custom_input_bindings() -> bool:
 
 
 static func key_label(keycode: int) -> String:
-	return "Unbound" if keycode == 0 else OS.get_keycode_string(keycode)
+	if keycode == 0:
+		return "Unbound"
+	# OS.get_keycode_string spells punctuation out ("BracketRight"); prefer the
+	# glyph so compact hints and key badges match what is printed on the key.
+	if KEY_LABELS.has(keycode):
+		return KEY_LABELS[keycode]
+	return OS.get_keycode_string(keycode)
 
 
 func input_key(action: String) -> String:
 	return key_label(get_input_binding(action))
+
+
+## Movement hint: "WASD" while every key label is a single character, or a
+## slash-joined list once a rebind makes them longer (e.g. arrow keys).
+func input_move_hint() -> String:
+	var labels: Array[String] = [
+		input_key("move_forward"),
+		input_key("move_left"),
+		input_key("move_backward"),
+		input_key("move_right"),
+	]
+	var compact := ""
+	for label in labels:
+		if label.length() != 1:
+			return "/".join(PackedStringArray(labels))
+		compact += label
+	return compact
 
 
 func reset_graphics_to_preset() -> void:
