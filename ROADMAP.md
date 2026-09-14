@@ -192,9 +192,9 @@ Current state: the TerraForged-inspired staged pipeline is live under `world/wor
 - [ ] Accessibility aids — subtitles for audio cues, colorblind-safe HUD/map colors, and a damage/danger vignette toggle
 
 ## Tooling and CI
-- [ ] GitHub Actions runners — add `.github/workflows/` triggered on every pull request; no CI exists today (no `.github/`) and every `tools/` check is manual
+- [ ] GitHub Actions runners — `.github/workflows/opencode-pr.yml` runs the advisory opencode review on every non-draft PR, but the `tools/` checks are still manual
 - [ ] Unit tests (blocking) — add a unit test runner for pure logic (worldgen fields/hashes, `BlockRegistry` packing, water level rules, mesher/AO math) alongside the headless verifiers, run it on every PR, and make it the only required status check in branch protection so it blocks merges
-- [ ] AI code review (advisory) — an opencode-based GitHub Action reviews every PR diff and posts findings, but must never be a required status check so it cannot block merges
+- [x] AI code review (advisory) — `.github/workflows/opencode-pr.yml` runs the pinned `anomalyco/opencode/github` action on every non-draft PR from this repository plus manual dispatch, using `.github/prompts/pr-review.md` (RedotCraft rubric: worker-thread safety, streaming invariants, determinism, water rules, GDScript/shaders, UI signals) with GLM 5.3 and prior bot reviews fed back as context. Helper steps are inlined (PR context, previous reviews, permissions, prompt loading, diagnostics artifact) and there is no Nix/devenv setup; advisory only, never a required status check
 - [ ] Parse check and headless verifiers in CI — run `redot --editor --headless --path . --quit` plus the `tools/` verifiers on every PR; advisory-only like the AI review, not blocking
 - [ ] Benchmark guardrails — assert the pinned generation/mesh/streaming budgets in CI; `tools/worldgen_benchmark.gd` and friends record times but nothing enforces them
 - [ ] Migration tests — load version-tagged worldgen/save fixtures across revisions and assert clean migration or rejection
