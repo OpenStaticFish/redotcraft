@@ -93,8 +93,8 @@ func _build_foliage_tints(field: ChunkTerrainData) -> PackedColorArray:
 		for local_x in VoxelDefs.CHUNK_SIZE:
 			var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
 			var field_index := ChunkTerrainData.cell_index(local_x, local_z)
-			# Discrete generation uses the primary biome. Blend the continuous
-			# climate pair for foliage tint; both values are shared by
+			# Discrete generation uses coherent ecotone dominant patches. Blend
+			# the continuous climate pair for foliage tint; both values are shared by
 			# adjacent chunk fields, so this remains deterministic and seam-safe.
 			var primary := _biomes.foliage_color(int(field.biome_id[field_index]))
 			var secondary := _biomes.foliage_color(int(field.biome_secondary_id[field_index]))
@@ -256,7 +256,7 @@ func find_spawn_position() -> Vector3:
 			for coarse: Vector2i in candidates:
 				var point := coarse * 8
 				var sample: Dictionary = _sampler.sample_point(point.x, point.y)
-				var biome: int = int(sample["biome_id"])
+				var biome: int = int(sample["dominant_biome_id"])
 				var height: float = float(sample["final_height"])
 				if _biomes.is_ocean_biome(biome) or biome in [BiomeCatalog.BEACH, BiomeCatalog.RIVER, BiomeCatalog.SWAMP]:
 					continue

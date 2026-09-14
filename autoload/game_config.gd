@@ -110,7 +110,7 @@ const DEFAULT_WORLD := {
 	"world_type": 0,
 	"terrain_scale": 1.0,
 	"tree_density": 1.0,
-	"worldgen_version": 5,
+	"worldgen_version": 6,
 	"macro_scale": 384.0,
 	"biome_scale": 3072.0,
 	"river_density": 1.0,

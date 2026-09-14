@@ -25,6 +25,7 @@ var profile_blend: PackedByteArray = PackedByteArray()
 var biome_id: PackedByteArray = PackedByteArray()
 var biome_secondary_id: PackedByteArray = PackedByteArray()
 var biome_blend: PackedByteArray = PackedByteArray()
+var ecotone_strength: PackedByteArray = PackedByteArray()
 var dominant_biome: PackedByteArray = PackedByteArray()
 
 var _sealed: bool = false
@@ -82,12 +83,13 @@ func set_profile(index: int, id: int, blend: int) -> void:
 	profile_blend[index] = clampi(blend, 0, 255)
 
 
-func set_biome(index: int, id: int, secondary_id: int, blend: int, dominant_id: int) -> void:
+func set_biome(index: int, id: int, secondary_id: int, blend: int, dominant_id: int, ecotone: int = 0) -> void:
 	if not _can_write(index):
 		return
 	biome_id[index] = clampi(id, 0, 255)
 	biome_secondary_id[index] = clampi(secondary_id, 0, 255)
 	biome_blend[index] = clampi(blend, 0, 255)
+	ecotone_strength[index] = clampi(ecotone, 0, 255)
 	dominant_biome[index] = clampi(dominant_id, 0, 255)
 
 
@@ -113,6 +115,7 @@ func _resize_fields() -> void:
 	biome_id.resize(CELL_COUNT)
 	biome_secondary_id.resize(CELL_COUNT)
 	biome_blend.resize(CELL_COUNT)
+	ecotone_strength.resize(CELL_COUNT)
 	dominant_biome.resize(CELL_COUNT)
 
 
