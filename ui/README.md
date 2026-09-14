@@ -49,6 +49,6 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
   restoration.
 - `redot --headless --path . --script res://tools/ui_scale_verify.gd` checks the
   UI-scale/content-scale application, the text-size multiplier and live theme
-  refresh, and the Display rows.
+  refresh, the Display rows, and the open modal re-fitting at 200%.
 
 When adding a screen, apply `UITheme.apply(root)` at its root, use the shared factories and button styles, preserve natural container layout, and add only motion that does not delay closing or scene changes.

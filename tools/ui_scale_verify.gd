@@ -70,10 +70,10 @@ func _check_window_application(config: Node) -> void:
 
 func _check_signal(config: Node) -> void:
 	_signal_count = 0
-	config.ui_scale_changed.connect(_on_scale_changed)
+	config.interface_scale_changed.connect(_on_scale_changed)
 	config.set_setting("text_scale", 1.15)
-	_expect(_signal_count == 1, "set_setting should emit ui_scale_changed")
-	config.ui_scale_changed.disconnect(_on_scale_changed)
+	_expect(_signal_count == 1, "set_setting should emit interface_scale_changed")
+	config.interface_scale_changed.disconnect(_on_scale_changed)
 	config.set_setting("text_scale", 1.0)
 
 
@@ -146,6 +146,14 @@ func _check_display_panel(config: Node) -> void:
 		ui_option.item_selected.emit(3)
 		_expect(is_equal_approx(float(config.get_setting("ui_scale")), 1.5), "selecting 150% should store the mapped UI scale")
 		_expect(is_equal_approx(root.content_scale_factor, 1.5), "selecting 150% should resize the window content scale")
+		# A live change moves the logical viewport under the open panel; its
+		# rows must re-fit instead of clipping the heading and footer.
+		ui_option.item_selected.emit(4)
+		await process_frame
+		await process_frame
+		var panel := display.get_node("Center/Panel") as Control
+		var viewport_rect := Rect2(Vector2.ZERO, root.get_visible_rect().size)
+		_expect(viewport_rect.encloses(panel.get_global_rect()), "the Display panel should stay inside the viewport after a live 200% change")
 	if text_option != null:
 		text_option.item_selected.emit(2)
 		_expect(is_equal_approx(float(config.get_setting("text_scale")), 1.15), "selecting Large should store the mapped text scale")

@@ -63,6 +63,7 @@ static var _cached_switch_on: ImageTexture
 static var _cached_grabber: ImageTexture
 static var _cached_grabber_hi: ImageTexture
 static var _theme_hosts: Array[WeakRef] = []
+static var _game_config: Node
 
 
 # ------------------------------------------------------------------ fonts --
@@ -103,12 +104,20 @@ static func font_eyebrow(spacing: int = 2) -> FontVariation:
 # -------------------------------------------------------------- text scale --
 ## Text size is a multiplier on every font size in the UI, independent of the
 ## window content scale that sizes the whole interface. GameConfig is resolved
-## through the scene tree so the theme keeps no autoload compile dependency.
-static func text_scale() -> float:
+## through the scene tree (and cached; the node reads live settings) so the
+## theme keeps no autoload compile dependency.
+static func _game_config_node() -> Node:
+	if _game_config != null and is_instance_valid(_game_config):
+		return _game_config
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:
-		return TEXT_SCALE_DEFAULT
-	var config := tree.root.get_node_or_null("GameConfig")
+		return null
+	_game_config = tree.root.get_node_or_null("GameConfig")
+	return _game_config
+
+
+static func text_scale() -> float:
+	var config := _game_config_node()
 	if config == null or not config.has_method("get_text_scale"):
 		return TEXT_SCALE_DEFAULT
 	return clampf(float(config.get_text_scale()), TEXT_SCALE_MIN, TEXT_SCALE_MAX)
@@ -166,14 +175,11 @@ static func refresh_all() -> void:
 ## One connection for the whole UI: any screen that applies the theme makes
 ## the text scale live. `build()` runs again on the same signal.
 static func _ensure_scale_signal() -> void:
-	var tree := Engine.get_main_loop() as SceneTree
-	if tree == null:
-		return
-	var config := tree.root.get_node_or_null("GameConfig")
+	var config := _game_config_node()
 	if config == null or config.has_meta("ui_theme_signal"):
 		return
 	config.set_meta("ui_theme_signal", true)
-	config.ui_scale_changed.connect(func() -> void: refresh_all())
+	config.interface_scale_changed.connect(func() -> void: refresh_all())
 
 
 # -------------------------------------------------------------- styleboxes --

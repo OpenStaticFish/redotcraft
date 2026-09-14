@@ -33,22 +33,33 @@ func _ready() -> void:
 	_wrap_rows_in_scroll()
 	_advanced_button.pressed.connect(func() -> void: advanced_requested.emit())
 	_back_button.pressed.connect(close_panel)
+	# A live interface-scale change moves the logical viewport under an open
+	# modal, so re-fit the row list instead of keeping the old dimensions.
+	GameConfig.interface_scale_changed.connect(_resize_to_viewport)
 
 
 func open_panel() -> void:
-	var viewport_size := get_viewport().get_visible_rect().size
-	_panel.custom_minimum_size.x = minf(560.0, viewport_size.x - 48.0)
-	if _scroll != null:
-		# Keep every row reachable at large interface scales: the row list
-		# scrolls once it no longer fits between the header and footer.
-		var reserved := 220.0
-		var max_height := maxf(viewport_size.y - reserved, 120.0)
-		_scroll.custom_minimum_size.y = minf(_rows_box.get_combined_minimum_size().y, max_height)
+	_resize_to_viewport()
 	visible = true
 	Motion.dim_in(_dim)
 	Motion.pop_in(_panel)
 	if _first_focus != null:
 		_first_focus.grab_focus()
+
+
+## Sizes the panel and its row scroll area to the current logical viewport;
+## called on open and whenever the live interface scale changes. The row list
+## scrolls once it no longer fits between the header and footer, so every row
+## and the footer buttons stay reachable.
+func _resize_to_viewport() -> void:
+	var viewport_size := get_viewport().get_visible_rect().size
+	_panel.custom_minimum_size.x = minf(560.0, viewport_size.x - 48.0)
+	if _scroll == null:
+		return
+	_scroll.custom_minimum_size.y = _rows_box.get_combined_minimum_size().y
+	var chrome := _panel.get_combined_minimum_size().y - _scroll.custom_minimum_size.y
+	var max_height := maxf(viewport_size.y - chrome - 48.0, 120.0)
+	_scroll.custom_minimum_size.y = minf(_scroll.custom_minimum_size.y, max_height)
 
 
 func close_panel() -> void:

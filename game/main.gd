@@ -66,6 +66,7 @@ func _ready() -> void:
 	_style_hud()
 	_apply_config()
 	_build_hotbar()
+	GameConfig.interface_scale_changed.connect(_apply_hud_text_layout)
 	_build_crosshair()
 	_build_pause_menu()
 	_connect_player()
@@ -362,16 +363,29 @@ func _style_hud() -> void:
 	_selection_chip.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_hud_root.add_child(_selection_chip)
 	_selection_chip.offset_left = -160.0
-	_selection_chip.offset_top = -110.0
 	_selection_chip.offset_right = 160.0
-	_selection_chip.offset_bottom = -92.0
 	_selection_chip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
-	_status_label.offset_top = -134.0
-	_status_label.offset_bottom = -112.0
 	_status_label.add_theme_font_override("font", UITheme.font_semi())
 	UITheme.apply_font_size(_status_label, 14)
 	_status_label.add_theme_color_override("font_color", UITheme.INK_DIM)
+
+
+## Keeps the HUD's fixed-pixel boxes in step with the text-size setting: the
+## hotbar count labels, the selection chip, and the status toast. Called after
+## the HUD is built and on every live interface-scale change.
+func _apply_hud_text_layout() -> void:
+	var scale := UITheme.text_scale()
+	var count_height := 13.0 * scale
+	for label in slot_count_labels:
+		label.position = Vector2(0, _hotbar_slot_size - 10.0 - count_height)
+		label.size = Vector2(_hotbar_slot_size - 10.0, count_height)
+	if _selection_chip != null:
+		_selection_chip.offset_top = -92.0 - 18.0 * scale
+		_selection_chip.offset_bottom = -92.0
+	if _status_label != null:
+		_status_label.offset_top = -112.0 - 22.0 * scale
+		_status_label.offset_bottom = -112.0
 
 
 func _build_crosshair() -> void:
@@ -486,8 +500,6 @@ func _build_hotbar() -> void:
 		slot_key_labels.append(key_label)
 
 		var count_label := Label.new()
-		count_label.position = Vector2(0, _hotbar_slot_size - 10.0 - 13.0)
-		count_label.size = Vector2(_hotbar_slot_size - 10.0, 13)
 		count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		count_label.add_theme_font_override("font", UITheme.font_semi())
 		UITheme.apply_font_size(count_label, 11)
@@ -500,6 +512,7 @@ func _build_hotbar() -> void:
 		slot_count_labels.append(count_label)
 
 	_update_slot_styles()
+	_apply_hud_text_layout()
 
 
 func _slot_key_hint(index: int) -> String:

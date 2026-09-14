@@ -28,7 +28,7 @@ const UI_SCALE_NAMES := ["75%", "100%", "125%", "150%", "200%"]
 const TEXT_SCALE_VALUES := [0.85, 1.0, 1.15, 1.3]
 const TEXT_SCALE_NAMES := ["Small", "Default", "Large", "Larger"]
 
-signal ui_scale_changed
+signal interface_scale_changed
 
 # Frame pacing. VSync indexes mirror DisplayServer.VSyncMode exactly, and FPS
 # cap values are real frame rates (`0` is unlimited), so the Display rows map
@@ -178,12 +178,13 @@ func set_setting(key: String, value: Variant) -> void:
 ## the HUD and menus while leaving the 3D render resolution and the FSR scale
 ## alone, and the engine oversamples fonts by the same factor so text stays
 ## crisp. Text scale rides on top of that through UITheme. Emits
-## `ui_scale_changed` so the live screens rebuild their theme and font sizes.
+## `interface_scale_changed` so the live screens rebuild their theme, font
+## sizes, and scale-sensitive layout.
 func apply_ui_scale() -> void:
 	var window := get_window()
 	if window != null:
 		window.content_scale_factor = get_ui_scale()
-	ui_scale_changed.emit()
+	interface_scale_changed.emit()
 
 
 ## Applies the pacing settings that the engine can hold at all times. Dynamic
