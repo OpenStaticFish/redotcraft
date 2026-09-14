@@ -1,8 +1,9 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://ui/settings_menu.gd" id="1_menu"]
 [ext_resource type="PackedScene" path="res://ui/settings_category_panel.tscn" id="2_category"]
 [ext_resource type="PackedScene" path="res://ui/graphics_panel.tscn" id="3_graphics"]
+[ext_resource type="PackedScene" path="res://ui/controls_panel.tscn" id="4_controls"]
 
 [node name="SettingsMenu" type="Control"]
 layout_mode = 3
@@ -68,6 +69,8 @@ category = "sound"
 
 [node name="GameplayCategory" parent="." instance=ExtResource("2_category")]
 category = "gameplay"
+
+[node name="ControlsCategory" parent="." instance=ExtResource("4_controls")]
 
 [node name="GraphicsPanel" parent="." instance=ExtResource("3_graphics")]
 visible = false

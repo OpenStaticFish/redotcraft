@@ -64,6 +64,8 @@ jobs:
             tools/audio_verify.gd \
             tools/ui_flow_verify.gd \
             tools/ui_scale_verify.gd \
+            tools/input_rebind_verify.gd \
+            tools/photo_mode_verify.gd \
             tools/player_target_verify.tscn \
             tools/worldgen_cactus_verify.gd \
             tools/worldgen_tree_verify.gd \

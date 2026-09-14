@@ -27,7 +27,10 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
   `settings_category_panel` instances (`category` property): Display (render
   distance + extreme toggle, FOV, fullscreen, UI scale, text size, V-Sync, FPS
   cap, dynamic resolution + target), Graphics (preset + advanced),
-  Sound (three buses), Gameplay (mouse sensitivity). `graphics_panel` is the
+  Sound (three buses), Gameplay (mouse sensitivity), and Controls (key
+  rebinding). `controls_panel` extends `settings_category_panel` and builds one
+  row per `GameConfig.rebindable_actions()` entry; clicking a key starts capture
+  and `GameConfig` applies and persists the result. `graphics_panel` is the
   nested advanced screen, reachable only from the Graphics category, and is
   itself a hub: each `GraphicsSections.SECTIONS` entry (Lighting, Shadows,
   Sky & Atmosphere, Post-Processing, Performance) opens a

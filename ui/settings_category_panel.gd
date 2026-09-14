@@ -17,7 +17,7 @@ const EXTREME_WARNING := "Warning: extreme render distance can take minutes to l
 
 @onready var _panel: PanelContainer = $Center/Panel
 @onready var _heading: Label = $Center/Panel/Box/Heading
-@onready var _rows_box: VBoxContainer = $Center/Panel/Box/RowsBox
+@onready var _rows_box: VBoxContainer = find_child("RowsBox", true, false) as VBoxContainer
 @onready var _advanced_button: Button = $Center/Panel/Box/Footer/AdvancedButton
 @onready var _back_button: Button = $Center/Panel/Box/Footer/BackButton
 @onready var _dim: ColorRect = $Dim

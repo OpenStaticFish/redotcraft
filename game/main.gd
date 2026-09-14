@@ -99,7 +99,7 @@ func _ready() -> void:
 	_inventory_overlay.weather_toggled.connect(_on_weather_toggled)
 	player.set_selected_block(HOTBAR[selected_slot])
 	_update_inventory_display()
-	set_status("WASD move   double-tap SPACE to fly   E inventory   M map   ] minimap   ESC pause")
+	_show_control_hint()
 	var shadow_capture := ShadowCaptureScript.new()
 	shadow_capture.name = "ShadowCapture"
 	shadow_capture.state_provider = _get_shadow_capture_state
@@ -352,6 +352,7 @@ func _build_pause_menu() -> void:
 	_pause_menu = PauseMenuScene.instantiate() as PauseMenu
 	add_child(_pause_menu)
 	_pause_menu.setting_changed.connect(_on_setting_changed)
+	_pause_menu.settings_closed.connect(_show_control_hint)
 	_pause_menu.new_world_requested.connect(_on_new_world)
 	_pause_menu.quit_requested.connect(_on_quit_game)
 
@@ -711,6 +712,18 @@ func set_status(message: String) -> void:
 	_status_label.text = message
 	status_time = 3.5
 	Motion.fade_in(_status_label)
+
+
+## Startup/rebind toast for the core controls; called again when the pause
+## menu's Settings close so a mid-game remap is reflected.
+func _show_control_hint() -> void:
+	set_status("%s move   double-tap %s to fly   %s inventory   %s map   %s minimap   ESC pause" % [
+		GameConfig.input_move_hint(),
+		GameConfig.input_key("jump"),
+		GameConfig.input_key("inventory"),
+		GameConfig.input_key("map_overlay"),
+		GameConfig.input_key("minimap"),
+	])
 
 
 func _update_camera_far(render_distance: int) -> void:
