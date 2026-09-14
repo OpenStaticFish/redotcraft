@@ -4,7 +4,7 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
 
 ## Foundations
 
-- `ui_theme.gd` owns palette, typography, spacing, style boxes, generated control textures, and small component factories.
+- `ui_theme.gd` owns palette, typography, spacing, style boxes, generated control textures, and small component factories. Screens apply it with `UITheme.apply(root)` (which registers the host for live scale refresh) and size fonts through `UITheme.apply_font_size()` so the Display text-size setting can rescale them.
 - `motion.gd` owns the restrained entrance, selection, and status tween vocabulary.
 - `block_icon.gd` renders cached isometric item icons from `BlockRegistry.texture_array`; UI icons therefore stay synchronized with world textures.
 - Static hierarchy remains in `.tscn` scenes. Scripts compose dynamic rows, inventory slots, HUD slots, and decorative title-screen layers.
@@ -24,8 +24,8 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
   tunables; `build_config()` returns them and the play screen merges seed/type in.
 - **Settings** opens `settings_menu`, a category hub. Categories are
   `settings_category_panel` instances (`category` property): Display (render
-  distance + extreme toggle, FOV, fullscreen, V-Sync, FPS cap, dynamic
-  resolution + target), Graphics (preset + advanced),
+  distance + extreme toggle, FOV, fullscreen, UI scale, text size, V-Sync, FPS
+  cap, dynamic resolution + target), Graphics (preset + advanced),
   Sound (three buses), Gameplay (mouse sensitivity). `graphics_panel` is the
   nested advanced screen, reachable only from the Graphics category, and is
   itself a hub: each `GraphicsSections.SECTIONS` entry (Lighting, Shadows,
@@ -46,5 +46,8 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
 - `redot --headless --path . --script res://tools/ui_flow_verify.gd` checks the
   Play/Advanced and Settings/category/advanced flows, cancel order, and focus
   restoration.
+- `redot --headless --path . --script res://tools/ui_scale_verify.gd` checks the
+  UI-scale/content-scale application, the text-size multiplier and live theme
+  refresh, and the Display rows.
 
-When adding a screen, apply `UITheme.build()` at its root, use the shared factories and button styles, preserve natural container layout, and add only motion that does not delay closing or scene changes.
+When adding a screen, apply `UITheme.apply(root)` at its root, use the shared factories and button styles, preserve natural container layout, and add only motion that does not delay closing or scene changes.

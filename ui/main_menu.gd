@@ -37,7 +37,7 @@ var _panel_focus_return: Control
 
 
 func _ready() -> void:
-	theme = UITheme.build()
+	UITheme.apply(self)
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	_restyle_background()
 	var mode := OS.get_environment("RC_UI_TEST")
@@ -171,7 +171,7 @@ func _restyle_wordmark() -> void:
 	wordmark.base_font = UITheme.font_wordmark()
 	wordmark.spacing_glyph = 4
 	_title.add_theme_font_override("font", wordmark)
-	_title.add_theme_font_size_override("font_size", 52)
+	UITheme.apply_font_size(_title, 52)
 	_title.add_theme_color_override("font_color", UITheme.INK)
 	_title.add_theme_color_override("font_shadow_color", Color(0.01, 0.03, 0.05, 0.8))
 	_title.add_theme_constant_override("shadow_offset_x", 3)
@@ -186,7 +186,7 @@ func _restyle_wordmark() -> void:
 	column.move_child(underline_wrapper, _title.get_index() + 1)
 
 	_subtitle.add_theme_font_override("font", UITheme.font_eyebrow())
-	_subtitle.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_subtitle, 13)
 	_subtitle.add_theme_color_override("font_color", UITheme.MUTED)
 
 	Motion.pop_in(_title, 0.3)
@@ -206,7 +206,7 @@ func _restyle_buttons() -> void:
 
 func _restyle_footer() -> void:
 	_footer.add_theme_color_override("font_color", UITheme.FAINT)
-	_footer.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_footer, 13)
 	_footer.text = "WASD move · SPACE jump · double-tap SPACE fly · E inventory · F3 worldgen map · ESC pause"
 
 

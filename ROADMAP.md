@@ -188,7 +188,7 @@ Current state: the TerraForged-inspired staged pipeline is live under `world/wor
 - [ ] Key rebinding — remap and persist every `project.godot` `[input]` action through `GameConfig.settings`; the InputMap is hardcoded today
 - [ ] Gamepad support — joypad bindings, dead zones, and button prompts; there are no joypad events in `project.godot`
 - [ ] Motion and camera options — invert Y, separate X/Y sensitivity, and a reduced-motion toggle that disables `ui/motion.gd` tweens
-- [ ] UI scale and text size — scale HUD and menus independently of resolution
+- [x] UI scale and text size — Display settings gained UI Scale (75/100/125/150/200%) and Text Size (Small/Default/Large/Larger), both persisted in `settings.cfg`. UI Scale drives `Window.content_scale_factor` in canvas-item mode through `GameConfig.apply_ui_scale()`, so the HUD and menus resize together (the engine oversamples fonts at the same factor, keeping text crisp) while the 3D render resolution and `scaling_3d_scale` stay untouched; Text Size is a `UITheme` font-size multiplier applied on top of the layout. `UITheme.apply()` registers each screen host and stages every font-size override, and the `ui_scale_changed` signal makes `UITheme.refresh_all()` rebuild the shared theme and re-scale tagged sizes live; the Display category rows scroll once they no longer fit, so the taller list stays reachable at large scales. `tools/ui_scale_verify.gd` pins defaults, option snapping, window application, the live refresh, and the Display rows
 - [ ] Accessibility aids — subtitles for audio cues, colorblind-safe HUD/map colors, and a damage/danger vignette toggle
 
 ## Tooling and CI

@@ -58,7 +58,7 @@ var _dynamic_resolution_active := false
 
 
 func _ready() -> void:
-	_hud_root.theme = UITheme.build()
+	UITheme.apply(_hud_root)
 	_style_hud()
 	_apply_config()
 	_build_hotbar()
@@ -305,12 +305,12 @@ func _style_hud() -> void:
 	# Instrument chips: coords read out position, stats read out telemetry.
 	var chip := UITheme.chip_style()
 	_coords_label.add_theme_font_override("font", UITheme.font_semi())
-	_coords_label.add_theme_font_size_override("font_size", 12)
+	UITheme.apply_font_size(_coords_label, 12)
 	_coords_label.add_theme_color_override("font_color", UITheme.INK)
 	var coords_panel := _coords_label.get_parent() as PanelContainer
 	coords_panel.add_theme_stylebox_override("panel", chip)
 	_stats_label.add_theme_font_override("font", UITheme.font_semi())
-	_stats_label.add_theme_font_size_override("font_size", 12)
+	UITheme.apply_font_size(_stats_label, 12)
 	_stats_label.add_theme_color_override("font_color", UITheme.MUTED)
 	var stats_panel := _stats_label.get_parent() as PanelContainer
 	stats_panel.add_theme_stylebox_override("panel", chip.duplicate())
@@ -321,7 +321,7 @@ func _style_hud() -> void:
 	_selection_chip.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	_selection_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_selection_chip.add_theme_font_override("font", UITheme.font_semi())
-	_selection_chip.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_selection_chip, 13)
 	_selection_chip.add_theme_color_override("font_color", UITheme.EMBER_HI)
 	_selection_chip.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.75))
 	_selection_chip.add_theme_constant_override("shadow_offset_x", 1)
@@ -337,7 +337,7 @@ func _style_hud() -> void:
 	_status_label.offset_top = -134.0
 	_status_label.offset_bottom = -112.0
 	_status_label.add_theme_font_override("font", UITheme.font_semi())
-	_status_label.add_theme_font_size_override("font_size", 14)
+	UITheme.apply_font_size(_status_label, 14)
 	_status_label.add_theme_color_override("font_color", UITheme.INK_DIM)
 
 
@@ -446,7 +446,7 @@ func _build_hotbar() -> void:
 		key_label.text = _slot_key_hint(index)
 		key_label.position = Vector2(1, 0)
 		key_label.add_theme_font_override("font", UITheme.font_semi())
-		key_label.add_theme_font_size_override("font_size", 9)
+		UITheme.apply_font_size(key_label, 9)
 		key_label.add_theme_color_override("font_color", UITheme.FAINT)
 		key_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		overlay.add_child(key_label)
@@ -457,7 +457,7 @@ func _build_hotbar() -> void:
 		count_label.size = Vector2(_hotbar_slot_size - 10.0, 13)
 		count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		count_label.add_theme_font_override("font", UITheme.font_semi())
-		count_label.add_theme_font_size_override("font_size", 11)
+		UITheme.apply_font_size(count_label, 11)
 		count_label.add_theme_color_override("font_color", UITheme.INK_DIM)
 		count_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
 		count_label.add_theme_constant_override("shadow_offset_x", 1)

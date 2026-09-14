@@ -42,23 +42,21 @@ func _style_static() -> void:
 	_panel.add_theme_stylebox_override("panel", UITheme.modal_style())
 	_heading.text = "Advanced Graphics"
 	_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_heading.add_theme_font_override("font", UITheme.font_display())
-	_heading.add_theme_font_size_override("font_size", UITheme.SIZE_DISPLAY)
-	_heading.add_theme_color_override("font_color", UITheme.INK)
+	UITheme.style_heading(_heading)
 	var box := _heading.get_parent() as VBoxContainer
 	var eyebrow := UITheme.eyebrow("Fine-Tune")
 	box.add_child(eyebrow)
 	box.move_child(eyebrow, 0)
 	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_hint.add_theme_color_override("font_color", UITheme.MUTED)
-	_hint.add_theme_font_size_override("font_size", 14)
+	UITheme.apply_font_size(_hint, 14)
 	_hint.text = "Fine-tune the active preset. Any change switches it to Custom."
 	var divider := UITheme.divider()
 	box.add_child(divider)
 	box.move_child(divider, 3)
 	_status.add_theme_font_override("font", UITheme.font_semi())
-	_status.add_theme_font_size_override("font_size", 14)
 	_status.add_theme_color_override("font_color", UITheme.CYAN)
+	UITheme.apply_font_size(_status, 14)
 	_status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	UITheme.style_button_ghost(_reset_button)
 	UITheme.style_button_primary(_back_button)

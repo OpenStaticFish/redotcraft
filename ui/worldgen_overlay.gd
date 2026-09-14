@@ -288,7 +288,7 @@ func _to_rgba8(colors: PackedColorArray) -> PackedByteArray:
 
 func _build_ui() -> void:
 	var root: Control = $Root
-	root.theme = UITheme.build()
+	UITheme.apply(root)
 
 	_panel = PanelContainer.new()
 	_panel.name = "Panel"
@@ -305,13 +305,13 @@ func _build_ui() -> void:
 	var title := Label.new()
 	title.name = "Title"
 	title.text = "WORLDGEN"
-	title.add_theme_font_size_override("font_size", 14)
+	UITheme.apply_font_size(title, 14)
 	title.add_theme_color_override("font_color", UITheme.EMBER)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	_mode_label = Label.new()
 	_mode_label.name = "Mode"
-	_mode_label.add_theme_font_size_override("font_size", 14)
+	UITheme.apply_font_size(_mode_label, 14)
 	_mode_label.add_theme_color_override("font_color", UITheme.MUTED)
 	_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	header.add_child(_mode_label)
@@ -319,12 +319,12 @@ func _build_ui() -> void:
 
 	_position_label = Label.new()
 	_position_label.name = "Position"
-	_position_label.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_position_label, 13)
 	box.add_child(_position_label)
 
 	_stats_label = Label.new()
 	_stats_label.name = "Stats"
-	_stats_label.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_stats_label, 13)
 	_stats_label.add_theme_color_override("font_color", UITheme.MUTED)
 	box.add_child(_stats_label)
 	_refresh_text()
@@ -346,7 +346,7 @@ func _build_ui() -> void:
 	_marker = Label.new()
 	_marker.name = "Marker"
 	_marker.text = "+"
-	_marker.add_theme_font_size_override("font_size", 20)
+	UITheme.apply_font_size(_marker, 20)
 	_marker.add_theme_color_override("font_color", UITheme.EMBER_HI)
 	_marker.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.85))
 	_marker.add_theme_constant_override("shadow_offset_x", 1)
@@ -356,7 +356,7 @@ func _build_ui() -> void:
 
 	_map_caption = Label.new()
 	_map_caption.name = "MapCaption"
-	_map_caption.add_theme_font_size_override("font_size", 12)
+	UITheme.apply_font_size(_map_caption, 12)
 	_map_caption.add_theme_color_override("font_color", UITheme.MUTED)
 	_map_caption.text = "map unavailable"
 	box.add_child(_map_caption)

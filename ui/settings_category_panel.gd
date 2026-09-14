@@ -23,18 +23,27 @@ const EXTREME_WARNING := "Warning: extreme render distance can take minutes to l
 @onready var _dim: ColorRect = $Dim
 
 var _first_focus: Control
+var _scroll: ScrollContainer
 
 
 func _ready() -> void:
-	theme = UITheme.build()
+	UITheme.apply(self)
 	_style_static()
 	_build_rows()
+	_wrap_rows_in_scroll()
 	_advanced_button.pressed.connect(func() -> void: advanced_requested.emit())
 	_back_button.pressed.connect(close_panel)
 
 
 func open_panel() -> void:
-	_panel.custom_minimum_size.x = minf(560.0, get_viewport().get_visible_rect().size.x - 48.0)
+	var viewport_size := get_viewport().get_visible_rect().size
+	_panel.custom_minimum_size.x = minf(560.0, viewport_size.x - 48.0)
+	if _scroll != null:
+		# Keep every row reachable at large interface scales: the row list
+		# scrolls once it no longer fits between the header and footer.
+		var reserved := 220.0
+		var max_height := maxf(viewport_size.y - reserved, 120.0)
+		_scroll.custom_minimum_size.y = minf(_rows_box.get_combined_minimum_size().y, max_height)
 	visible = true
 	Motion.dim_in(_dim)
 	Motion.pop_in(_panel)
@@ -94,6 +103,8 @@ func _category_definition() -> Dictionary:
 					{"type": "render_distance", "label": "Render Distance", "key": "render_distance", "min": 4.0, "max": RENDER_DISTANCE_MAX, "step": 1.0, "format": "%d chunks"},
 					{"type": "slider", "label": "Field of View", "key": "fov", "min": 60.0, "max": 100.0, "step": 1.0, "format": "%d"},
 					{"type": "check", "label": "Fullscreen", "key": "fullscreen", "window": true},
+					{"type": "option", "label": "UI Scale", "key": "ui_scale", "options": GameConfig.UI_SCALE_NAMES, "values": GameConfig.UI_SCALE_VALUES, "tooltip": "Scales the HUD and menus without changing the 3D render resolution."},
+					{"type": "option", "label": "Text Size", "key": "text_scale", "options": GameConfig.TEXT_SCALE_NAMES, "values": GameConfig.TEXT_SCALE_VALUES, "tooltip": "Scales UI text independently of the interface layout."},
 					{"type": "option", "label": "V-Sync", "key": "vsync", "options": GameConfig.VSYNC_NAMES, "tooltip": "Synchronizes presented frames with the display."},
 					{"type": "option", "label": "FPS Cap", "key": "fps_cap", "options": GameConfig.FPS_CAP_NAMES, "values": GameConfig.FPS_CAP_VALUES, "tooltip": "Unlimited lets the renderer run as fast as it can."},
 					{"type": "check", "label": "Dynamic Resolution", "key": "dynamic_resolution", "tooltip": "Lowers the 3D render scale when the frame rate drops below the target, then raises it back when there is headroom."},
@@ -108,9 +119,7 @@ func _style_static() -> void:
 	_panel.add_theme_stylebox_override("panel", UITheme.modal_style())
 	_heading.text = definition["title"]
 	_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_heading.add_theme_font_override("font", UITheme.font_display())
-	_heading.add_theme_font_size_override("font_size", UITheme.SIZE_DISPLAY)
-	_heading.add_theme_color_override("font_color", UITheme.INK)
+	UITheme.style_heading(_heading)
 	var box := _heading.get_parent() as VBoxContainer
 	var eyebrow := UITheme.eyebrow("Settings")
 	box.add_child(eyebrow)
@@ -147,6 +156,22 @@ func _build_rows() -> void:
 			continue
 		target.visible = bool(GameConfig.get_setting(entry["depends_on"]))
 		source.toggled.connect(func(pressed: bool) -> void: target.visible = pressed)
+
+
+## Wraps the row list in a scroll container so tall categories (Display at
+## large interface scales) stay reachable; `open_panel()` sizes it to content
+## up to the available viewport height.
+func _wrap_rows_in_scroll() -> void:
+	var box := _rows_box.get_parent() as VBoxContainer
+	var rows_index := _rows_box.get_index()
+	_scroll = ScrollContainer.new()
+	_scroll.name = "OptionsScroll"
+	_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	box.add_child(_scroll)
+	box.move_child(_scroll, rows_index)
+	_rows_box.reparent(_scroll)
+	_rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 
 func _add_slider(entry: Dictionary) -> Control:

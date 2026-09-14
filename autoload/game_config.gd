@@ -16,7 +16,19 @@ const DEFAULT_SETTINGS := {
 	"fps_cap": 0,
 	"dynamic_resolution": false,
 	"dynamic_resolution_target": 60,
+	"ui_scale": 1.0,
+	"text_scale": 1.0,
 }
+
+# Interface scale. UI scale drives the window's canvas-item content scale, so
+# the HUD and menus resize without touching the 3D render resolution; text
+# scale is a font multiplier on top of the layout, independent of UI scale.
+const UI_SCALE_VALUES := [0.75, 1.0, 1.25, 1.5, 2.0]
+const UI_SCALE_NAMES := ["75%", "100%", "125%", "150%", "200%"]
+const TEXT_SCALE_VALUES := [0.85, 1.0, 1.15, 1.3]
+const TEXT_SCALE_NAMES := ["Small", "Default", "Large", "Larger"]
+
+signal ui_scale_changed
 
 # Frame pacing. VSync indexes mirror DisplayServer.VSyncMode exactly, and FPS
 # cap values are real frame rates (`0` is unlimited), so the Display rows map
@@ -158,6 +170,20 @@ func set_setting(key: String, value: Variant) -> void:
 		reset_graphics_to_preset()
 	elif key == "vsync" or key == "fps_cap":
 		apply_frame_pacing()
+	elif key == "ui_scale" or key == "text_scale":
+		apply_ui_scale()
+
+
+## Applies the interface scale. The window's canvas-item content scale resizes
+## the HUD and menus while leaving the 3D render resolution and the FSR scale
+## alone, and the engine oversamples fonts by the same factor so text stays
+## crisp. Text scale rides on top of that through UITheme. Emits
+## `ui_scale_changed` so the live screens rebuild their theme and font sizes.
+func apply_ui_scale() -> void:
+	var window := get_window()
+	if window != null:
+		window.content_scale_factor = get_ui_scale()
+	ui_scale_changed.emit()
 
 
 ## Applies the pacing settings that the engine can hold at all times. Dynamic
@@ -221,6 +247,16 @@ func get_render_distance() -> int:
 	return int(settings.get("render_distance", DEFAULT_SETTINGS["render_distance"]))
 
 
+func get_ui_scale() -> float:
+	return clampf(float(settings.get("ui_scale", DEFAULT_SETTINGS["ui_scale"])),
+		UI_SCALE_VALUES[0], UI_SCALE_VALUES[UI_SCALE_VALUES.size() - 1])
+
+
+func get_text_scale() -> float:
+	return clampf(float(settings.get("text_scale", DEFAULT_SETTINGS["text_scale"])),
+		TEXT_SCALE_VALUES[0], TEXT_SCALE_VALUES[TEXT_SCALE_VALUES.size() - 1])
+
+
 func get_fov() -> float:
 	return float(settings.get("fov", DEFAULT_SETTINGS["fov"]))
 
@@ -274,8 +310,11 @@ func load_settings() -> void:
 				graphics[key] = saved[key]
 	settings["fps_cap"] = nearest_option(settings.get("fps_cap", DEFAULT_SETTINGS["fps_cap"]), FPS_CAP_VALUES)
 	settings["dynamic_resolution_target"] = nearest_option(settings.get("dynamic_resolution_target", DEFAULT_SETTINGS["dynamic_resolution_target"]), DYNAMIC_RESOLUTION_TARGET_VALUES)
+	settings["ui_scale"] = nearest_option(settings.get("ui_scale", DEFAULT_SETTINGS["ui_scale"]), UI_SCALE_VALUES)
+	settings["text_scale"] = nearest_option(settings.get("text_scale", DEFAULT_SETTINGS["text_scale"]), TEXT_SCALE_VALUES)
 	apply_window_mode()
 	apply_frame_pacing()
+	apply_ui_scale()
 
 
 func save_settings() -> void:
