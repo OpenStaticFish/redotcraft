@@ -47,6 +47,11 @@ const INPUT_ACTION_DEFS := [
 	{"action": "fly_down", "label": "Fly Down", "group": "Movement"},
 	{"action": "fly_boost", "label": "Fly Boost", "group": "Movement"},
 	{"action": "inventory", "label": "Inventory", "group": "Action"},
+	{"action": "map_overlay", "label": "World Map", "group": "Map"},
+	{"action": "minimap", "label": "Minimap Toggle", "group": "Map"},
+	{"action": "minimap_mode", "label": "Minimap Mode", "group": "Map"},
+	{"action": "map_zoom_in", "label": "Map Zoom In", "group": "Map"},
+	{"action": "map_zoom_out", "label": "Map Zoom Out", "group": "Map"},
 	{"action": "debug_worldgen", "label": "Worldgen Overlay", "group": "Debug"},
 	{"action": "debug_worldgen_mode", "label": "Overlay Map Mode", "group": "Debug"},
 ]

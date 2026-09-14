@@ -55,7 +55,7 @@ RedotCraft: a Minecraft-like voxel sandbox built with **Redot Engine** (Godot 4 
 
 - `player/player.gd` talks to `Main` only through signals (`block_broken`, `block_placed`, `status_requested`, `slot_cycled`, `slot_selected`, `pause_requested`), connected in `Main._connect_player()`. Keep that pattern instead of reaching into nodes.
 - Targeting uses `Player._voxel_raycast()` grid traversal, not collision geometry; it skips water so non-colliding cross plants are selectable, and the entered cell normal becomes the place face.
-- Controls: WASD, Space jump, double-tap Space toggles fly, Shift sprint, Ctrl fast fly (`fly_boost`), E inventory (`inventory`), 1-9/0 and mouse wheel select hotbar slot, LMB mine, RMB place, Esc pause (`ui_cancel`). Every `project.godot` action is rebindable in Settings -> Controls: `GameConfig` stores physical keycodes in `settings["input_bindings"]` (persisted in `settings.cfg`), rewrites the InputMap on change, and reads the defaults from `ProjectSettings` for resets.
+- Controls: WASD, Space jump, double-tap Space toggles fly, Shift sprint, Ctrl fast fly (`fly_boost`), E inventory (`inventory`), M map, ] minimap toggle, N map mode, 1-9/0 and mouse wheel select hotbar slot, LMB mine, RMB place, Esc pause (`ui_cancel`). Every `project.godot` action is rebindable in Settings -> Controls: `GameConfig` stores physical keycodes in `settings["input_bindings"]` (persisted in `settings.cfg`), rewrites the InputMap on change, and reads the defaults from `ProjectSettings` for resets.
 
 ## UI design system
 
