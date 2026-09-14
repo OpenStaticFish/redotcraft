@@ -19,6 +19,9 @@ name: PR tests
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # TEMPORARY: bootstraps the workflow on this feature branch before merge.
+  push:
+    branches: [t3code/add-pr-test-runner-workflow]
   workflow_dispatch:
 
 permissions:
@@ -66,7 +69,8 @@ jobs:
             tools/ui_flow_verify.gd \
             tools/player_target_verify.tscn \
             tools/worldgen_cactus_verify.gd \
-            tools/worldgen_tree_verify.gd
+            tools/worldgen_tree_verify.gd \
+            tools/frame_pacing_verify.gd
 
       - name: Upload check logs
         if: failure()
