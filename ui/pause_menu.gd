@@ -18,7 +18,7 @@ signal quit_requested
 
 
 func _ready() -> void:
-	_panel.theme = UITheme.build()
+	UITheme.apply(_panel)
 	_style_static()
 	_resume_button.pressed.connect(close_menu)
 	_settings_button.pressed.connect(func() -> void: _settings_menu.open_panel())
@@ -32,9 +32,7 @@ func _style_static() -> void:
 	_dim.color = Color(UITheme.VOID.r, UITheme.VOID.g, UITheme.VOID.b, 0.66)
 	_panel.add_theme_stylebox_override("panel", UITheme.modal_style())
 	_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_heading.add_theme_font_override("font", UITheme.font_display())
-	_heading.add_theme_font_size_override("font_size", UITheme.SIZE_DISPLAY)
-	_heading.add_theme_color_override("font_color", UITheme.INK)
+	UITheme.style_heading(_heading)
 	var box := _heading.get_parent() as VBoxContainer
 	var eyebrow := UITheme.eyebrow("Expedition Halted")
 	box.add_child(eyebrow)
@@ -51,7 +49,7 @@ func _style_static() -> void:
 	UITheme.style_button_ghost(_new_world_button)
 	UITheme.style_button_ghost(_quit_button)
 	_hint.add_theme_color_override("font_color", UITheme.MUTED)
-	_hint.add_theme_font_size_override("font_size", 13)
+	UITheme.apply_font_size(_hint, 13)
 
 
 func _unhandled_input(event: InputEvent) -> void:

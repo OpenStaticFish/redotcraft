@@ -45,7 +45,12 @@ const SIZE_EYEBROW := 12
 const SIZE_DISPLAY := 26
 const SIZE_WORDMARK := 56
 
+const TEXT_SCALE_DEFAULT := 1.0
+const TEXT_SCALE_MIN := 0.5
+const TEXT_SCALE_MAX := 2.0
+
 static var _cached_theme: Theme
+static var _cached_theme_scale := -1.0
 static var _cached_body: Font
 static var _cached_semi: Font
 static var _cached_display: Font
@@ -57,6 +62,8 @@ static var _cached_switch_off: ImageTexture
 static var _cached_switch_on: ImageTexture
 static var _cached_grabber: ImageTexture
 static var _cached_grabber_hi: ImageTexture
+static var _theme_hosts: Array[WeakRef] = []
+static var _game_config: Node
 
 
 # ------------------------------------------------------------------ fonts --
@@ -92,6 +99,87 @@ static func font_eyebrow(spacing: int = 2) -> FontVariation:
 		variation.spacing_glyph = spacing
 		_cached_eyebrow_font = variation
 	return _cached_eyebrow_font
+
+
+# -------------------------------------------------------------- text scale --
+## Text size is a multiplier on every font size in the UI, independent of the
+## window content scale that sizes the whole interface. GameConfig is resolved
+## through the scene tree (and cached; the node reads live settings) so the
+## theme keeps no autoload compile dependency.
+static func _game_config_node() -> Node:
+	if _game_config != null and is_instance_valid(_game_config):
+		return _game_config
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return null
+	_game_config = tree.root.get_node_or_null("GameConfig")
+	return _game_config
+
+
+static func text_scale() -> float:
+	var config := _game_config_node()
+	if config == null or not config.has_method("get_text_scale"):
+		return TEXT_SCALE_DEFAULT
+	return clampf(float(config.get_text_scale()), TEXT_SCALE_MIN, TEXT_SCALE_MAX)
+
+
+## Base font size -> logical size. Every font-size override goes through this
+## so a text-size change is one multiplier.
+static func font_size(base: int) -> int:
+	return maxi(1, roundi(float(base) * text_scale()))
+
+
+## Applies a scaled font size and tags the control so `refresh_font_sizes()`
+## can re-scale it when the text size changes.
+static func apply_font_size(control: Control, base: int) -> void:
+	control.set_meta("ui_base_font_size", base)
+	control.add_theme_font_size_override("font_size", font_size(base))
+
+
+static func refresh_font_sizes(root: Node) -> void:
+	if root is Control and root.has_meta("ui_base_font_size"):
+		(root as Control).add_theme_font_size_override("font_size", font_size(int(root.get_meta("ui_base_font_size"))))
+	for child in root.get_children():
+		refresh_font_sizes(child)
+
+
+# ------------------------------------------------------------- theme hosts --
+## Applies the shared theme to a screen host and remembers it, so a later
+## text-size change can rebuild every live screen in one pass.
+static func apply(host: Node) -> void:
+	_ensure_scale_signal()
+	if host.has_meta("ui_theme_host"):
+		return
+	host.set_meta("ui_theme_host", true)
+	_theme_hosts.append(weakref(host))
+	if host is Control:
+		(host as Control).theme = build()
+
+
+## Rebuilds the shared theme for every live host and re-scales tagged font
+## sizes. Called when the UI or text scale changes.
+static func refresh_all() -> void:
+	var rebuilt := build()
+	var live: Array[WeakRef] = []
+	for ref in _theme_hosts:
+		var host := ref.get_ref() as Node
+		if host == null:
+			continue
+		live.append(ref)
+		if host is Control:
+			(host as Control).theme = rebuilt
+		refresh_font_sizes(host)
+	_theme_hosts = live
+
+
+## One connection for the whole UI: any screen that applies the theme makes
+## the text scale live. `build()` runs again on the same signal.
+static func _ensure_scale_signal() -> void:
+	var config := _game_config_node()
+	if config == null or config.has_meta("ui_theme_signal"):
+		return
+	config.set_meta("ui_theme_signal", true)
+	config.interface_scale_changed.connect(func() -> void: refresh_all())
 
 
 # -------------------------------------------------------------- styleboxes --
@@ -164,11 +252,13 @@ static func divider(height: int = 1) -> ColorRect:
 
 # ------------------------------------------------------------------ theme --
 static func build() -> Theme:
-	if _cached_theme != null:
+	var scale := text_scale()
+	if _cached_theme != null and is_equal_approx(scale, _cached_theme_scale):
 		return _cached_theme
+	_cached_theme_scale = scale
 	var theme := Theme.new()
 	theme.default_font = font_body()
-	theme.default_font_size = SIZE_BODY
+	theme.default_font_size = font_size(SIZE_BODY)
 
 	_button_styles(theme)
 	_panel_styles(theme)
@@ -219,7 +309,7 @@ static func _button_styles(theme: Theme) -> void:
 		theme.set_color("font_pressed_color", type, EMBER_HI)
 		theme.set_color("font_focus_color", type, INK)
 		theme.set_color("font_disabled_color", type, Color(FAINT.r, FAINT.g, FAINT.b, 0.7))
-		theme.set_font_size("font_size", type, SIZE_BODY)
+		theme.set_font_size("font_size", type, font_size(SIZE_BODY))
 	theme.set_font("font", "OptionButton", font_semi())
 	theme.set_color("icon_modulate", "OptionButton", MUTED)
 
@@ -280,7 +370,7 @@ static func _popup_styles(theme: Theme) -> void:
 	theme.set_color("font_color", "PopupMenu", INK)
 	theme.set_color("font_hover_color", "PopupMenu", EMBER_HI)
 	theme.set_color("font_accelerator_color", "PopupMenu", MUTED)
-	theme.set_font_size("font_size", "PopupMenu", SIZE_BODY)
+	theme.set_font_size("font_size", "PopupMenu", font_size(SIZE_BODY))
 
 
 static func _slider_styles(theme: Theme) -> void:
@@ -310,7 +400,7 @@ static func _check_styles(theme: Theme) -> void:
 		theme.set_color("font_focus_color", type, INK)
 		theme.set_color("font_disabled_color", type, FAINT)
 		theme.set_font("font", type, font_semi())
-		theme.set_font_size("font_size", type, SIZE_BODY)
+		theme.set_font_size("font_size", type, font_size(SIZE_BODY))
 	theme.set_icon("checked", "CheckBox", _check_texture(true))
 	theme.set_icon("unchecked", "CheckBox", _check_texture(false))
 	theme.set_icon("checked_disabled", "CheckBox", _check_texture(true))
@@ -344,7 +434,7 @@ static func _tooltip_styles(theme: Theme) -> void:
 	tip.content_margin_bottom = 6.0
 	theme.set_stylebox("panel", "TooltipPanel", tip)
 	theme.set_color("font_color", "TooltipLabel", INK_DIM)
-	theme.set_font_size("font_size", "TooltipLabel", 14)
+	theme.set_font_size("font_size", "TooltipLabel", font_size(14))
 
 
 # ------------------------------------------------ button flavor overrides --
@@ -454,12 +544,16 @@ static func _connect_click(button: Button) -> void:
 
 
 # ----------------------------------------------------------- label factory --
+static func style_heading(label: Label, size: int = SIZE_DISPLAY) -> void:
+	label.add_theme_font_override("font", font_display())
+	label.add_theme_color_override("font_color", INK)
+	apply_font_size(label, size)
+
+
 static func heading(text: String, size: int = SIZE_DISPLAY) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_override("font", font_display())
-	label.add_theme_font_size_override("font_size", size)
-	label.add_theme_color_override("font_color", INK)
+	style_heading(label, size)
 	return label
 
 
@@ -476,9 +570,9 @@ static func eyebrow(text: String, color: Color = MUTED) -> HBoxContainer:
 	var label := Label.new()
 	label.text = text.to_upper()
 	label.add_theme_font_override("font", font_eyebrow())
-	label.add_theme_font_size_override("font_size", SIZE_EYEBROW)
 	label.add_theme_color_override("font_color", color)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	apply_font_size(label, SIZE_EYEBROW)
 	row.add_child(label)
 	return row
 
@@ -486,17 +580,17 @@ static func eyebrow(text: String, color: Color = MUTED) -> HBoxContainer:
 static func muted_label(text: String, size: int = 14) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", size)
 	label.add_theme_color_override("font_color", MUTED)
+	apply_font_size(label, size)
 	return label
 
 
 static func value_label() -> Label:
 	var label := Label.new()
 	label.add_theme_font_override("font", font_semi())
-	label.add_theme_font_size_override("font_size", SIZE_VALUE)
 	label.add_theme_color_override("font_color", CYAN)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	apply_font_size(label, SIZE_VALUE)
 	return label
 
 
