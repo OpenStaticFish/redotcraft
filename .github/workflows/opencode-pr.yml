@@ -1,0 +1,173 @@
+name: opencode PR review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: number
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  opencode:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr_number && format('refs/pull/{0}/head', inputs.pr_number) || github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Resolve PR context
+        env:
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            pr_number="$INPUT_PR_NUMBER"
+            head_sha="$(gh pr view "$pr_number" --json headRefOid --jq .headRefOid)"
+          else
+            pr_number="$EVENT_PR_NUMBER"
+            head_sha="$EVENT_HEAD_SHA"
+          fi
+          {
+            echo "PR_NUMBER=$pr_number"
+            echo "HEAD_SHA=$head_sha"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch previous opencode reviews
+        run: |
+          set -euo pipefail
+          bot_filter='select(.user.login == "github-actions[bot]" or .user.login == "opencode-agent[bot]")'
+          reviews_json="$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq "[.[] | ${bot_filter} | {body: .body, submitted_at: .submitted_at}]" \
+            2>/dev/null || echo '[]')"
+          comments_json="$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq "[.[] | ${bot_filter} | {body: .body, submitted_at: .created_at}]" \
+            2>/dev/null || echo '[]')"
+          reviews_json="${reviews_json:-[]}"
+          comments_json="${comments_json:-[]}"
+          combined_json="$(printf '%s\n%s\n' "$reviews_json" "$comments_json" | jq -s 'add | sort_by(.submitted_at // "")')"
+          if [[ "$(jq 'length' <<< "$combined_json")" == "0" ]]; then
+            review_content="No previous automated reviews found."
+          else
+            review_content="$(jq -r \
+              'map("### Review from " + (.submitted_at // "unknown date") + "\n\n" + (.body // "")) | join("\n\n---\n\n")' \
+              <<< "$combined_json")"
+          fi
+          {
+            echo 'PREVIOUS_REVIEWS<<OPENCODE_REVIEWS_EOF'
+            echo '## Previous Automated Reviews from the opencode reviewer'
+            echo
+            printf '%s\n' "$review_content"
+            echo 'OPENCODE_REVIEWS_EOF'
+          } >> "$GITHUB_ENV"
+          echo "Previous reviews fetched and formatted for context"
+
+      - name: Configure opencode CI permissions
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/opencode"
+          cat > "$HOME/.config/opencode/opencode.json" <<'JSON'
+          {
+            "$schema": "https://opencode.ai/config.json",
+            "permission": "allow"
+          }
+          JSON
+          echo "Configured opencode CI permissions at $HOME/.config/opencode/opencode.json"
+
+      - name: Prepare opencode cache
+        run: |
+          mkdir -p /tmp/opencode-cache
+          echo "XDG_CACHE_HOME=/tmp/opencode-cache" >> "$GITHUB_ENV"
+
+      - name: Load review prompt
+        run: |
+          set -euo pipefail
+          if ! command -v envsubst >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq gettext-base
+          fi
+          {
+            echo 'PROMPT<<OPENCODE_PROMPT_EOF'
+            envsubst '$PR_NUMBER $HEAD_SHA $PREVIOUS_REVIEWS' < .github/prompts/pr-review.md
+            echo 'OPENCODE_PROMPT_EOF'
+          } >> "$GITHUB_ENV"
+
+      - name: Verify required secrets
+        env:
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ZHIPU_API_KEY:-}" ]]; then
+            echo "::error::ZHIPU_API_KEY is not available to this repository. Add it as a repository secret or grant the organization secret to this repository."
+            exit 1
+          fi
+
+      - name: Run opencode review
+        id: ai_review
+        timeout-minutes: 40
+        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a
+        env:
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+        with:
+          model: zhipuai-coding-plan/glm-5.3
+          variant: max
+          use_github_token: true
+          prompt: ${{ env.PROMPT }}
+
+      - name: Dump opencode diagnostics
+        if: always()
+        env:
+          AI_REVIEW_OUTCOME: ${{ steps.ai_review.outcome }}
+        run: |
+          rm -f "$HOME/.local/share/opencode/auth.json"
+          echo "opencode action outcome: ${AI_REVIEW_OUTCOME:-unknown}"
+          echo "runner: ${RUNNER_NAME:-unknown} (${RUNNER_OS:-unknown}/${RUNNER_ARCH:-unknown})"
+          echo "XDG_CACHE_HOME: ${XDG_CACHE_HOME:-unset}"
+          for dir in "${XDG_CACHE_HOME:-}" "$HOME/.cache/opencode" "$HOME/.local/share/opencode"; do
+            [[ -n "$dir" ]] || continue
+            echo "Inspecting $dir"
+            du -sh "$dir" 2>/dev/null || echo "  missing"
+          done
+
+      - name: Upload opencode diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/opencode-cache
+            ~/.local/share/opencode
+            ~/.cache/opencode
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
