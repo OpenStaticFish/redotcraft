@@ -171,6 +171,19 @@ func get_vsync_mode() -> int:
 	return clampi(int(settings.get("vsync", DEFAULT_SETTINGS["vsync"])), 0, VSYNC_NAMES.size() - 1)
 
 
+## Snaps a persisted value to the nearest entry in its option table so the
+## Display row and the applied engine value cannot disagree.
+static func nearest_option(value: Variant, values: Array) -> Variant:
+	var best: Variant = values[0]
+	var best_distance := INF
+	for candidate in values:
+		var distance := absf(float(candidate) - float(value))
+		if distance < best_distance:
+			best_distance = distance
+			best = candidate
+	return best
+
+
 ## Pure dynamic-resolution policy: frame time above the target band steps the
 ## 3D render scale down, and clearly-under-budget time steps it back up toward
 ## the configured maximum. The budget is the slower of the FPS target and any
@@ -259,6 +272,8 @@ func load_settings() -> void:
 		for key in saved.keys():
 			if graphics.has(key):
 				graphics[key] = saved[key]
+	settings["fps_cap"] = nearest_option(settings.get("fps_cap", DEFAULT_SETTINGS["fps_cap"]), FPS_CAP_VALUES)
+	settings["dynamic_resolution_target"] = nearest_option(settings.get("dynamic_resolution_target", DEFAULT_SETTINGS["dynamic_resolution_target"]), DYNAMIC_RESOLUTION_TARGET_VALUES)
 	apply_window_mode()
 	apply_frame_pacing()
 

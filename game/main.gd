@@ -54,6 +54,7 @@ var _hotbar_slot_size := SLOT_WIDTH
 var _hotbar_icon_size := SLOT_ICON
 var _frame_time := 1.0 / 60.0
 var _dynamic_resolution_timer := 0.0
+var _dynamic_resolution_active := false
 
 
 func _ready() -> void:
@@ -186,6 +187,12 @@ func _update_underwater(delta: float) -> void:
 ## vsync refresh) are treated as the budget, not as GPU load.
 func _update_frame_pacing(delta: float) -> void:
 	if not bool(GameConfig.get_setting("dynamic_resolution")):
+		_dynamic_resolution_active = false
+		return
+	if not _dynamic_resolution_active:
+		_dynamic_resolution_active = true
+		_frame_time = delta
+		_dynamic_resolution_timer = DYNAMIC_RESOLUTION_INTERVAL
 		return
 	_frame_time = lerpf(_frame_time, delta, 1.0 - exp(-delta / DYNAMIC_RESOLUTION_SMOOTHING))
 	_dynamic_resolution_timer -= delta
@@ -206,8 +213,14 @@ func _update_frame_pacing(delta: float) -> void:
 			refresh = 60.0
 		cap_period = maxf(cap_period, 1.0 / refresh)
 	var max_scale := clampf(float(GameConfig.get_graphics().get("fsr_scale", 1.0)), GameConfig.DYNAMIC_RESOLUTION_MIN_SCALE, 1.0)
-	viewport.scaling_3d_scale = GameConfig.dynamic_resolution_scale(
+	var scale := GameConfig.dynamic_resolution_scale(
 		viewport.scaling_3d_scale, _frame_time, 1.0 / target_fps, max_scale, cap_period)
+	# A sub-native scale needs the FSR2 path; at native keep the plain bilinear
+	# mode so TAA/FSR2 state matches what _apply_graphics() configured.
+	var mode := Viewport.SCALING_3D_MODE_FSR2 if scale < 1.0 else Viewport.SCALING_3D_MODE_BILINEAR
+	if viewport.scaling_3d_mode != mode:
+		viewport.scaling_3d_mode = mode
+	viewport.scaling_3d_scale = scale
 
 
 func _apply_config() -> void:

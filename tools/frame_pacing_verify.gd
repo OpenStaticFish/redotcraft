@@ -23,6 +23,7 @@ func _run() -> void:
 		return
 
 	_check_defaults(config)
+	_check_option_snapping(config)
 	_check_engine_application(config)
 	_check_policy(config)
 	await _check_display_panel(config)
@@ -46,6 +47,13 @@ func _check_defaults(config: Node) -> void:
 	_expect((config.FPS_CAP_VALUES as Array).size() == (config.FPS_CAP_NAMES as Array).size(), "FPS cap tables diverged")
 	_expect((config.DYNAMIC_RESOLUTION_TARGET_VALUES as Array).size() == (config.DYNAMIC_RESOLUTION_TARGET_NAMES as Array).size(), "dynamic target tables diverged")
 	_expect((config.VSYNC_NAMES as Array).size() == 4, "vsync should expose four modes")
+
+
+func _check_option_snapping(config: Node) -> void:
+	_expect(int(config.nearest_option(100, config.FPS_CAP_VALUES)) == 90, "an out-of-table FPS cap should snap to the nearest option")
+	_expect(int(config.nearest_option(1000, config.FPS_CAP_VALUES)) == 240, "an oversized FPS cap should snap to the highest option")
+	_expect(int(config.nearest_option(-5, config.FPS_CAP_VALUES)) == 0, "a negative FPS cap should snap to Unlimited")
+	_expect(int(config.nearest_option(72, config.DYNAMIC_RESOLUTION_TARGET_VALUES)) == 60, "a 72 FPS target should snap to 60")
 
 
 func _check_engine_application(config: Node) -> void:
