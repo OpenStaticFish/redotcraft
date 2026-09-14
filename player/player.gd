@@ -3,6 +3,7 @@ extends CharacterBody3D
 
 signal block_broken(block_id: int)
 signal block_placed(block_id: int)
+signal item_used(item_id: int, block_position: Vector3i)
 signal status_requested(message: String)
 signal slot_cycled(direction: int)
 signal slot_selected(index: int)
@@ -264,7 +265,10 @@ func _place_target() -> void:
 	if not has_target or world == null:
 		return
 	if can_place_check.is_valid() and not can_place_check.call():
-		status_requested.emit("No %s left" % world.get_block_name(selected_block))
+		status_requested.emit("No %s left" % _selected_name())
+		return
+	if ItemRegistry.is_item(selected_block):
+		item_used.emit(selected_block, target_block)
 		return
 	var place_position := target_block + target_normal
 	if _player_occupies(place_position):
@@ -313,8 +317,18 @@ func _create_held_block() -> void:
 
 func _update_held_block() -> void:
 	if _held_block and world:
+		_held_block.visible = not ItemRegistry.is_item(selected_block)
+		if ItemRegistry.is_item(selected_block):
+			_held_block.mesh = null
+			return
 		_held_block.mesh = world.make_block_mesh(selected_block)
 		_held_block.material_override = world.get_blocks_material()
+
+
+func _selected_name() -> String:
+	if ItemRegistry.is_item(selected_block):
+		return ItemRegistry.get_item_name(selected_block)
+	return world.get_block_name(selected_block)
 
 
 func _player_occupies(block_position: Vector3i) -> bool:

@@ -140,7 +140,7 @@ func set_weather_state(raining: bool) -> void:
 	_weather_button.text = "Weather · Rain" if raining else "Weather · Sunny"
 
 
-func _make_slot(block_id: int, count: int, world_ref: VoxelWorld, registry: BlockRegistry) -> PanelContainer:
+func _make_slot(item_id: int, count: int, world_ref: VoxelWorld, registry: BlockRegistry) -> PanelContainer:
 	var slot := PanelContainer.new()
 	slot.custom_minimum_size = Vector2(_slot_width, 68.0)
 	var style := UITheme.panel_style(
@@ -161,8 +161,10 @@ func _make_slot(block_id: int, count: int, world_ref: VoxelWorld, registry: Bloc
 	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	if registry != null:
-		icon.texture = BlockIcon.make_icon(registry, block_id, 50)
+	if ItemRegistry.is_item(item_id):
+		icon.texture = ItemRegistry.make_icon(item_id, 50)
+	elif registry != null:
+		icon.texture = BlockIcon.make_icon(registry, item_id, 50)
 	row.add_child(icon)
 
 	var text := VBoxContainer.new()
@@ -170,7 +172,7 @@ func _make_slot(block_id: int, count: int, world_ref: VoxelWorld, registry: Bloc
 	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(text)
 	var name_label := Label.new()
-	name_label.text = world_ref.get_block_name(block_id).to_lower()
+	name_label.text = (ItemRegistry.get_item_name(item_id) if ItemRegistry.is_item(item_id) else world_ref.get_block_name(item_id)).to_lower()
 	name_label.add_theme_font_override("font", UITheme.font_semi())
 	name_label.add_theme_color_override("font_color", UITheme.INK)
 	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

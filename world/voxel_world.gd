@@ -25,6 +25,8 @@ const DEBUG_MAP_HEAVY_MODES: Array[String] = ["height", "raw_height", "slope"]
 const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4]
 const WATER_TICK_INTERVAL := 0.25
 const WATER_CELLS_PER_TICK := 1024
+const TNT_BLAST_RADIUS := 5
+const NUKE_BLAST_RADIUS := 18
 const WATER_NEIGHBOR_OFFSETS := [
 	Vector3i.ZERO,
 	Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
@@ -596,6 +598,90 @@ func place_block(block_position: Vector3i, block_id: int) -> bool:
 	_touch_chunk(chunk_position, block_position)
 	_seed_water(block_position)
 	return true
+
+
+## Activates an explosive block and returns a small result payload for HUD
+## feedback. There is deliberately no fuse or animation: these blocks are
+## inspection tools for opening terrain and exposing the generation layers.
+func trigger_explosive(block_position: Vector3i) -> Dictionary:
+	var block_id := get_block_world(block_position)
+	var radius := 0
+	match block_id:
+		BlockRegistry.BLOCK_TNT:
+			radius = TNT_BLAST_RADIUS
+		BlockRegistry.BLOCK_NUKE:
+			radius = NUKE_BLAST_RADIUS
+		_:
+			return {}
+	return {
+		"name": _blocks.get_block_name(block_id),
+		"radius": radius,
+		"removed": carve_sphere(block_position, radius),
+	}
+
+
+## Removes breakable voxels in a sphere while batching chunk invalidation.
+## Calling break_block() for every voxel would enqueue thousands of duplicate
+## mesh jobs; this path records every persistent edit but rebuilds each affected
+## chunk (and each touched edge neighbor) only once.
+func carve_sphere(center: Vector3i, radius: int) -> int:
+	var safe_radius := clampi(radius, 1, 32)
+	var radius_squared := safe_radius * safe_radius
+	var changed_chunks: Dictionary = {}
+	var rebuild_chunks: Dictionary = {}
+	var water_shell: Array[Vector3i] = []
+	var removed := 0
+	var min_y := maxi(center.y - safe_radius, 1)
+	var max_y := mini(center.y + safe_radius, VoxelDefs.WORLD_HEIGHT - 1)
+	for y in range(min_y, max_y + 1):
+		var dy := y - center.y
+		for z in range(center.z - safe_radius, center.z + safe_radius + 1):
+			var dz := z - center.z
+			for x in range(center.x - safe_radius, center.x + safe_radius + 1):
+				var dx := x - center.x
+				var distance_squared := dx * dx + dy * dy + dz * dz
+				if distance_squared > radius_squared:
+					continue
+				var position := Vector3i(x, y, z)
+				var chunk_position := _chunk_for_block(position)
+				var chunk: Chunk = _chunks.get(chunk_position)
+				if chunk == null or chunk.lod:
+					continue
+				var index := _data_index(position)
+				var block_id: int = chunk.data[index]
+				if not _blocks.is_breakable(block_id):
+					continue
+				chunk.data[index] = BlockRegistry.BLOCK_AIR
+				_record_edit(position, BlockRegistry.BLOCK_AIR)
+				removed += 1
+				changed_chunks[chunk_position] = true
+				rebuild_chunks[chunk_position] = true
+				_collect_edge_rebuilds(rebuild_chunks, chunk_position, position)
+				if distance_squared >= (safe_radius - 1) * (safe_radius - 1):
+					water_shell.append(position)
+	for chunk_position in changed_chunks:
+		_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
+	for chunk_position in rebuild_chunks:
+		_queue_rebuild(chunk_position)
+	for position in water_shell:
+		for offset in WATER_NEIGHBOR_OFFSETS:
+			if _blocks.is_water_id(get_block_world(position + offset)):
+				_seed_water(position)
+				break
+	return removed
+
+
+func _collect_edge_rebuilds(rebuilds: Dictionary, chunk_position: Vector2i, block_position: Vector3i) -> void:
+	var local_x := block_position.x - chunk_position.x * VoxelDefs.CHUNK_SIZE
+	var local_z := block_position.z - chunk_position.y * VoxelDefs.CHUNK_SIZE
+	if local_x == 0:
+		rebuilds[chunk_position + Vector2i(-1, 0)] = true
+	elif local_x == VoxelDefs.CHUNK_SIZE - 1:
+		rebuilds[chunk_position + Vector2i(1, 0)] = true
+	if local_z == 0:
+		rebuilds[chunk_position + Vector2i(0, -1)] = true
+	elif local_z == VoxelDefs.CHUNK_SIZE - 1:
+		rebuilds[chunk_position + Vector2i(0, 1)] = true
 
 
 func _record_edit(block_position: Vector3i, block_id: int) -> void:

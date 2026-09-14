@@ -7,8 +7,8 @@ const WorldgenOverlayScene := preload("res://ui/worldgen_overlay.tscn")
 const MinimapScene := preload("res://ui/minimap.tscn")
 const MapOverlayScene := preload("res://ui/map_overlay.tscn")
 
-const HOTBAR: Array[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 27]
-const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32, 27: 32}
+const HOTBAR: Array[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 27, BlockRegistry.BLOCK_TNT, BlockRegistry.BLOCK_NUKE, ItemRegistry.ITEM_FLINT_AND_STEEL]
+const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32, 27: 32, BlockRegistry.BLOCK_TNT: 16, BlockRegistry.BLOCK_NUKE: 4, ItemRegistry.ITEM_FLINT_AND_STEEL: 1}
 const STATS_INTERVAL := 0.25
 const NEAR_SHADOW_DISTANCE := 6.0
 const SLOT_WIDTH := 48.0
@@ -344,6 +344,7 @@ func _apply_graphics() -> void:
 func _connect_player() -> void:
 	player.block_broken.connect(_on_block_broken)
 	player.block_placed.connect(_on_block_placed)
+	player.item_used.connect(_on_item_used)
 	player.status_requested.connect(set_status)
 	player.slot_cycled.connect(_on_slot_cycled)
 	player.slot_selected.connect(select_slot)
@@ -700,6 +701,16 @@ func _on_block_placed(block_id: int) -> void:
 	set_status("Placed %s" % world.get_block_name(block_id))
 
 
+func _on_item_used(item_id: int, block_position: Vector3i) -> void:
+	if item_id != ItemRegistry.ITEM_FLINT_AND_STEEL:
+		return
+	var result := world.trigger_explosive(block_position)
+	if result.is_empty():
+		set_status("Flint and steel only ignites TNT or a nuke")
+		return
+	set_status("Detonated %s · carved %d blocks" % [result["name"], result["removed"]])
+
+
 func select_slot(index: int) -> void:
 	selected_slot = clampi(index, 0, HOTBAR.size() - 1)
 	_update_slot_styles()
@@ -708,9 +719,9 @@ func select_slot(index: int) -> void:
 		player.set_selected_block(HOTBAR[selected_slot])
 	if _selection_chip != null and world != null:
 		_selection_chip.text = "%s · ×%d" % [
-			world.get_block_name(HOTBAR[selected_slot]).to_lower(),
+			_item_name(HOTBAR[selected_slot]).to_lower(),
 			inventory.get(HOTBAR[selected_slot], 0)]
-	set_status("Selected %s (%d)" % [world.get_block_name(HOTBAR[selected_slot]), inventory.get(HOTBAR[selected_slot], 0)])
+	set_status("Selected %s (%d)" % [_item_name(HOTBAR[selected_slot]), inventory.get(HOTBAR[selected_slot], 0)])
 
 
 func can_place_selected() -> bool:
@@ -731,14 +742,22 @@ func consume_selected_block() -> void:
 func _update_inventory_display() -> void:
 	var registry := world.get_registry()
 	for index in slot_icons.size():
-		var block_id: int = HOTBAR[index]
-		if registry != null:
-			slot_icons[index].texture = BlockIcon.make_icon(registry, block_id, int(_hotbar_icon_size))
-		slot_count_labels[index].text = "×%d" % inventory.get(block_id, 0)
+		var item_id: int = HOTBAR[index]
+		if ItemRegistry.is_item(item_id):
+			slot_icons[index].texture = ItemRegistry.make_icon(item_id, int(_hotbar_icon_size))
+		elif registry != null:
+			slot_icons[index].texture = BlockIcon.make_icon(registry, item_id, int(_hotbar_icon_size))
+		slot_count_labels[index].text = "×%d" % inventory.get(item_id, 0)
 	if _selection_chip != null:
 		_selection_chip.text = "%s · ×%d" % [
-			world.get_block_name(HOTBAR[selected_slot]).to_lower(),
+			_item_name(HOTBAR[selected_slot]).to_lower(),
 			inventory.get(HOTBAR[selected_slot], 0)]
+
+
+func _item_name(item_id: int) -> String:
+	if ItemRegistry.is_item(item_id):
+		return ItemRegistry.get_item_name(item_id)
+	return world.get_block_name(item_id)
 
 
 func set_status(message: String) -> void:
