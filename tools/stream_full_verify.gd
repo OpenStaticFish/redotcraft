@@ -7,7 +7,10 @@ extends SceneTree
 
 const RENDER_DISTANCE := 10
 const CONFIG := {"seed": 918273, "tree_density": 1.0, "decoration_density": 1.0}
-const MAX_WAIT_TICKS := 240
+# Shared CI runners can take just over 60 seconds to finish the 441-chunk pass
+# under concurrent shards. Keep the assertion strict, but leave enough wall
+# time to distinguish a real stalled queue from runner contention.
+const MAX_WAIT_TICKS := 480
 const WAIT_TICK := 0.25
 
 var _failures := 0
