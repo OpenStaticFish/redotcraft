@@ -724,10 +724,18 @@ func _on_block_placed(block_id: int) -> void:
 func _on_item_used(item_id: int, block_position: Vector3i) -> void:
 	if item_id != ItemRegistry.ITEM_FLINT_AND_STEEL:
 		return
-	var result := world.trigger_explosive(block_position)
+	var result := world.use_flint_and_steel(block_position, player.target_normal)
 	if result.is_empty():
-		set_status("Flint and steel only ignites TNT or a nuke")
+		set_status("Flint and steel needs a solid face to light")
 		return
+	if result.has("blocked"):
+		set_status("Too wet to light" if result["blocked"] == "wet" else "Already burning")
+		return
+	if int(result.get("ignited", 0)) > 0:
+		AudioManager.play_block_place(BlockRegistry.BLOCK_FIRE, Vector3(block_position) + Vector3(0.5, 0.5, 0.5))
+		set_status("Lit fire")
+		return
+	AudioManager.play_block_break(BlockRegistry.BLOCK_TNT, Vector3(block_position) + Vector3(0.5, 0.5, 0.5))
 	set_status("Detonated %s · carved %d blocks" % [result["name"], result["removed"]])
 
 
