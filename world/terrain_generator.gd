@@ -13,6 +13,7 @@ class GenResult:
 	var water_tints: PackedColorArray
 	var timings: Dictionary
 	var lod := false
+	var config_revision := -1
 	var lod_solid_y := PackedInt32Array()
 	var lod_solid_id := PackedByteArray()
 	var lod_sub_id := PackedByteArray()

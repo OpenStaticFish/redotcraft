@@ -243,7 +243,8 @@ func _rebuild_desired() -> void:
 			if _chunks.has(pos) and (_chunks[pos] as Chunk).lod != want_lod:
 				_dirty[pos] = true
 			var staged: TerrainGenerator.GenResult = _generated.get(pos)
-			if staged != null and staged.lod != want_lod:
+			if staged != null and (staged.lod != want_lod \
+					or staged.config_revision != _worldgen_revision):
 				_generated.erase(pos)
 			if not _chunks.has(pos) and not _generated.has(pos) and not _pending.has(pos):
 				wanted.append(pos)
@@ -357,7 +358,9 @@ func _collect_jobs() -> void:
 			if job.slot.has("generated") and job.slot["generated"] != null \
 					and _desired.has(pos) and job.version == _chunk_edit_version.get(pos, 0) \
 					and job.config_revision == _worldgen_revision and job.lod == _chunk_uses_lod(pos):
-				_generated[pos] = job.slot["generated"]
+				var generated: TerrainGenerator.GenResult = job.slot["generated"]
+				generated.config_revision = job.config_revision
+				_generated[pos] = generated
 				_queue_generated_meshes_around(pos)
 			elif _desired.has(pos):
 				_queue_rebuild(pos)
@@ -414,7 +417,7 @@ func _run_full_remesh_job(data: PackedByteArray, foliage_tints: PackedColorArray
 	for z in VoxelDefs.CHUNK_SIZE:
 		for x in VoxelDefs.CHUNK_SIZE:
 			var column := x + z * VoxelDefs.DATA_STRIDE_Z
-			var top := 0
+			var top := -1
 			for y in range(VoxelDefs.WORLD_HEIGHT - 1, -1, -1):
 				if data[column + y * VoxelDefs.DATA_STRIDE_Y] != BlockRegistry.BLOCK_AIR:
 					top = y
@@ -472,12 +475,6 @@ func _chunk_uses_lod(pos: Vector2i) -> bool:
 	return maxi(absi(pos.x - _stream_center.x), absi(pos.y - _stream_center.y)) > lod_distance
 
 
-func _gather_job_neighbors(pos: Vector2i, lod: bool):
-	if lod:
-		return _gather_lod_neighbors(pos)
-	return _gather_neighbors(pos)
-
-
 func _queue_generated_meshes_around(pos: Vector2i) -> void:
 	_queue_generated_mesh_if_ready(pos)
 	for direction in VoxelDefs.DIRS_8:
@@ -503,7 +500,8 @@ func _generated_neighbors_ready(pos: Vector2i) -> bool:
 		if chunk != null and chunk.lod == _chunk_uses_lod(neighbor_pos):
 			continue
 		var generated: TerrainGenerator.GenResult = _generated.get(neighbor_pos)
-		if generated == null or generated.lod != _chunk_uses_lod(neighbor_pos):
+		if generated == null or generated.lod != _chunk_uses_lod(neighbor_pos) \
+				or generated.config_revision != _worldgen_revision:
 			return false
 	return true
 
@@ -544,7 +542,7 @@ func _gather_generated_neighbors(pos: Vector2i, lod: bool):
 					generated.lod_sub_id, generated.lod_water_y)
 			else:
 				out.samples[direction] = ChunkMesher.NeighborSample.new(
-					generated.data, generated.max_y, generated.heights)
+					generated.data.duplicate(), generated.max_y, generated.heights.duplicate())
 		else:
 			continue
 		out.mask |= (1 << index)

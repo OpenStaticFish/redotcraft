@@ -314,7 +314,8 @@ func build_lod(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: Pac
 							top_solid, z, solid_id[column], foliage_tints, column, result, top_ambient)
 				var water_from := maxi(exposed_from, top_solid + 1)
 				if level > 0 and top_water >= water_from and top_water > neighbor_water:
-					_append_lod_water_run(face, x, water_from, top_water, z, _water_top(level),
+					var run_from := maxi(water_from, neighbor_water + 1)
+					_append_lod_water_run(face, x, run_from, top_water, z, _water_top(level),
 						level < 8, _column_tint(column, water_tints), result)
 	return result
 
