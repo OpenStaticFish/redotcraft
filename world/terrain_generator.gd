@@ -12,6 +12,8 @@ class GenResult:
 	var foliage_tints: PackedColorArray
 	var water_tints: PackedColorArray
 	var timings: Dictionary
+	var lod := false
+	var config_revision := -1
 	var lod_solid_y := PackedInt32Array()
 	var lod_solid_id := PackedByteArray()
 	var lod_sub_id := PackedByteArray()
@@ -69,6 +71,7 @@ func generate_data(chunk_pos: Vector2i, edits: Dictionary, lod: bool = false) ->
 		result.lod_sub_id = compact["sub_id"]
 		result.lod_water_y = compact["water_y"]
 		result.lod_water_level = compact["water_level"]
+		result.lod = true
 		return result
 	var populated: Dictionary = _populator.populate(chunk_pos, field, edits, true)
 	var populate_us := Time.get_ticks_usec() - populate_start
@@ -77,12 +80,13 @@ func generate_data(chunk_pos: Vector2i, edits: Dictionary, lod: bool = false) ->
 	var heights_start := Time.get_ticks_usec()
 	var heights := _build_heights(data, max_y)
 	var heights_us := Time.get_ticks_usec() - heights_start
-	return GenResult.new(data, max_y, heights, _build_foliage_tints(field), _build_water_tints(field), {
+	var result := GenResult.new(data, max_y, heights, _build_foliage_tints(field), _build_water_tints(field), {
 		"terrain_us": terrain_us,
 		"populate_us": populate_us,
 		"heightmap_us": heights_us,
 		"generation_us": Time.get_ticks_usec() - total_start,
 	})
+	return result
 
 
 func _build_foliage_tints(field: ChunkTerrainData) -> PackedColorArray:

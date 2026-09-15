@@ -46,6 +46,7 @@ func _initialize() -> void:
 		_verify_chunk(clean, decorated, cave_free, mesher, pos)
 	_verify_canopy_coverage(decorated)
 	_verify_lod_shading(mesher)
+	_verify_unloaded_water_edges(mesher)
 	if _failures == 0:
 		print("WORLDGEN LOD VERIFY: PASS")
 	else:
@@ -247,6 +248,35 @@ func _verify_compact_neighbors(generator: TerrainGenerator, mesher: ChunkMesher,
 		_fail("compact neighbors produced no mesh at %s" % pos)
 	elif with_neighbors.indices.size() >= bare.indices.size():
 		_fail("compact neighbors did not cull boundary faces at %s" % pos)
+
+
+## Missing distance neighbors must not turn a flat ocean into four transparent
+## chunk-edge curtains. Only the 16x16 water top should be emitted.
+func _verify_unloaded_water_edges(mesher: ChunkMesher) -> void:
+	var solid_y := PackedInt32Array()
+	var solid_id := PackedByteArray()
+	var sub_id := PackedByteArray()
+	var water_y := PackedInt32Array()
+	var water_level := PackedByteArray()
+	var tints := PackedColorArray()
+	solid_y.resize(VoxelDefs.CHUNK_AREA)
+	solid_y.fill(12)
+	solid_id.resize(VoxelDefs.CHUNK_AREA)
+	solid_id.fill(BlockRegistry.BLOCK_SAND)
+	sub_id.resize(VoxelDefs.CHUNK_AREA)
+	sub_id.fill(BlockRegistry.BLOCK_SAND)
+	water_y.resize(VoxelDefs.CHUNK_AREA)
+	water_y.fill(VoxelDefs.SEA_LEVEL)
+	water_level.resize(VoxelDefs.CHUNK_AREA)
+	water_level.fill(8)
+	tints.resize(VoxelDefs.CHUNK_AREA)
+	tints.fill(Color.WHITE)
+	var mesh := mesher.build_lod(solid_y, solid_id, sub_id, water_y, water_level,
+		VoxelDefs.SEA_LEVEL, tints, tints, ChunkMesher.LodNeighbors.new())
+	var expected_top_indices := VoxelDefs.CHUNK_AREA * 6
+	if mesh.water_indices.size() != expected_top_indices:
+		_fail("unloaded ocean edge emitted water curtains: %d indices != %d" % [
+			mesh.water_indices.size(), expected_top_indices])
 
 
 func _top_face_heights(mesh: ChunkMesher.MeshResult) -> Dictionary:

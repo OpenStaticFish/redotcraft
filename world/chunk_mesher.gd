@@ -31,6 +31,8 @@ var _emission_b: PackedByteArray = PackedByteArray()
 class MeshResult:
 	var data := PackedByteArray()
 	var heights := PackedInt32Array()
+	var foliage_tints := PackedColorArray()
+	var water_tints := PackedColorArray()
 	var max_y := 0
 	var mask := 0
 	var verts := PackedVector3Array()
@@ -151,10 +153,14 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, fo
 	var result := MeshResult.new()
 	result.data = data
 	result.heights = heights
+	result.foliage_tints = foliage_tints
+	result.water_tints = water_tints
 	result.mask = neighbors.mask
 	result.build_collision = want_collision
+	# Persist the authoritative inclusive content height. The extra air row is a
+	# local meshing bound only; storing it made max_y grow on every remesh.
+	result.max_y = data_max_y
 	var max_y := clampi(data_max_y + 1, 1, VoxelDefs.WORLD_HEIGHT - 1)
-	result.max_y = max_y
 	var light_volume := _assemble_light_volume(data, data_max_y, heights, neighbors)
 	_compute_sky_light(light_volume)
 	_compute_block_light(light_volume)
@@ -242,6 +248,8 @@ const LOD_MIN_SIDE_SHADE: float = 0.5
 
 func build_lod(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: PackedByteArray, water_y: PackedInt32Array, water_level: PackedByteArray, data_max_y: int, foliage_tints: PackedColorArray, water_tints: PackedColorArray, neighbors: LodNeighbors) -> MeshResult:
 	var result := MeshResult.new()
+	result.foliage_tints = foliage_tints
+	result.water_tints = water_tints
 	result.mask = neighbors.mask
 	result.max_y = data_max_y
 	result.lod_solid_y = solid_y
@@ -278,21 +286,37 @@ func build_lod(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: Pac
 						var edge_index := z if direction.x != 0 else x
 						neighbor_solid = edge.solid[edge_index]
 						neighbor_water = edge.water[edge_index]
+					elif top_water >= 0:
+						# An unknown chunk edge is not a shoreline. Treat its water
+						# surface as continuous until the neighbor arrives; otherwise
+						# transparent sea-level curtains expose each 16x16 LOD chunk as
+						# a large square split into visible diagonal triangles.
+						neighbor_water = top_water
 				var face: int = LOD_SIDE_FACES[index]
 				var exposed_from := maxi(neighbor_solid, neighbor_water) + 1
-				var top := maxi(top_solid, top_water)
-				var leaves := solid_id[column] >= 0 and _leaves[solid_id[column]] == 1
-				for y in range(exposed_from, top + 1):
-					if y > top_solid:
-						if level > 0 and y > neighbor_water:
-							var above_water := y + 1 <= top_water
-							_append_lod_water_face(face, x, y, z, 1.0 if above_water else _water_top(level), level < 8, _column_tint(column, water_tints), result)
+				# Distance sides used to emit one quad per vertical block, making a
+				# compact LOD almost as triangle-heavy as a full chunk. Merge each
+				# contiguous material run instead. Endpoint colors retain the depth
+				# gradient, reducing typical LOD geometry by an
+				# order of magnitude without changing its silhouette.
+				if top_solid >= exposed_from:
+					var leaves := _leaves[solid_id[column]] == 1
+					if leaves:
+						_append_lod_block_run(face, x, exposed_from, top_solid, z,
+							solid_id[column], _tint_for(solid_id[column], column, foliage_tints),
+							result, top_ambient, top_solid)
 					else:
-						var depth := top_solid - y
-						var id := solid_id[column] if depth == 0 else (sub_id[column] if (depth <= LOD_SOIL_DEPTH or leaves) else BlockRegistry.BLOCK_STONE)
-						var side_ambient: float = clampf(1.0 - float(depth) * LOD_DEPTH_DARKEN, LOD_MIN_SIDE_SHADE, 1.0)
-						side_ambient *= 1.0 - (1.0 - top_ambient) * 0.6
-						_append_lod_block_face(face, x, y, z, id, _tint_for(id, column, foliage_tints), result, side_ambient)
+						_append_lod_block_run_clipped(face, x, exposed_from, top_solid - LOD_SOIL_DEPTH - 1,
+							top_solid, z, BlockRegistry.BLOCK_STONE, foliage_tints, column, result, top_ambient)
+						_append_lod_block_run_clipped(face, x, maxi(exposed_from, top_solid - LOD_SOIL_DEPTH),
+							top_solid - 1, top_solid, z, sub_id[column], foliage_tints, column, result, top_ambient)
+						_append_lod_block_run_clipped(face, x, maxi(exposed_from, top_solid), top_solid,
+							top_solid, z, solid_id[column], foliage_tints, column, result, top_ambient)
+				var water_from := maxi(exposed_from, top_solid + 1)
+				if level > 0 and top_water >= water_from and top_water > neighbor_water:
+					var run_from := maxi(water_from, neighbor_water + 1)
+					_append_lod_water_run(face, x, run_from, top_water, z, _water_top(level),
+						level < 8, _column_tint(column, water_tints), result)
 	return result
 
 
@@ -346,6 +370,78 @@ func _append_lod_water_face(face: int, x: int, y: int, z: int, top: float, flowi
 		result.water_colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, flow_alpha))
 		result.water_light.append_array(PackedFloat32Array([0.0, 0.0, 0.0, 1.0]))
 	result.water_indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
+
+
+func _append_lod_block_run_clipped(face: int, x: int, from_y: int, to_y: int,
+		top_solid: int, z: int, block_id: int, foliage_tints: PackedColorArray,
+		column: int, result: MeshResult, top_ambient: float) -> void:
+	if from_y > to_y:
+		return
+	_append_lod_block_run(face, x, from_y, to_y, z, block_id,
+		_tint_for(block_id, column, foliage_tints), result, top_ambient, top_solid)
+
+
+func _append_lod_block_run(face: int, x: int, from_y: int, to_y: int, z: int,
+		block_id: int, tint: Color, result: MeshResult, top_ambient: float,
+		top_solid: int) -> void:
+	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
+	var layer := _layer_for(block_id, face)
+	var base := result.verts.size()
+	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
+	var face_uvs: Array = VoxelDefs.FACE_UVS[face]
+	var run_height := to_y - from_y + 1
+	var ecotone_shade := 1.0 - (1.0 - top_ambient) * 0.6
+	for corner in 4:
+		var offset: Vector3i = face_verts[corner]
+		var vertex_y := to_y + 1 if offset.y == 1 else from_y
+		result.verts.append(Vector3(x + offset.x, vertex_y, z + offset.z))
+		result.normals.append(Vector3(normal))
+		var uv: Vector2 = face_uvs[corner]
+		uv.y *= float(run_height)
+		result.uvs.append(uv)
+		var sample_y := to_y if offset.y == 1 else from_y
+		var depth := top_solid - sample_y
+		var ambient: float = clampf(1.0 - float(depth) * LOD_DEPTH_DARKEN,
+			LOD_MIN_SIDE_SHADE, 1.0) * ecotone_shade
+		var shade: float = VoxelDefs.FACE_SHADE[face] * ambient
+		result.colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, _wind[block_id]))
+		result.layers.push_back(float(layer))
+		result.light.push_back(0.0)
+		result.light.push_back(0.0)
+		result.light.push_back(0.0)
+		result.light.push_back(1.0)
+	result.indices.push_back(base)
+	result.indices.push_back(base + 2)
+	result.indices.push_back(base + 1)
+	result.indices.push_back(base)
+	result.indices.push_back(base + 3)
+	result.indices.push_back(base + 2)
+
+
+func _append_lod_water_run(face: int, x: int, from_y: int, to_y: int, z: int,
+		top: float, flowing: bool, tint: Color, result: MeshResult) -> void:
+	var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
+	var base := result.water_verts.size()
+	var face_verts: Array = VoxelDefs.FACE_VERTS[face]
+	var shade := 0.92
+	var flow_alpha := 0.72 if flowing else 1.0
+	for corner in 4:
+		var offset: Vector3i = face_verts[corner]
+		var vertex_y := float(from_y) if offset.y == 0 else float(to_y) + top
+		result.water_verts.append(Vector3(x + offset.x, vertex_y, z + offset.z))
+		result.water_normals.append(Vector3(normal))
+		result.water_uvs.append(VoxelDefs.FACE_UVS[face][corner])
+		result.water_colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, flow_alpha))
+		result.water_light.push_back(0.0)
+		result.water_light.push_back(0.0)
+		result.water_light.push_back(0.0)
+		result.water_light.push_back(1.0)
+	result.water_indices.push_back(base)
+	result.water_indices.push_back(base + 2)
+	result.water_indices.push_back(base + 1)
+	result.water_indices.push_back(base)
+	result.water_indices.push_back(base + 3)
+	result.water_indices.push_back(base + 2)
 
 
 func make_block_mesh(block_id: int) -> ArrayMesh:
