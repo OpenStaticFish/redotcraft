@@ -728,6 +728,9 @@ func _on_item_used(item_id: int, block_position: Vector3i) -> void:
 	if result.is_empty():
 		set_status("Flint and steel needs a solid face to light")
 		return
+	if result.has("blocked"):
+		set_status("Too wet to light" if result["blocked"] == "wet" else "Already burning")
+		return
 	if int(result.get("ignited", 0)) > 0:
 		AudioManager.play_block_place(BlockRegistry.BLOCK_FIRE, Vector3(block_position) + Vector3(0.5, 0.5, 0.5))
 		set_status("Lit fire")

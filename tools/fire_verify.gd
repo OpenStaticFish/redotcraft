@@ -13,6 +13,7 @@ func _ready() -> void:
 	_check_decay()
 	_check_explosive_chain()
 	_check_flint_and_steel()
+	_check_submerged_and_support()
 	_check_persistence_reseed()
 	_check_shader_wiring()
 	if _failures == 0:
@@ -132,6 +133,45 @@ func _check_flint_and_steel() -> void:
 	var far_away := Vector3i(4096, 40, 4096)
 	_expect(world.use_flint_and_steel(far_away, Vector3i.UP).is_empty(),
 		"flint and steel ignited unloaded terrain")
+	world.free()
+
+
+func _check_submerged_and_support() -> void:
+	var world := _make_world(8)
+	# A log with water directly above is flooded and cannot be lit.
+	var wet_log := Vector3i(2, 9, 2)
+	_set_block(world._chunks[Vector2i.ZERO].data, wet_log, BlockRegistry.BLOCK_LOG)
+	_set_block(world._chunks[Vector2i.ZERO].data, wet_log + Vector3i.UP, BlockRegistry.BLOCK_WATER)
+	var wet_lit := world.use_flint_and_steel(wet_log, Vector3i.UP)
+	_expect(wet_lit.get("blocked", "") == "wet", "flint and steel lit a submerged log")
+	_expect(not world._burning.has(wet_log), "submerged log started burning")
+
+	# Re-clicking a burning block reports already-burning rather than a face hint.
+	var log_position := Vector3i(4, 9, 4)
+	_set_block(world._chunks[Vector2i.ZERO].data, log_position, BlockRegistry.BLOCK_LOG)
+	world.use_flint_and_steel(log_position, Vector3i.UP)
+	var again := world.use_flint_and_steel(log_position, Vector3i.UP)
+	_expect(again.get("blocked", "") == "burning", "re-lighting a burning block was not reported")
+
+	# Fire keeps burning next to transparent-but-solid glass (broadened support).
+	var fire_position := Vector3i(6, 9, 6)
+	_set_block(world._chunks[Vector2i.ZERO].data, fire_position, BlockRegistry.BLOCK_GLASS)
+	_set_block(world._chunks[Vector2i.ZERO].data, fire_position + Vector3i.UP, BlockRegistry.BLOCK_AIR)
+	_expect(world.ignite_fire(fire_position + Vector3i.UP), "failed to place fire on glass")
+	world._fire_tick()
+	_expect(world.get_block_world(fire_position + Vector3i.UP) == BlockRegistry.BLOCK_FIRE,
+		"fire on a glass face was extinguished")
+
+	# Burn-out queues adjacent water so a flooded cell refills, like break_block().
+	var burn_position := Vector3i(10, 9, 10)
+	_set_block(world._chunks[Vector2i.ZERO].data, burn_position, BlockRegistry.BLOCK_LOG)
+	world._start_burning(burn_position, {})
+	world._burning[burn_position] = 1
+	world._water_queued.clear()
+	world._fire_tick()
+	_expect(world.get_block_world(burn_position) == BlockRegistry.BLOCK_AIR,
+		"burning block did not crumble away")
+	_expect(not world._water_queued.is_empty(), "burnt block did not seed adjacent water")
 	world.free()
 
 

@@ -71,13 +71,20 @@ func _make_instance(layer_name: String, multimesh: MultiMesh) -> MultiMeshInstan
 func refresh(cells: Dictionary, burn_ticks: int) -> void:
 	if _flame_multimesh == null:
 		return
+	var keys := cells.keys()
+	# Over the cap, keep the cells nearest the camera: those are the active fire
+	# front the player is watching, not the stale cells that ignited first.
+	if keys.size() > MAX_CELLS:
+		var origin := Vector3.ZERO
+		var camera := get_viewport().get_camera_3d() if is_inside_tree() else null
+		if camera != null:
+			origin = camera.global_position
+		keys.sort_custom(func(a: Vector3i, b: Vector3i) -> bool:
+			return (Vector3(a) - origin).length_squared() < (Vector3(b) - origin).length_squared())
+		keys.resize(MAX_CELLS)
 	var flame_count := 0
 	var smoke_count := 0
-	var cells_left := MAX_CELLS
-	for key in cells:
-		if cells_left <= 0:
-			break
-		cells_left -= 1
+	for key in keys:
 		var position: Vector3i = key
 		var center := Vector3(position) + Vector3(0.5, 0.5, 0.5)
 		var progress := 1.0 - float(cells[key]) / float(maxi(burn_ticks, 1))

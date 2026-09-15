@@ -1061,6 +1061,10 @@ func use_flint_and_steel(block_position: Vector3i, normal: Vector3i) -> Dictiona
 	# A flammable block catches fire itself; anything else lights the air cell in
 	# front of the clicked face (so flint and steel can still start a ground fire).
 	if _blocks.is_flammable(block_id):
+		if _is_submerged(block_position):
+			return {"ignited": 0, "blocked": "wet"}
+		if _burning.has(block_position):
+			return {"ignited": 0, "blocked": "burning"}
 		if not ignite_fire(block_position):
 			return {}
 	elif normal != Vector3i.ZERO and ignite_fire(block_position + normal):
@@ -1068,6 +1072,12 @@ func use_flint_and_steel(block_position: Vector3i, normal: Vector3i) -> Dictiona
 	else:
 		return {}
 	return {"name": "FIRE", "radius": 0, "removed": 0, "ignited": 1}
+
+
+## Fire cannot start in a flooded cell: the cell above counts as submerged, which
+## stops flint-and-steel lighting a mangrove log under the waterline.
+func _is_submerged(block_position: Vector3i) -> bool:
+	return _blocks.is_water_id(get_block_world(block_position + Vector3i(0, 1, 0)))
 
 
 ## Public ignition entry point. A flammable target starts burning in place (its
@@ -1118,6 +1128,8 @@ func _ignite_fire_cell(block_position: Vector3i, life: int, changed_chunks: Dict
 ## empty because no voxel changed.
 func _start_burning(block_position: Vector3i, _changed_chunks: Dictionary) -> bool:
 	if not _blocks.is_flammable(get_block_world(block_position)):
+		return false
+	if _is_submerged(block_position):
 		return false
 	if _burning.has(block_position):
 		return false
@@ -1258,6 +1270,12 @@ func _update_burning_cell(position: Vector3i, changed_chunks: Dictionary) -> voi
 			_fire_spread_budget -= 1
 			cooldown = FIRE_SPREAD_INTERVAL_TICKS
 			_fire_spread_cooldown[position] = cooldown
+	# A chain blast in the loop above may have carved this very block; bail before
+	# re-recording an AIR edit that `carve_sphere` already handled.
+	if not _blocks.is_flammable(get_block_world(position)):
+		_burning.erase(position)
+		_fire_spread_cooldown.erase(position)
+		return
 	var ticks := int(_burning[position]) - 1
 	if ticks <= 0:
 		_burning.erase(position)
@@ -1276,13 +1294,14 @@ func _decrement_fire_cooldown(position: Vector3i) -> int:
 	return cooldown
 
 
-## Fire needs an opaque or flammable neighbor to keep burning; otherwise it
-## floats in air and is extinguished.
+## Fire needs any non-air, non-water neighbor to keep burning (solid blocks,
+## glass, foliage, even other fire); otherwise it floats in air and dies.
 func _fire_supported(position: Vector3i) -> bool:
 	for offset in FIRE_OFFSETS:
 		var neighbor_id := get_block_world(position + offset)
-		if _blocks.is_opaque(neighbor_id) or _blocks.is_flammable(neighbor_id):
-			return true
+		if neighbor_id == BlockRegistry.BLOCK_AIR or _blocks.is_water_id(neighbor_id):
+			continue
+		return true
 	return false
 
 
@@ -1296,17 +1315,20 @@ func _extinguish_fire(position: Vector3i, changed_chunks: Dictionary) -> void:
 		return
 	chunk.data[_data_index(position)] = BlockRegistry.BLOCK_AIR
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
+	_seed_water(position)
 	changed_chunks[_chunk_for_block(position)] = true
 
 
 ## Final state of a burnt block: it crumbles to ash and disappears. This is the
-## only voxel change in the burning lifecycle, so it is the one persisted.
+## only voxel change in the burning lifecycle, so it is the one persisted. Like
+## `break_block()`/`carve_sphere()`, the new air lets adjacent water flow in.
 func _destroy_burnt_block(position: Vector3i, changed_chunks: Dictionary) -> void:
 	var chunk := _loaded_chunk_for(position)
 	if chunk == null or chunk.lod:
 		return
 	chunk.data[_data_index(position)] = BlockRegistry.BLOCK_AIR
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
+	_seed_water(position)
 	changed_chunks[_chunk_for_block(position)] = true
 
 
