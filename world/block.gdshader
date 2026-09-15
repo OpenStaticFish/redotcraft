@@ -11,6 +11,9 @@ uniform float min_light : hint_range(0.0, 1.0) = 0.05;
 // shadow. Non-leaf cutout blocks (glass, cross foliage) are unaffected. Driven
 // by the Advanced Graphics -> Shadows "Solid Leaf Shadows" setting.
 uniform float solid_leaf_shadows : hint_range(0.0, 1.0) = 1.0;
+// Texture-array layer of the fire sheet (-1 disables). That layer gets a
+// scrolling, wobbling UV so the flame reads as animated without extra frames.
+uniform float fire_layer : hint_range(-1.0, 255.0) = -1.0;
 // Camera-submerged strength (0 above water), driven by DayNightCycle. Caustics
 // are projected from the water surface onto sky-lit upward faces.
 global uniform float underwater_caustics;
@@ -44,10 +47,21 @@ void vertex() {
 }
 
 void fragment() {
-	vec4 tex = texture(albedo_texture, vec3(UV, texture_layer));
+	vec2 uv = UV;
+	float fire = abs(texture_layer - fire_layer) < 0.5 ? 1.0 : 0.0;
+	float flicker = 1.0;
+	if (fire > 0.5) {
+		// Grow and waver from the base without wrapping the sheet, so the flame
+		// stays anchored to the bottom of the cell and only licks upward.
+		float t = TIME * 2.4;
+		uv.y = clamp(UV.y * (1.0 + 0.08 * sin(t) + 0.04 * sin(t * 1.7 + 1.3)), 0.0, 1.0);
+		uv.x = clamp(UV.x + 0.05 * sin(UV.y * 4.0 + t * 1.4) * (0.3 + UV.y), 0.0, 1.0);
+		flicker = 0.85 + 0.15 * (0.5 + 0.5 * sin(TIME * 5.0 + UV.y * 9.0));
+	}
+	vec4 tex = texture(albedo_texture, vec3(uv, texture_layer));
 	vec3 block = light_data.rgb;
 	vec3 light = max(block + vec3(light_data.a), vec3(min_light));
-	ALBEDO = tex.rgb * COLOR.rgb * light;
+	ALBEDO = tex.rgb * COLOR.rgb * light * flicker;
 	if (underwater_caustics > 0.001) {
 		vec2 p = world_position.xz * 0.55;
 		float wave = sin(p.x + TIME * 0.8) + sin(p.y * 0.9 - TIME * 0.6)
@@ -65,5 +79,5 @@ void fragment() {
 	ROUGHNESS = 1.0;
 	METALLIC = 0.0;
 	SPECULAR = 0.05;
-	EMISSION = tex.rgb * COLOR.rgb * block * block_emission;
+	EMISSION = tex.rgb * COLOR.rgb * block * block_emission * flicker;
 }

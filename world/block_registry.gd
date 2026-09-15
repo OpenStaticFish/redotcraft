@@ -71,6 +71,7 @@ const BLOCK_CALCITE := 66
 const BLOCK_GEODE_SHELL := 67
 const BLOCK_AMETHYST := 68
 const BLOCK_CRYSTAL_BUD := 69
+const BLOCK_FIRE := 70
 
 const FLAG_OPAQUE := 1
 const FLAG_CUTOUT := 2
@@ -79,6 +80,10 @@ const FLAG_LEAVES := 8
 const FLAG_EMISSIVE := 16
 const FLAG_CROSS := 32
 const FLAG_TINTED := 64
+## Burnable fuel for the fire simulation. Logs, leaves, and dry plants carry it;
+## the flag is independent of opacity so burning a tree can cascade through
+## both its trunk and its canopy.
+const FLAG_FLAMMABLE := 128
 
 const BLOCK_DEFS := [
 	[0, "AIR", "", "", "", 0],
@@ -86,8 +91,8 @@ const BLOCK_DEFS := [
 	[2, "DIRT", "dirt.png", "dirt.png", "dirt.png", FLAG_OPAQUE],
 	[3, "STONE", "stone.png", "stone.png", "stone.png", FLAG_OPAQUE],
 	[4, "COBBLESTONE", "cobblestone.png", "cobblestone.png", "cobblestone.png", FLAG_OPAQUE],
-	[5, "OAK LOG", "wood_top.png", "wood_side.png", "wood_top.png", FLAG_OPAQUE],
-	[6, "OAK LEAVES", "leaves.png", "leaves.png", "leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
+	[5, "OAK LOG", "wood_top.png", "wood_side.png", "wood_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
+	[6, "OAK LEAVES", "leaves.png", "leaves.png", "leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
 	[7, "SAND", "sand.png", "sand.png", "sand.png", FLAG_OPAQUE],
 	[8, "GLASS", "glass.png", "glass.png", "glass.png", FLAG_CUTOUT],
 	[9, "GLOWSTONE", "glowstone.png", "glowstone.png", "glowstone.png", FLAG_OPAQUE | FLAG_EMISSIVE],
@@ -102,10 +107,10 @@ const BLOCK_DEFS := [
 	[18, "MUD", "mud.png", "mud.png", "mud.png", FLAG_OPAQUE],
 	[19, "RED SAND", "red_sand.png", "red_sand.png", "red_sand.png", FLAG_OPAQUE],
 	[20, "CACTUS", "cactus_top.png", "cactus_side.png", "cactus_top.png", FLAG_OPAQUE],
-	[21, "SPRUCE LOG", "spruce_log_top.png", "spruce_log_side.png", "spruce_log_top.png", FLAG_OPAQUE],
-	[22, "SPRUCE LEAVES", "spruce_leaves.png", "spruce_leaves.png", "spruce_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
-	[23, "BIRCH LOG", "birch_log_top.png", "birch_log_side.png", "birch_log_top.png", FLAG_OPAQUE],
-	[24, "BIRCH LEAVES", "birch_leaves.png", "birch_leaves.png", "birch_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
+	[21, "SPRUCE LOG", "spruce_log_top.png", "spruce_log_side.png", "spruce_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
+	[22, "SPRUCE LEAVES", "spruce_leaves.png", "spruce_leaves.png", "spruce_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
+	[23, "BIRCH LOG", "birch_log_top.png", "birch_log_side.png", "birch_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
+	[24, "BIRCH LEAVES", "birch_leaves.png", "birch_leaves.png", "birch_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
 	[25, "TERRACOTTA", "terracotta.png", "terracotta.png", "terracotta.png", FLAG_OPAQUE],
 	[26, "MYCELIUM", "mycelium_top.png", "mycelium_side.png", "dirt.png", FLAG_OPAQUE],
 	[27, "TORCH", "torch.png", "torch.png", "torch.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE],
@@ -116,23 +121,23 @@ const BLOCK_DEFS := [
 	[32, "WATER FLOW 3", "water.png", "water.png", "water.png", 0],
 	[33, "WATER FLOW 2", "water.png", "water.png", "water.png", 0],
 	[34, "WATER FLOW 1", "water.png", "water.png", "water.png", 0],
-	[35, "TALL GRASS", "tall_grass.png", "tall_grass.png", "tall_grass.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED],
-	[36, "YELLOW FLOWER", "flower_yellow.png", "flower_yellow.png", "flower_yellow.png", FLAG_CUTOUT | FLAG_CROSS],
-	[37, "RED FLOWER", "flower_red.png", "flower_red.png", "flower_red.png", FLAG_CUTOUT | FLAG_CROSS],
-	[38, "DEAD BUSH", "dead_bush.png", "dead_bush.png", "dead_bush.png", FLAG_CUTOUT | FLAG_CROSS],
-	[39, "BAMBOO", "bamboo.png", "bamboo.png", "bamboo.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED],
-	[40, "VINE", "vine.png", "vine.png", "vine.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED],
-	[41, "ACACIA LOG", "acacia_log_top.png", "acacia_log_side.png", "acacia_log_top.png", FLAG_OPAQUE],
-	[42, "ACACIA LEAVES", "acacia_leaves.png", "acacia_leaves.png", "acacia_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
-	[43, "JUNGLE LOG", "jungle_log_top.png", "jungle_log_side.png", "jungle_log_top.png", FLAG_OPAQUE],
-	[44, "JUNGLE LEAVES", "jungle_leaves.png", "jungle_leaves.png", "jungle_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
-	[45, "MANGROVE LOG", "mangrove_log_top.png", "mangrove_log_side.png", "mangrove_log_top.png", FLAG_OPAQUE],
-	[46, "MANGROVE LEAVES", "mangrove_leaves.png", "mangrove_leaves.png", "mangrove_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED],
-	[47, "MANGROVE ROOTS", "mangrove_roots.png", "mangrove_roots.png", "mangrove_roots.png", FLAG_OPAQUE],
+	[35, "TALL GRASS", "tall_grass.png", "tall_grass.png", "tall_grass.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED | FLAG_FLAMMABLE],
+	[36, "YELLOW FLOWER", "flower_yellow.png", "flower_yellow.png", "flower_yellow.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE],
+	[37, "RED FLOWER", "flower_red.png", "flower_red.png", "flower_red.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE],
+	[38, "DEAD BUSH", "dead_bush.png", "dead_bush.png", "dead_bush.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE],
+	[39, "BAMBOO", "bamboo.png", "bamboo.png", "bamboo.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED | FLAG_FLAMMABLE],
+	[40, "VINE", "vine.png", "vine.png", "vine.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED | FLAG_FLAMMABLE],
+	[41, "ACACIA LOG", "acacia_log_top.png", "acacia_log_side.png", "acacia_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
+	[42, "ACACIA LEAVES", "acacia_leaves.png", "acacia_leaves.png", "acacia_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
+	[43, "JUNGLE LOG", "jungle_log_top.png", "jungle_log_side.png", "jungle_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
+	[44, "JUNGLE LEAVES", "jungle_leaves.png", "jungle_leaves.png", "jungle_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
+	[45, "MANGROVE LOG", "mangrove_log_top.png", "mangrove_log_side.png", "mangrove_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
+	[46, "MANGROVE LEAVES", "mangrove_leaves.png", "mangrove_leaves.png", "mangrove_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
+	[47, "MANGROVE ROOTS", "mangrove_roots.png", "mangrove_roots.png", "mangrove_roots.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
 	[48, "LAVA", "lava.png", "lava.png", "lava.png", FLAG_OPAQUE | FLAG_EMISSIVE],
-	[49, "BROWN MUSHROOM", "brown_mushroom_block.png", "brown_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS],
-	[50, "RED MUSHROOM", "red_mushroom_block.png", "red_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS],
-	[51, "MELON", "melon_top.png", "melon_side.png", "melon_side.png", FLAG_OPAQUE],
+	[49, "BROWN MUSHROOM", "brown_mushroom_block.png", "brown_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE],
+	[50, "RED MUSHROOM", "red_mushroom_block.png", "red_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE],
+	[51, "MELON", "melon_top.png", "melon_side.png", "melon_side.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
 	[52, "CORAL SUBSTRATE", "coral_substrate.png", "coral_substrate.png", "coral_substrate.png", FLAG_OPAQUE],
 	[53, "SEAGRASS", "seagrass.png", "seagrass.png", "seagrass.png", FLAG_CUTOUT | FLAG_CROSS],
 	[54, "KELP", "kelp.png", "kelp.png", "kelp.png", FLAG_CUTOUT | FLAG_CROSS],
@@ -151,6 +156,7 @@ const BLOCK_DEFS := [
 	[67, "GEODE SHELL", "geode_shell.png", "geode_shell.png", "geode_shell.png", FLAG_OPAQUE],
 	[68, "AMETHYST", "amethyst.png", "amethyst.png", "amethyst.png", FLAG_OPAQUE | FLAG_EMISSIVE],
 	[69, "CRYSTAL BUD", "crystal_bud.png", "crystal_bud.png", "crystal_bud.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE],
+	[70, "FIRE", "fire.png", "fire.png", "fire.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE],
 ]
 
 const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
@@ -159,6 +165,7 @@ const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
 const UNDERWATER_TEXTURE_ROOT := "res://assets/placeholders/underwater/"
 const EXPLOSIVE_TEXTURE_ROOT := "res://assets/placeholders/explosives/"
 const CAVE_TEXTURE_ROOT := "res://assets/placeholders/caves/"
+const FIRE_TEXTURE_ROOT := "res://assets/placeholders/fire/"
 const EXTRA_TEXTURE_PATHS := {
 	"coral_substrate.png": UNDERWATER_TEXTURE_ROOT + "coral_substrate.png",
 	"seagrass.png": UNDERWATER_TEXTURE_ROOT + "seagrass.png",
@@ -182,6 +189,7 @@ const EXTRA_TEXTURE_PATHS := {
 	"geode_shell.png": CAVE_TEXTURE_ROOT + "geode_shell.png",
 	"amethyst.png": CAVE_TEXTURE_ROOT + "amethyst.png",
 	"crystal_bud.png": CAVE_TEXTURE_ROOT + "crystal_bud.png",
+	"fire.png": FIRE_TEXTURE_ROOT + "fire.png",
 }
 const WATER_TEXTURE_PATH := TEXTURE_ROOT + "water.png"
 const WATER_SHADER_PATH := "res://assets/placeholders/zigcraft/water.gdshader"
@@ -202,6 +210,7 @@ const EMISSIVE_COLORS := {
 	BLOCK_SCULK: Color(0.08, 0.34, 0.42),
 	BLOCK_AMETHYST: Color(0.48, 0.24, 0.72),
 	BLOCK_CRYSTAL_BUD: Color(0.72, 0.42, 1.0),
+	BLOCK_FIRE: Color(1.0, 0.55, 0.14),
 }
 const ATTENUATION_LEAVES := 3
 # Light drops 3 per water block so sky light stops fading in within ~5 blocks of
@@ -233,6 +242,7 @@ var _layer_top: PackedInt32Array = PackedInt32Array()
 var _layer_side: PackedInt32Array = PackedInt32Array()
 var _layer_bottom: PackedInt32Array = PackedInt32Array()
 var _names: PackedStringArray = PackedStringArray()
+var _fire_layer := -1
 
 
 func _init() -> void:
@@ -257,6 +267,11 @@ func is_opaque(block_id: int) -> bool:
 
 func has_flag(block_id: int, flag: int) -> bool:
 	return block_id >= 0 and block_id < _flags.size() and (_flags[block_id] & flag) != 0
+
+
+## Fuel for the fire simulation: logs, leaves, and dry plants.
+func is_flammable(block_id: int) -> bool:
+	return has_flag(block_id, FLAG_FLAMMABLE)
 
 
 func is_water_id(block_id: int) -> bool:
@@ -337,6 +352,7 @@ func _build_texture_array() -> Dictionary:
 		tile_lookup[texture_name] = index
 	texture_array = Texture2DArray.new()
 	texture_array.create_from_images(images)
+	_fire_layer = tile_lookup.get("fire.png", -1)
 	_build_material(texture_array, images[0] if not images.is_empty() else null)
 	return tile_lookup
 
@@ -357,6 +373,7 @@ func _build_material(array_texture: Texture2DArray, fallback_image: Image) -> vo
 		var shader_material := ShaderMaterial.new()
 		shader_material.shader = shader
 		shader_material.set_shader_parameter("albedo_texture", array_texture)
+		shader_material.set_shader_parameter("fire_layer", float(_fire_layer))
 		material = shader_material
 		return
 	var fallback_texture: Texture2D = null

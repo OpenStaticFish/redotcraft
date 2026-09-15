@@ -27,6 +27,27 @@ const WATER_TICK_INTERVAL := 0.25
 const WATER_CELLS_PER_TICK := 1024
 const TNT_BLAST_RADIUS := 5
 const NUKE_BLAST_RADIUS := 18
+## Fire advances in discrete steps like water. A flammable block is never
+## replaced: it enters a "burning" state (see `_burning`) for `FUEL_BURN_TICKS`
+## while `FireOverlay` animates flames and smoke over its intact texture, then
+## the block is destroyed. Burning blocks crawl into flammable neighbours one at
+## a time, paced by `FIRE_SPREAD_PER_TICK`/`FIRE_SPREAD_PERIOD_TICKS` globally
+## and a per-cell `FIRE_SPREAD_INTERVAL_TICKS`/`FIRE_IGNITION_DELAY_TICKS`
+## cooldown, so a tree burns gradually. `BLOCK_FIRE` is only the standalone
+## flame the flint-and-steel leaves on a non-flammable face.
+const FIRE_TICK_INTERVAL := 0.25
+const FIRE_CELLS_PER_TICK := 512
+const FIRE_LIFETIME_TICKS := 10
+const FUEL_BURN_TICKS := 16
+const FIRE_SPREAD_PER_TICK := 1
+const FIRE_IGNITION_DELAY_TICKS := 4
+const FIRE_SPREAD_PERIOD_TICKS := 2
+const FIRE_SPREAD_INTERVAL_TICKS := 2
+const FIRE_OFFSETS: Array[Vector3i] = [
+	Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
+	Vector3i(0, 1, 0), Vector3i(0, -1, 0),
+	Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+]
 const WATER_NEIGHBOR_OFFSETS := [
 	Vector3i.ZERO,
 	Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
@@ -61,6 +82,17 @@ var _water_queue: Array[Vector3i] = []
 var _water_queued: Dictionary = {}
 var _water_head := 0
 var _water_accum := 0.0
+var _fire_queue: Array[Vector3i] = []
+var _fire_queued: Dictionary = {}
+var _fire_accum := 0.0
+var _fire_life: Dictionary = {}
+var _fire_spread_cooldown: Dictionary = {}
+var _fire_spread_budget := 0
+var _fire_tick_count := 0
+var _burning: Dictionary = {}
+var _burning_queue: Array[Vector3i] = []
+var _burning_queued: Dictionary = {}
+var _fire_overlay: FireOverlay
 var _worldgen_revision := 0
 var _max_active_jobs := MIN_ACTIVE_JOBS
 var _full_jobs_measured := 0
@@ -124,6 +156,9 @@ func _ready() -> void:
 	_generator = TerrainGenerator.new()
 	_mesher = ChunkMesher.new(_blocks)
 	_max_active_jobs = clampi(OS.get_processor_count() / 2, MIN_ACTIVE_JOBS, MAX_ACTIVE_JOBS)
+	_fire_overlay = FireOverlay.new()
+	_fire_overlay.name = "FireOverlay"
+	add_child(_fire_overlay)
 
 
 func _process(delta: float) -> void:
@@ -135,6 +170,10 @@ func _process(delta: float) -> void:
 	if _water_accum >= WATER_TICK_INTERVAL:
 		_water_accum = 0.0
 		_water_tick()
+	_fire_accum += delta
+	if _fire_accum >= FIRE_TICK_INTERVAL:
+		_fire_accum = 0.0
+		_fire_tick()
 
 
 func _exit_tree() -> void:
@@ -657,6 +696,8 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> voi
 	chunk.lod_water_level = res.lod_water_level
 	chunk.max_y = res.max_y
 	chunk.mask = res.mask
+	if not lod:
+		_seed_fire_edits(pos)
 	chunk.mesh.mesh = ChunkMesher.arrays_to_mesh(res.verts, res.normals, res.uvs, res.colors, res.indices, _blocks.material, res.light, res.layers)
 	chunk.water.mesh = ChunkMesher.arrays_to_mesh(res.water_verts, res.water_normals, res.water_uvs, res.water_colors, res.water_indices, _blocks.water_material, res.water_light)
 	if not lod and _within_collision_range(pos) and not res.collision.is_empty():
@@ -1008,6 +1049,281 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 	for position in interior_water:
 		_seed_water(position)
 	return removed
+
+
+## Flint and steel either detonates an explosive block or lights fire on the
+## face the player clicked. `normal` is the face normal reported by the player's
+## voxel raycast, so the fire lands in the air cell in front of the target.
+func use_flint_and_steel(block_position: Vector3i, normal: Vector3i) -> Dictionary:
+	var block_id := get_block_world(block_position)
+	if block_id == BlockRegistry.BLOCK_TNT or block_id == BlockRegistry.BLOCK_NUKE:
+		return trigger_explosive(block_position)
+	# A flammable block catches fire itself; anything else lights the air cell in
+	# front of the clicked face (so flint and steel can still start a ground fire).
+	if _blocks.is_flammable(block_id):
+		if not ignite_fire(block_position):
+			return {}
+	elif normal != Vector3i.ZERO and ignite_fire(block_position + normal):
+		pass
+	else:
+		return {}
+	return {"name": "FIRE", "radius": 0, "removed": 0, "ignited": 1}
+
+
+## Public ignition entry point. A flammable target starts burning in place (its
+## block stays put; `FireOverlay` draws the flames/smoke); an air target gets a
+## standalone `BLOCK_FIRE` flame. Burning state is transient, so the overlay is
+## refreshed immediately while the world tick keeps it moving.
+func ignite_fire(block_position: Vector3i, life := FIRE_LIFETIME_TICKS) -> bool:
+	var changed_chunks: Dictionary = {}
+	var ignited := false
+	if _blocks.is_flammable(get_block_world(block_position)):
+		ignited = _start_burning(block_position, changed_chunks)
+	else:
+		ignited = _ignite_fire_cell(block_position, life, changed_chunks)
+	if not ignited:
+		return false
+	if not changed_chunks.is_empty():
+		_flush_fire_changes(changed_chunks)
+	if _fire_overlay != null:
+		_fire_overlay.refresh(_burning, FUEL_BURN_TICKS)
+	return true
+
+
+## Places a standalone flame in an air cell. Flammable blocks never take this
+## path; they burn in place through `_start_burning()`.
+func _ignite_fire_cell(block_position: Vector3i, life: int, changed_chunks: Dictionary) -> bool:
+	var chunk := _loaded_chunk_for(block_position)
+	if chunk == null or chunk.lod:
+		return false
+	var existing := get_block_world(block_position)
+	if existing == BlockRegistry.BLOCK_FIRE:
+		_fire_life[block_position] = maxi(int(_fire_life.get(block_position, 0)), life)
+		_queue_fire(block_position)
+		return false
+	if existing != BlockRegistry.BLOCK_AIR:
+		return false
+	chunk.data[_data_index(block_position)] = BlockRegistry.BLOCK_FIRE
+	_record_edit(block_position, BlockRegistry.BLOCK_FIRE)
+	_fire_life[block_position] = life
+	_fire_spread_cooldown[block_position] = FIRE_IGNITION_DELAY_TICKS
+	_queue_fire(block_position)
+	changed_chunks[_chunk_for_block(block_position)] = true
+	return true
+
+
+## Enters the burning state without touching the block itself: it keeps its
+## texture and collision while `FireOverlay` adds the flames and smoke. The
+## block is only removed when the burn timer expires. `changed_chunks` stays
+## empty because no voxel changed.
+func _start_burning(block_position: Vector3i, _changed_chunks: Dictionary) -> bool:
+	if not _blocks.is_flammable(get_block_world(block_position)):
+		return false
+	if _burning.has(block_position):
+		return false
+	_burning[block_position] = FUEL_BURN_TICKS
+	_fire_spread_cooldown[block_position] = FIRE_IGNITION_DELAY_TICKS
+	_queue_burning(block_position)
+	return true
+
+
+func _queue_fire(block_position: Vector3i) -> void:
+	if block_position.y < 0 or block_position.y >= VoxelDefs.WORLD_HEIGHT:
+		return
+	if _fire_queued.has(block_position):
+		return
+	_fire_queued[block_position] = true
+	_fire_queue.append(block_position)
+
+
+func _queue_burning(block_position: Vector3i) -> void:
+	if block_position.y < 0 or block_position.y >= VoxelDefs.WORLD_HEIGHT:
+		return
+	if _burning_queued.has(block_position):
+		return
+	_burning_queued[block_position] = true
+	_burning_queue.append(block_position)
+
+
+## Fire spreads in discrete ticks. Burning blocks keep their block until the
+## timer expires and the destruction is recorded through `_record_edit()`, so
+## the settled result (air, destroyed fuel, exploded explosives) survives chunk
+## regeneration. A global per-tick ignition budget plus per-cell cooldowns keep
+## the front creeping instead of the whole tree catching at once.
+func _fire_tick() -> void:
+	var budget := FIRE_CELLS_PER_TICK
+	var changed_chunks := {}
+	_fire_spread_budget = FIRE_SPREAD_PER_TICK if _fire_tick_count % FIRE_SPREAD_PERIOD_TICKS == 0 else 0
+	_fire_tick_count += 1
+	# Snapshot the cells queued before this tick and clear the live queues so a
+	# newly affected cell waits for the next tick. Without this a single cell
+	# would re-queue itself and could burn out many times inside one call.
+	var snapshot := _fire_queue
+	_fire_queue = []
+	_fire_queued.clear()
+	var index := 0
+	while index < snapshot.size() and budget > 0:
+		var position: Vector3i = snapshot[index]
+		index += 1
+		budget -= 1
+		if _loaded_chunk_for(position) == null:
+			_fire_life.erase(position)
+			_fire_spread_cooldown.erase(position)
+			continue
+		_update_fire_cell(position, changed_chunks)
+	_requeue_remaining(snapshot, index, _fire_queue, _fire_queued)
+	budget = FIRE_CELLS_PER_TICK
+	var burn_snapshot := _burning_queue
+	_burning_queue = []
+	_burning_queued.clear()
+	index = 0
+	while index < burn_snapshot.size() and budget > 0:
+		var position: Vector3i = burn_snapshot[index]
+		index += 1
+		budget -= 1
+		_update_burning_cell(position, changed_chunks)
+	_requeue_remaining(burn_snapshot, index, _burning_queue, _burning_queued)
+	_flush_fire_changes(changed_chunks)
+	if _fire_overlay != null:
+		_fire_overlay.refresh(_burning, FUEL_BURN_TICKS)
+
+
+func _requeue_remaining(snapshot: Array[Vector3i], start: int, queue: Array[Vector3i], queued: Dictionary) -> void:
+	for remaining in range(start, snapshot.size()):
+		var position: Vector3i = snapshot[remaining]
+		if queued.has(position):
+			continue
+		queued[position] = true
+		queue.append(position)
+
+
+func _update_fire_cell(position: Vector3i, changed_chunks: Dictionary) -> void:
+	if get_block_world(position) != BlockRegistry.BLOCK_FIRE:
+		_fire_life.erase(position)
+		_fire_spread_cooldown.erase(position)
+		return
+	var cooldown := _decrement_fire_cooldown(position)
+	# Catch adjacent fuel on fire and chain-detonate exposed explosives. A blast
+	# carves and records its own edits, so the fire simply stops here.
+	var fueled := false
+	for offset in FIRE_OFFSETS:
+		var neighbor := position + offset
+		var neighbor_id := get_block_world(neighbor)
+		if neighbor_id == BlockRegistry.BLOCK_TNT or neighbor_id == BlockRegistry.BLOCK_NUKE:
+			trigger_explosive(neighbor)
+			continue
+		if not _blocks.is_flammable(neighbor_id):
+			continue
+		fueled = true
+		if _fire_spread_budget <= 0 or cooldown > 0 or _burning.has(neighbor):
+			continue
+		if _start_burning(neighbor, changed_chunks):
+			_fire_spread_budget -= 1
+			cooldown = FIRE_SPREAD_INTERVAL_TICKS
+			_fire_spread_cooldown[position] = cooldown
+	var life := int(_fire_life.get(position, FIRE_LIFETIME_TICKS)) - 1
+	if fueled:
+		life = FIRE_LIFETIME_TICKS
+	if life <= 0 or not _fire_supported(position):
+		_extinguish_fire(position, changed_chunks)
+	else:
+		_fire_life[position] = life
+		_queue_fire(position)
+
+
+func _update_burning_cell(position: Vector3i, changed_chunks: Dictionary) -> void:
+	if _loaded_chunk_for(position) == null:
+		_burning.erase(position)
+		_fire_spread_cooldown.erase(position)
+		return
+	# The player broke or replaced the block while it was burning.
+	if not _blocks.is_flammable(get_block_world(position)):
+		_burning.erase(position)
+		_fire_spread_cooldown.erase(position)
+		return
+	var cooldown := _decrement_fire_cooldown(position)
+	for offset in FIRE_OFFSETS:
+		var neighbor := position + offset
+		var neighbor_id := get_block_world(neighbor)
+		if neighbor_id == BlockRegistry.BLOCK_TNT or neighbor_id == BlockRegistry.BLOCK_NUKE:
+			trigger_explosive(neighbor)
+			continue
+		if not _blocks.is_flammable(neighbor_id) or _burning.has(neighbor):
+			continue
+		if _fire_spread_budget <= 0:
+			break
+		if cooldown > 0:
+			continue
+		if _start_burning(neighbor, changed_chunks):
+			_fire_spread_budget -= 1
+			cooldown = FIRE_SPREAD_INTERVAL_TICKS
+			_fire_spread_cooldown[position] = cooldown
+	var ticks := int(_burning[position]) - 1
+	if ticks <= 0:
+		_burning.erase(position)
+		_fire_spread_cooldown.erase(position)
+		_destroy_burnt_block(position, changed_chunks)
+		return
+	_burning[position] = ticks
+	_queue_burning(position)
+
+
+func _decrement_fire_cooldown(position: Vector3i) -> int:
+	var cooldown := int(_fire_spread_cooldown.get(position, 0))
+	if cooldown > 0:
+		cooldown -= 1
+		_fire_spread_cooldown[position] = cooldown
+	return cooldown
+
+
+## Fire needs an opaque or flammable neighbor to keep burning; otherwise it
+## floats in air and is extinguished.
+func _fire_supported(position: Vector3i) -> bool:
+	for offset in FIRE_OFFSETS:
+		var neighbor_id := get_block_world(position + offset)
+		if _blocks.is_opaque(neighbor_id) or _blocks.is_flammable(neighbor_id):
+			return true
+	return false
+
+
+func _extinguish_fire(position: Vector3i, changed_chunks: Dictionary) -> void:
+	_fire_life.erase(position)
+	_fire_spread_cooldown.erase(position)
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null or chunk.lod:
+		return
+	if get_block_world(position) != BlockRegistry.BLOCK_FIRE:
+		return
+	chunk.data[_data_index(position)] = BlockRegistry.BLOCK_AIR
+	_record_edit(position, BlockRegistry.BLOCK_AIR)
+	changed_chunks[_chunk_for_block(position)] = true
+
+
+## Final state of a burnt block: it crumbles to ash and disappears. This is the
+## only voxel change in the burning lifecycle, so it is the one persisted.
+func _destroy_burnt_block(position: Vector3i, changed_chunks: Dictionary) -> void:
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null or chunk.lod:
+		return
+	chunk.data[_data_index(position)] = BlockRegistry.BLOCK_AIR
+	_record_edit(position, BlockRegistry.BLOCK_AIR)
+	changed_chunks[_chunk_for_block(position)] = true
+
+
+## Batches fire edits like the water tick: each touched chunk is versioned once
+## and its full light ring invalidated once, however many cells changed.
+func _flush_fire_changes(changed_chunks: Dictionary) -> void:
+	if changed_chunks.is_empty():
+		return
+	var rebuild_chunks := {}
+	for chunk_position in changed_chunks:
+		_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
+		rebuild_chunks[chunk_position] = true
+		_add_loaded_light_ring(rebuild_chunks, chunk_position)
+	for chunk_position in rebuild_chunks:
+		_queue_rebuild(chunk_position, true)
+
+
 func _record_edit(block_position: Vector3i, block_id: int) -> void:
 	_record_edit_in_chunk(block_position, block_id, _chunk_for_block(block_position))
 
@@ -1026,6 +1342,21 @@ func _chunk_edits_for(pos: Vector2i) -> Dictionary:
 	if bucket == null:
 		return {}
 	return bucket.duplicate()
+
+
+## A regenerated chunk can bring persisted fire back from `_edited_blocks`.
+## Re-arm those cells so a still-burning edit resumes its live simulation
+## instead of sitting as an immortal flame after an unload/reload cycle.
+func _seed_fire_edits(pos: Vector2i) -> void:
+	var bucket = _edits_by_chunk.get(pos)
+	if bucket == null:
+		return
+	for key in bucket:
+		if int(bucket[key]) != BlockRegistry.BLOCK_FIRE:
+			continue
+		if not _fire_life.has(key):
+			_fire_life[key] = FIRE_LIFETIME_TICKS
+		_queue_fire(key)
 
 
 func _seed_water(block_position: Vector3i) -> void:
