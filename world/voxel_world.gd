@@ -736,10 +736,6 @@ func _desired_neighbors_ready(pos: Vector2i, lod: bool) -> bool:
 
 func _queue_rebuild(pos: Vector2i, preserve_if_pending := false,
 		low_priority := false) -> void:
-	if not _desired.has(pos):
-		_dirty.erase(pos)
-		_generated.erase(pos)
-		return
 	if _pending.has(pos):
 		if preserve_if_pending:
 			_dirty[pos] = true
