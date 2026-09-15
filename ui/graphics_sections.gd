@@ -12,6 +12,7 @@ const SECTIONS := [
 	]},
 	{"title": "SHADOWS", "rows": [
 		{"type": "check", "key": "soft_shadows", "label": "Soft Shadows", "tooltip": "Shadow edges vibrate without TAA or FSR2."},
+		{"type": "check", "key": "solid_leaf_shadows", "label": "Solid Leaf Shadows", "tooltip": "Leaves cast a solid canopy shadow instead of a dappled one, which stops the leaf-shadow edge from crawling."},
 		{"type": "slider", "key": "shadow_max_distance", "label": "Shadow Distance", "min": 64.0, "max": 512.0, "step": 8.0, "format": "%d m"},
 		{"type": "slider", "key": "shadow_opacity", "label": "Shadow Opacity", "min": 0.0, "max": 1.0, "step": 0.05, "format": "%.2f"},
 		{"type": "slider", "key": "shadow_blur", "label": "Shadow Blur", "min": 0.0, "max": 4.0, "step": 0.1, "format": "%.1f"},

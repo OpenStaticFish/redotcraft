@@ -20,12 +20,36 @@ func _verify() -> void:
 	_check_mesher_leaf_marker()
 	_check_shader_proxy()
 	_check_leaf_blocks_independent()
+	_check_graphics_toggle()
 	if _failures == 0:
 		print("SHADOW PROXY VERIFY: PASS")
 		quit(0)
 		return
 	print("SHADOW PROXY VERIFY: FAIL (%d)" % _failures)
 	quit(1)
+
+
+## The proxy is player-facing, so the graphics key must exist in every preset
+## (AGENTS.md: a new key goes into all GRAPHICS_PRESETS entries) and have a UI
+## row, or the setting silently does nothing.
+func _check_graphics_toggle() -> void:
+	# Autoloads and UI class_names are not available at --script parse time, so
+	# fetch them at runtime.
+	var config: Node = root.get_node_or_null("GameConfig")
+	if config == null:
+		_expect(false, "GameConfig autoload is missing")
+		return
+	for preset in config.GRAPHICS_PRESETS:
+		_expect((config.GRAPHICS_PRESETS[preset] as Dictionary).has("solid_leaf_shadows"),
+			"graphics preset %d is missing solid_leaf_shadows" % preset)
+	var sections_script: GDScript = load("res://ui/graphics_sections.gd")
+	var found := false
+	if sections_script != null:
+		for section in sections_script.SECTIONS:
+			for row in section["rows"]:
+				if row.get("key", "") == "solid_leaf_shadows":
+					found = true
+	_expect(found, "no graphics section row exposes solid_leaf_shadows")
 
 
 ## The shader keys the proxy off COLOR.a, which ChunkMesher writes as the wind
@@ -70,16 +94,22 @@ func _check_shader_proxy() -> void:
 
 
 ## The proxy is keyed off FLAG_LEAVES, so the flag must stay limited to the
-## leaf family and every leaf block must still carry it.
+## leaf family and every leaf block must still carry it. The expected set is
+## derived from the block table names so a newly added leaf cannot silently
+## miss the flag (and therefore the proxy).
 func _check_leaf_blocks_independent() -> void:
 	var blocks := BlockRegistry.new()
-	var expected := [
-		BlockRegistry.BLOCK_LEAVES, BlockRegistry.BLOCK_SPRUCE_LEAVES,
-		BlockRegistry.BLOCK_BIRCH_LEAVES, BlockRegistry.BLOCK_ACACIA_LEAVES,
-		BlockRegistry.BLOCK_JUNGLE_LEAVES, BlockRegistry.BLOCK_MANGROVE_LEAVES,
-	]
-	for id in expected:
-		_expect(blocks.has_flag(id, BlockRegistry.FLAG_LEAVES), "block %d lost FLAG_LEAVES" % id)
+	var named_leaves := 0
+	for id in 256:
+		if not blocks.is_valid_id(id):
+			continue
+		var block_name := blocks.get_block_name(id)
+		if not block_name.to_lower().contains("leaves"):
+			continue
+		named_leaves += 1
+		_expect(blocks.has_flag(id, BlockRegistry.FLAG_LEAVES),
+			"block %d ('%s') looks like a leaf but lacks FLAG_LEAVES" % [id, block_name])
+	_expect(named_leaves >= 6, "expected at least six leaf blocks, found %d" % named_leaves)
 	_expect(not blocks.has_flag(BlockRegistry.BLOCK_GLASS, BlockRegistry.FLAG_LEAVES), "glass must not be a leaf")
 	_expect(not blocks.has_flag(BlockRegistry.BLOCK_TALL_GRASS, BlockRegistry.FLAG_LEAVES), "grass must not be a leaf")
 	blocks = null

@@ -1,17 +1,22 @@
 ## Controlled A/B measurement for the leaf shadow proxy. Loads the real gameplay
-## scene with a flat world, builds a leaf canopy over flat ground, parks the
-## camera and sun at fixed poses, and measures shadow-region temporal MAD across
-## sun steps — once with the proxy off and once on, in the same run so nothing
-## else varies. Writes frames to user://shadow_proxy_measure/ and prints the two
-## numbers. Requires a rendering display (not headless):
+## scene with a flat world, builds a leaf canopy over flat ground, freezes the
+## day/night clock, parks the camera, and measures shadow-edge temporal MAD
+## across exact sun steps — off, off again as a control, then on, for each TAA
+## state, all in one run so nothing else varies. Writes frames to
+## user://shadow_proxy_measure/ and prints the numbers. Requires a rendering
+## display (not headless):
 ##   redot --path . res://tools/shadow_proxy_measure.tscn
+##
+## The sun must be driven through DayNightCycle.set_time(): its _process calls
+## _apply() every frame, which rewrites the sun rotation from time_hours, so a
+## direct _sun.rotation_degrees write is overwritten before the frame renders.
 extends Node
 
 const FRAMES_PER_PHASE := 12
 const OUTPUT_DIR := "user://shadow_proxy_measure"
+const SUNRISE_HOUR := 6.0
 const SUN_ELEVATION_START := 30.0
 const SUN_ELEVATION_STEP := 0.1
-const SUN_YAW := -35.0
 const CANOPY_RADIUS := 8
 const GROUND_RADIUS := 26
 const CANOPY_HEIGHT_OFFSET := 4
@@ -19,6 +24,7 @@ const CANOPY_HEIGHT_OFFSET := 4
 var _main: Node3D
 var _world: VoxelWorld
 var _sun: DirectionalLight3D
+var _day_night: DayNightCycle
 var _camera: Camera3D
 var _material: ShaderMaterial
 var _base := Vector3.ZERO
@@ -30,7 +36,7 @@ func _ready() -> void:
 	GameConfig.world["world_type"] = 1
 	GameConfig.world["seed"] = 918273
 	GameConfig.world["tree_density"] = 0.0
-	GameConfig.set_setting("render_distance", 4)
+	GameConfig.set_setting("render_distance", 2)
 	add_child(_main)
 	_run.call_deferred()
 
@@ -40,6 +46,12 @@ func _run() -> void:
 	await get_tree().process_frame
 	_world = _main.get_node("World") as VoxelWorld
 	_sun = _main.get_node("Sun") as DirectionalLight3D
+	_day_night = _main.get_node("DayNight") as DayNightCycle
+	# DayNightCycle._apply() rewrites the sun rotation from time_hours every
+	# frame, so the sweep must go through set_time(); writing _sun.rotation
+	# directly would be overwritten before the frame renders. Freeze the clock
+	# so time_hours only changes on our steps.
+	_day_night.auto_advance = false
 	var player = _main.get_node("Player")
 	_camera = player.camera as Camera3D
 	_material = _world.get_registry().material as ShaderMaterial
@@ -47,7 +59,9 @@ func _run() -> void:
 	await _wait_seconds(8.0)
 	_base = Vector3(roundi(player.global_position.x) + 0.5, float(VoxelDefs.SEA_LEVEL + 1), roundi(player.global_position.z) + 0.5)
 	_sculpt_canopy(Vector3i(_base))
-	await _wait_seconds(3.0)
+	# The sculpted chunks remesh over several frames; wait for the commit queue
+	# to drain so measured frames are not competing with chunk rebuilds.
+	await _wait_seconds(12.0)
 	# Park the camera in a fixed oblique pose framing the shadow footprint. The
 	# camera is held at a fixed world pose for both phases, so the only variable
 	# is the proxy; the sun sweep moves the shadow through the framed ground.
@@ -68,9 +82,9 @@ func _run() -> void:
 	environment.ssr_enabled = false
 	environment.glow_enabled = false
 	var mid_elevation := SUN_ELEVATION_START + (FRAMES_PER_PHASE - 1) * SUN_ELEVATION_STEP * 0.5
-	_sun.rotation_degrees = Vector3(-mid_elevation, SUN_YAW, 0.0)
+	_set_sun_elevation(mid_elevation)
 	await _wait_seconds(0.5)
-	var shadow_center := _shadow_center(mid_elevation)
+	var shadow_center := _shadow_center()
 	# Tight, low view across the shadow boundary so the edge fills the frame.
 	var edge := shadow_center + Vector3(0.0, 0.0, float(CANOPY_RADIUS))
 	_camera.global_position = edge + Vector3(0.0, 1.6, 7.0)
@@ -92,9 +106,16 @@ func _run() -> void:
 	get_tree().quit(0)
 
 
+## DayNightCycle maps elevation to the hour it renders from
+## (`elevation = (time_hours - SUNRISE_HOUR) / 24 * 360`); invert that so the
+## sweep is exact and the energy/color grading follows the same pose.
+func _set_sun_elevation(elevation: float) -> void:
+	_day_night.set_time(SUNRISE_HOUR + elevation * 24.0 / 360.0)
+
+
 ## Ground point hit by the shadow of the canopy slab center, from the canopy
 ## height above the ground and the sun's light direction.
-func _shadow_center(elevation: float) -> Vector3:
+func _shadow_center() -> Vector3:
 	var light_dir := -_sun.global_transform.basis.z
 	var height := float(CANOPY_HEIGHT_OFFSET)
 	var horizontal := Vector3(light_dir.x, 0.0, light_dir.z)
@@ -120,11 +141,14 @@ func _measure(proxy_on: bool, taa: bool) -> float:
 	if _material:
 		_material.set_shader_parameter("solid_leaf_shadows", 1.0 if proxy_on else 0.0)
 	DirAccess.make_dir_recursive_absolute(OUTPUT_DIR)
+	# TAA blends across frames, so let its history flush after the parameter
+	# change before sampling or the previous phase bleeds into this one.
+	await _wait_seconds(0.5)
 	var phase := "on" if proxy_on else "off"
 	var taa_tag := "taa" if taa else "notaa"
 	var images: Array[Image] = []
 	for index in FRAMES_PER_PHASE:
-		_sun.rotation_degrees = Vector3(-(SUN_ELEVATION_START + index * SUN_ELEVATION_STEP), SUN_YAW, 0.0)
+		_set_sun_elevation(SUN_ELEVATION_START + index * SUN_ELEVATION_STEP)
 		await RenderingServer.frame_post_draw
 		await RenderingServer.frame_post_draw
 		var image := get_viewport().get_texture().get_image()

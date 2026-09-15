@@ -8,8 +8,8 @@ uniform float min_light : hint_range(0.0, 1.0) = 0.05;
 // but write opaque coverage in the shadow pass, so the shadow map never samples
 // mip-filtered leaf alpha and the canopy shadow silhouette stops crawling with
 // view/sun angle. This trades the dappled leaf-shadow look for a solid canopy
-// shadow. Non-leaf cutout blocks (glass, cross foliage) are unaffected. Set to
-// 0 to restore the plain cutout (dappled) leaf shadows.
+// shadow. Non-leaf cutout blocks (glass, cross foliage) are unaffected. Driven
+// by the Advanced Graphics -> Shadows "Solid Leaf Shadows" setting.
 uniform float solid_leaf_shadows : hint_range(0.0, 1.0) = 1.0;
 // Camera-submerged strength (0 above water), driven by DayNightCycle. Caustics
 // are projected from the water surface onto sky-lit upward faces.
