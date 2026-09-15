@@ -1074,10 +1074,14 @@ func use_flint_and_steel(block_position: Vector3i, normal: Vector3i) -> Dictiona
 	return {"name": "FIRE", "radius": 0, "removed": 0, "ignited": 1}
 
 
-## Fire cannot start in a flooded cell: the cell above counts as submerged, which
-## stops flint-and-steel lighting a mangrove log under the waterline.
+## Fire cannot start in a flooded cell: any face touching water counts as
+## submerged, which stops flint-and-steel lighting a mangrove log at the
+## waterline and keeps the flame out of the water it later seeds back.
 func _is_submerged(block_position: Vector3i) -> bool:
-	return _blocks.is_water_id(get_block_world(block_position + Vector3i(0, 1, 0)))
+	for offset in FIRE_OFFSETS:
+		if _blocks.is_water_id(get_block_world(block_position + offset)):
+			return true
+	return false
 
 
 ## Public ignition entry point. A flammable target starts burning in place (its

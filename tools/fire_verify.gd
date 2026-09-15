@@ -146,6 +146,14 @@ func _check_submerged_and_support() -> void:
 	_expect(wet_lit.get("blocked", "") == "wet", "flint and steel lit a submerged log")
 	_expect(not world._burning.has(wet_log), "submerged log started burning")
 
+	# Water on a lateral face (a log at the waterline) also counts as flooded.
+	var shoreline_log := Vector3i(13, 9, 13)
+	_set_block(world._chunks[Vector2i.ZERO].data, shoreline_log, BlockRegistry.BLOCK_LOG)
+	_set_block(world._chunks[Vector2i.ZERO].data, shoreline_log + Vector3i(0, 0, 1), BlockRegistry.BLOCK_WATER)
+	_expect(world.use_flint_and_steel(shoreline_log, Vector3i.UP).get("blocked", "") == "wet",
+		"flint and steel lit a log touching water on the side")
+	_expect(not world._burning.has(shoreline_log), "shoreline log started burning")
+
 	# Re-clicking a burning block reports already-burning rather than a face hint.
 	var log_position := Vector3i(4, 9, 4)
 	_set_block(world._chunks[Vector2i.ZERO].data, log_position, BlockRegistry.BLOCK_LOG)
