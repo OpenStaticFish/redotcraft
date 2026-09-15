@@ -345,6 +345,12 @@ func _apply_graphics() -> void:
 	RenderingServer.directional_soft_shadow_filter_set_quality(directional_quality)
 	RenderingServer.positional_soft_shadow_filter_set_quality(shadow_quality)
 	_sun.light_angular_distance = 0.3 if soft_shadows else 0.0
+	# Leaf shadow proxy: solid canopy shadows are aliasing-free but lose the
+	# dappled leaf look, so it is a player choice.
+	var registry := world.get_registry()
+	if registry != null and registry.material is ShaderMaterial:
+		(registry.material as ShaderMaterial).set_shader_parameter(
+			"solid_leaf_shadows", 1.0 if bool(graphics["solid_leaf_shadows"]) else 0.0)
 	var viewport := get_viewport()
 	if viewport:
 		var fsr_scale := float(graphics["fsr_scale"])
