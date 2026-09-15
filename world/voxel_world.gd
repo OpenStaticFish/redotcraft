@@ -15,7 +15,7 @@ const MAX_FULL_DETAIL_DISTANCE := 32
 ## distant full chunk rebuilds it to add collision instead of holding a shape
 ## for every loaded chunk.
 const COLLISION_DISTANCE := 6
-const COMMIT_BUDGET_MS := 5
+const COMMIT_BUDGET_MS := 2
 ## Diagnostic map rasters resolve one mode sample per pixel. The final-height
 ## family walks the erosion graph five times per sample, so map views request
 ## fewer pixels for those modes instead of freezing their refresh for seconds.
@@ -47,6 +47,9 @@ var _pending: Dictionary = {}
 var _commit_queue: Array = []
 var _gen_queue: Array[Vector2i] = []
 var _gen_queued: Dictionary = {}
+var _mesh_queue: Array[Vector2i] = []
+var _mesh_queued: Dictionary = {}
+var _generated: Dictionary = {}
 var _dirty: Dictionary = {}
 var _desired: Dictionary = {}
 var _edited_blocks: Dictionary = {}
@@ -75,6 +78,8 @@ var _debug_cache: Dictionary = {}
 class Chunk:
 	var data := PackedByteArray()
 	var heights := PackedInt32Array()
+	var foliage_tints := PackedColorArray()
+	var water_tints := PackedColorArray()
 	var lod_solid_y := PackedInt32Array()
 	var lod_solid_id := PackedByteArray()
 	var lod_sub_id := PackedByteArray()
@@ -91,6 +96,7 @@ class Chunk:
 
 class PendingJob:
 	var task := -1
+	var kind := "generate"
 	var version := 0
 	var config_revision := 0
 	var lod := false
@@ -104,7 +110,8 @@ class CommitItem:
 	var config_revision := 0
 	var lod := false
 
-	func _init(p_pos: Vector2i, p_result: ChunkMesher.MeshResult, p_version: int, p_config_revision: int, p_lod: bool) -> void:
+	func _init(p_pos: Vector2i, p_result: ChunkMesher.MeshResult, p_version: int,
+			p_config_revision: int, p_lod: bool) -> void:
 		pos = p_pos
 		result = p_result
 		version = p_version
@@ -225,6 +232,8 @@ func _generate_spawn_area() -> void:
 
 func _rebuild_desired() -> void:
 	_desired.clear()
+	_mesh_queue.clear()
+	_mesh_queued.clear()
 	var wanted: Array[Vector2i] = []
 	for dx in range(-render_distance, render_distance + 1):
 		for dz in range(-render_distance, render_distance + 1):
@@ -233,7 +242,10 @@ func _rebuild_desired() -> void:
 			var want_lod := _chunk_uses_lod(pos)
 			if _chunks.has(pos) and (_chunks[pos] as Chunk).lod != want_lod:
 				_dirty[pos] = true
-			if not _chunks.has(pos) and not _pending.has(pos):
+			var staged: TerrainGenerator.GenResult = _generated.get(pos)
+			if staged != null and staged.lod != want_lod:
+				_generated.erase(pos)
+			if not _chunks.has(pos) and not _generated.has(pos) and not _pending.has(pos):
 				wanted.append(pos)
 	var center := _stream_center
 	wanted.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
@@ -245,19 +257,31 @@ func _rebuild_desired() -> void:
 		_gen_queued[pos] = true
 	for pos in _dirty.keys():
 		if _desired.has(pos) and not _pending.has(pos) and not _gen_queued.has(pos):
-			_gen_queue.push_front(pos)
-			_gen_queued[pos] = true
+			_queue_rebuild(pos)
+	for pos in _generated.keys():
+		if not _desired.has(pos):
+			_generated.erase(pos)
+		else:
+			_queue_generated_mesh_if_ready(pos)
 
 
 func _schedule_jobs() -> void:
-	if _gen_queue.is_empty():
+	if _gen_queue.is_empty() and _mesh_queue.is_empty():
 		return
-	while _pending.size() < _max_active_jobs and not _gen_queue.is_empty():
-		var pos: Vector2i = _gen_queue.pop_front()
-		_gen_queued.erase(pos)
+	while _pending.size() < _max_active_jobs and (not _mesh_queue.is_empty() or not _gen_queue.is_empty()):
+		var mesh_job := not _mesh_queue.is_empty()
+		var pos: Vector2i
+		if mesh_job:
+			pos = _mesh_queue.pop_front()
+			_mesh_queued.erase(pos)
+		else:
+			pos = _gen_queue.pop_front()
+			_gen_queued.erase(pos)
 		if _pending.has(pos):
 			continue
-		if _chunks.has(pos) and not _dirty.has(pos):
+		if mesh_job and not _chunks.has(pos) and not _generated.has(pos):
+			continue
+		if not mesh_job and (_chunks.has(pos) or _generated.has(pos)) and not _dirty.has(pos):
 			continue
 		_dirty.erase(pos)
 		var lod := _chunk_uses_lod(pos)
@@ -266,11 +290,38 @@ func _schedule_jobs() -> void:
 		job.config_revision = _worldgen_revision
 		job.lod = lod
 		job.slot = {}
-		job.task = WorkerThreadPool.add_task(
-			_run_chunk_job.bind(pos, _chunk_edits_for(pos), _gather_job_neighbors(pos, lod), job.slot, lod,
-				not lod and _within_collision_range(pos)),
-			true,
-			"voxel_chunk")
+		var high_priority := not lod and _within_collision_range(pos)
+		var chunk: Chunk = _chunks.get(pos)
+		if mesh_job and chunk != null and chunk.lod == lod:
+			job.kind = "mesh"
+			if lod:
+				job.task = WorkerThreadPool.add_task(
+					_run_lod_remesh_job.bind(chunk.lod_solid_y.duplicate(), chunk.lod_solid_id.duplicate(),
+						chunk.lod_sub_id.duplicate(), chunk.lod_water_y.duplicate(),
+						chunk.lod_water_level.duplicate(), chunk.max_y,
+						chunk.foliage_tints.duplicate(), chunk.water_tints.duplicate(),
+						_gather_lod_neighbors(pos), job.slot),
+					false, "voxel_lod_remesh")
+			else:
+				job.task = WorkerThreadPool.add_task(
+					_run_full_remesh_job.bind(chunk.data.duplicate(), chunk.foliage_tints.duplicate(),
+						chunk.water_tints.duplicate(), _gather_neighbors(pos), job.slot, high_priority),
+					high_priority, "voxel_full_remesh")
+		elif mesh_job:
+			job.kind = "mesh"
+			var generated: TerrainGenerator.GenResult = _generated.get(pos)
+			if generated == null:
+				continue
+			job.task = WorkerThreadPool.add_task(
+				_run_generated_mesh_job.bind(generated, _gather_generated_neighbors(pos, lod),
+					job.slot, lod, high_priority),
+				high_priority, "voxel_generated_mesh")
+		else:
+			job.kind = "generate"
+			job.task = WorkerThreadPool.add_task(
+				_run_generation_job.bind(pos, _chunk_edits_for(pos), job.slot, lod),
+				high_priority,
+				"voxel_generate")
 		_pending[pos] = job
 
 
@@ -280,7 +331,8 @@ func _process_commit_queue() -> void:
 		var item: CommitItem = _commit_queue.pop_front()
 		if not _desired.has(item.pos):
 			continue
-		if item.version != _chunk_edit_version.get(item.pos, 0) or item.config_revision != _worldgen_revision or item.lod != _chunk_uses_lod(item.pos):
+		var mode_stale := item.lod != _chunk_uses_lod(item.pos)
+		if item.version != _chunk_edit_version.get(item.pos, 0) or item.config_revision != _worldgen_revision or mode_stale:
 			_queue_rebuild(item.pos)
 			continue
 		_commit_chunk(item.pos, item.result, item.lod)
@@ -298,18 +350,28 @@ func _collect_jobs() -> void:
 		if _dirty.has(pos):
 			# An edit invalidated this job's neighbor snapshot while it was running.
 			# Discard the stale result and immediately schedule a fresh build.
-			if _desired.has(pos) and not _gen_queued.has(pos):
-				_gen_queue.push_front(pos)
-				_gen_queued[pos] = true
+			if _desired.has(pos):
+				_queue_rebuild(pos)
+			continue
+		if job.kind == "generate":
+			if job.slot.has("generated") and job.slot["generated"] != null \
+					and _desired.has(pos) and job.version == _chunk_edit_version.get(pos, 0) \
+					and job.config_revision == _worldgen_revision and job.lod == _chunk_uses_lod(pos):
+				_generated[pos] = job.slot["generated"]
+				_queue_generated_meshes_around(pos)
+			elif _desired.has(pos):
+				_queue_rebuild(pos)
 			continue
 		if job.slot.has("result") and job.slot["result"] != null:
 			_record_job_metrics(job.slot, job.lod)
-			_commit_queue.append(CommitItem.new(pos, job.slot["result"], job.version, job.config_revision, job.lod))
+			_commit_queue.append(CommitItem.new(pos, job.slot["result"], job.version,
+				job.config_revision, job.lod))
 
 
 ## Worker-thread entry point. Only reads state that is immutable while jobs
 ## are in flight (generator noise set, mesher tables, block registry).
-func _run_chunk_job(chunk_pos: Vector2i, edits: Dictionary, neighbors, slot: Dictionary, lod: bool, want_collision: bool = true) -> void:
+func _run_chunk_job(chunk_pos: Vector2i, edits: Dictionary, neighbors, slot: Dictionary,
+		lod: bool, want_collision: bool = true) -> void:
 	var generated := _generator.generate_data(chunk_pos, edits, lod)
 	var mesh_start := Time.get_ticks_usec()
 	if lod:
@@ -317,6 +379,69 @@ func _run_chunk_job(chunk_pos: Vector2i, edits: Dictionary, neighbors, slot: Dic
 	else:
 		slot["result"] = _mesher.build(generated.data, generated.max_y, generated.heights, generated.foliage_tints, generated.water_tints, neighbors, want_collision)
 	slot["timings"] = generated.timings
+	slot["mesh_us"] = Time.get_ticks_usec() - mesh_start
+
+
+func _run_generation_job(chunk_pos: Vector2i, edits: Dictionary, slot: Dictionary,
+		lod: bool) -> void:
+	slot["generated"] = _generator.generate_data(chunk_pos, edits, lod)
+
+
+func _run_generated_mesh_job(generated: TerrainGenerator.GenResult, neighbors,
+		slot: Dictionary, lod: bool, want_collision: bool) -> void:
+	var mesh_start := Time.get_ticks_usec()
+	if lod:
+		slot["result"] = _mesher.build_lod(generated.lod_solid_y, generated.lod_solid_id,
+			generated.lod_sub_id, generated.lod_water_y, generated.lod_water_level,
+			generated.max_y, generated.foliage_tints, generated.water_tints, neighbors)
+	else:
+		slot["result"] = _mesher.build(generated.data, generated.max_y, generated.heights,
+			generated.foliage_tints, generated.water_tints, neighbors, want_collision)
+	slot["timings"] = generated.timings
+	slot["mesh_us"] = Time.get_ticks_usec() - mesh_start
+
+
+## Rebuilds an authoritative loaded chunk from a thread-safe voxel snapshot.
+## Edits already mutate Chunk.data, so rerunning terrain, caves, ores, and
+## population here was redundant and dominated seam/collision rebuild cost.
+func _run_full_remesh_job(data: PackedByteArray, foliage_tints: PackedColorArray,
+		water_tints: PackedColorArray, neighbors: ChunkMesher.NeighborSet,
+		slot: Dictionary, want_collision: bool) -> void:
+	var scan_start := Time.get_ticks_usec()
+	var heights := PackedInt32Array()
+	heights.resize(VoxelDefs.CHUNK_AREA)
+	var max_y := 0
+	for z in VoxelDefs.CHUNK_SIZE:
+		for x in VoxelDefs.CHUNK_SIZE:
+			var column := x + z * VoxelDefs.DATA_STRIDE_Z
+			var top := 0
+			for y in range(VoxelDefs.WORLD_HEIGHT - 1, -1, -1):
+				if data[column + y * VoxelDefs.DATA_STRIDE_Y] != BlockRegistry.BLOCK_AIR:
+					top = y
+					break
+			heights[column] = top
+			max_y = maxi(max_y, top)
+	var scan_us := Time.get_ticks_usec() - scan_start
+	var mesh_start := Time.get_ticks_usec()
+	slot["result"] = _mesher.build(data, max_y, heights, foliage_tints, water_tints,
+		neighbors, want_collision)
+	slot["timings"] = {
+		"terrain_us": 0,
+		"populate_us": 0,
+		"heightmap_us": scan_us,
+		"generation_us": 0,
+	}
+	slot["mesh_us"] = Time.get_ticks_usec() - mesh_start
+
+
+func _run_lod_remesh_job(solid_y: PackedInt32Array, solid_id: PackedByteArray,
+		sub_id: PackedByteArray, water_y: PackedInt32Array, water_level: PackedByteArray,
+		max_y: int, foliage_tints: PackedColorArray, water_tints: PackedColorArray,
+		neighbors: ChunkMesher.LodNeighbors, slot: Dictionary) -> void:
+	var mesh_start := Time.get_ticks_usec()
+	slot["result"] = _mesher.build_lod(solid_y, solid_id, sub_id, water_y, water_level,
+		max_y, foliage_tints, water_tints, neighbors)
+	slot["timings"] = {"terrain_us": 0, "populate_us": 0, "heightmap_us": 0, "generation_us": 0}
 	slot["mesh_us"] = Time.get_ticks_usec() - mesh_start
 
 
@@ -351,6 +476,79 @@ func _gather_job_neighbors(pos: Vector2i, lod: bool):
 	if lod:
 		return _gather_lod_neighbors(pos)
 	return _gather_neighbors(pos)
+
+
+func _queue_generated_meshes_around(pos: Vector2i) -> void:
+	_queue_generated_mesh_if_ready(pos)
+	for direction in VoxelDefs.DIRS_8:
+		_queue_generated_mesh_if_ready(pos + direction)
+
+
+func _queue_generated_mesh_if_ready(pos: Vector2i) -> void:
+	if not _generated.has(pos) or not _desired.has(pos) or _pending.has(pos) \
+			or _mesh_queued.has(pos) or not _generated_neighbors_ready(pos):
+		return
+	_mesh_queue.append(pos)
+	_mesh_queued[pos] = true
+
+
+func _generated_neighbors_ready(pos: Vector2i) -> bool:
+	var lod := _chunk_uses_lod(pos)
+	var directions := VoxelDefs.DIRS_4 if lod else VoxelDefs.DIRS_8
+	for direction in directions:
+		var neighbor_pos: Vector2i = pos + direction
+		if not _desired.has(neighbor_pos):
+			continue
+		var chunk: Chunk = _chunks.get(neighbor_pos)
+		if chunk != null and chunk.lod == _chunk_uses_lod(neighbor_pos):
+			continue
+		var generated: TerrainGenerator.GenResult = _generated.get(neighbor_pos)
+		if generated == null or generated.lod != _chunk_uses_lod(neighbor_pos):
+			return false
+	return true
+
+
+func _gather_generated_neighbors(pos: Vector2i, lod: bool):
+	if lod:
+		var lod_out := ChunkMesher.LodNeighbors.new()
+		for index in VoxelDefs.DIRS_4.size():
+			var direction: Vector2i = VoxelDefs.DIRS_4[index]
+			var neighbor_pos := pos + direction
+			var chunk: Chunk = _chunks.get(neighbor_pos)
+			if chunk != null and chunk.lod == _chunk_uses_lod(neighbor_pos):
+				lod_out.edges[direction] = _build_lod_edge(chunk, direction)
+			elif _generated.has(neighbor_pos):
+				lod_out.edges[direction] = _build_generated_lod_edge(_generated[neighbor_pos], direction)
+			else:
+				continue
+			lod_out.mask |= (1 << index)
+		return lod_out
+	var out := ChunkMesher.NeighborSet.new()
+	for index in VoxelDefs.DIRS_8.size():
+		var direction: Vector2i = VoxelDefs.DIRS_8[index]
+		var neighbor_pos := pos + direction
+		var chunk: Chunk = _chunks.get(neighbor_pos)
+		if chunk != null and chunk.lod == _chunk_uses_lod(neighbor_pos):
+			if chunk.lod:
+				out.samples[direction] = ChunkMesher.NeighborSample.from_lod(
+					chunk.lod_solid_y.duplicate(), chunk.lod_solid_id.duplicate(),
+					chunk.lod_sub_id.duplicate(), chunk.lod_water_y.duplicate())
+			else:
+				out.samples[direction] = ChunkMesher.NeighborSample.new(
+					chunk.data.duplicate(), chunk.max_y, chunk.heights.duplicate())
+		elif _generated.has(neighbor_pos):
+			var generated: TerrainGenerator.GenResult = _generated[neighbor_pos]
+			if generated.lod:
+				out.samples[direction] = ChunkMesher.NeighborSample.from_lod(
+					generated.lod_solid_y, generated.lod_solid_id,
+					generated.lod_sub_id, generated.lod_water_y)
+			else:
+				out.samples[direction] = ChunkMesher.NeighborSample.new(
+					generated.data, generated.max_y, generated.heights)
+		else:
+			continue
+		out.mask |= (1 << index)
+	return out
 
 
 func _gather_lod_neighbors(pos: Vector2i) -> ChunkMesher.LodNeighbors:
@@ -396,6 +594,35 @@ func _build_lod_edge(chunk: Chunk, direction: Vector2i) -> ChunkMesher.LodEdge:
 	return edge
 
 
+func _build_generated_lod_edge(generated: TerrainGenerator.GenResult,
+		direction: Vector2i) -> ChunkMesher.LodEdge:
+	var edge := ChunkMesher.LodEdge.new()
+	edge.solid.resize(VoxelDefs.CHUNK_SIZE)
+	edge.water.resize(VoxelDefs.CHUNK_SIZE)
+	for index in VoxelDefs.CHUNK_SIZE:
+		var local_x := index if direction.y != 0 else (0 if direction.x > 0 else VoxelDefs.CHUNK_SIZE - 1)
+		var local_z := index if direction.x != 0 else (0 if direction.y > 0 else VoxelDefs.CHUNK_SIZE - 1)
+		var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
+		if generated.lod:
+			edge.solid[index] = generated.lod_solid_y[column]
+			edge.water[index] = generated.lod_water_y[column]
+			continue
+		var solid := ChunkMesher.LOD_NONE
+		var water := ChunkMesher.LOD_NONE
+		for y in range(generated.max_y, -1, -1):
+			var id: int = generated.data[column + y * VoxelDefs.DATA_STRIDE_Y]
+			if water == ChunkMesher.LOD_NONE and _blocks.is_water_id(id):
+				water = y
+			if solid == ChunkMesher.LOD_NONE and id != BlockRegistry.BLOCK_AIR \
+					and not _blocks.is_water_id(id) and not _blocks.has_flag(id, BlockRegistry.FLAG_CROSS):
+				solid = y
+			if solid != ChunkMesher.LOD_NONE and water != ChunkMesher.LOD_NONE:
+				break
+		edge.solid[index] = solid
+		edge.water[index] = water
+	return edge
+
+
 func _gather_neighbors(pos: Vector2i) -> ChunkMesher.NeighborSet:
 	var out := ChunkMesher.NeighborSet.new()
 	for index in VoxelDefs.DIRS_8.size():
@@ -414,13 +641,17 @@ func _gather_neighbors(pos: Vector2i) -> ChunkMesher.NeighborSet:
 
 
 func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> void:
+	_generated.erase(pos)
 	var chunk: Chunk = _chunks.get(pos)
+	var mode_changed := chunk != null and chunk.lod != lod
 	if chunk == null:
 		chunk = _create_chunk_nodes(pos)
 		_chunks[pos] = chunk
 	chunk.lod = lod
 	chunk.data = res.data
 	chunk.heights = res.heights
+	chunk.foliage_tints = res.foliage_tints
+	chunk.water_tints = res.water_tints
 	chunk.lod_solid_y = res.lod_solid_y
 	chunk.lod_solid_id = res.lod_solid_id
 	chunk.lod_sub_id = res.lod_sub_id
@@ -438,6 +669,16 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> voi
 	else:
 		chunk.shape.shape = null
 	_remesh_on_commit_neighbors(pos)
+	if mode_changed:
+		_invalidate_mode_change_neighbors(pos)
+
+
+func _invalidate_mode_change_neighbors(pos: Vector2i) -> void:
+	for direction in VoxelDefs.DIRS_8:
+		var neighbor_pos: Vector2i = pos + direction
+		var neighbor: Chunk = _chunks.get(neighbor_pos)
+		if neighbor != null and _desired_neighbors_ready(neighbor_pos, neighbor.lod):
+			_queue_rebuild(neighbor_pos, true, true)
 
 
 func _within_collision_range(pos: Vector2i) -> bool:
@@ -471,22 +712,56 @@ func _remesh_on_commit_neighbors(pos: Vector2i) -> void:
 	for index in VoxelDefs.DIRS_8.size():
 		var direction: Vector2i = VoxelDefs.DIRS_8[index]
 		var neighbor: Chunk = _chunks.get(pos + direction)
-		if neighbor == null or neighbor.lod:
+		if neighbor == null or (neighbor.lod and index >= VoxelDefs.DIRS_4.size()):
 			continue
-		if (neighbor.mask & REBUILD_OPPOSITE_BITS[index]) == 0:
-			_queue_rebuild(pos + direction, true)
+		if (neighbor.mask & REBUILD_OPPOSITE_BITS[index]) == 0 \
+				and _desired_neighbors_ready(pos + direction, neighbor.lod):
+			_queue_rebuild(pos + direction, true, true)
 
 
-func _queue_rebuild(pos: Vector2i, preserve_if_pending := false) -> void:
+## Wait until the complete desired neighbor ring exists before doing one seam
+## rebuild. Rebuilding after every individual commit caused a burst of up to
+## eight redundant terrain+mesh jobs per chunk and noticeable stream stutter.
+func _desired_neighbors_ready(pos: Vector2i, lod: bool) -> bool:
+	var directions := VoxelDefs.DIRS_4 if lod else VoxelDefs.DIRS_8
+	for direction in directions:
+		var neighbor_pos: Vector2i = pos + direction
+		if not _desired.has(neighbor_pos):
+			continue
+		var neighbor: Chunk = _chunks.get(neighbor_pos)
+		if neighbor == null or neighbor.lod != _chunk_uses_lod(neighbor_pos):
+			return false
+	return true
+
+
+func _queue_rebuild(pos: Vector2i, preserve_if_pending := false,
+		low_priority := false) -> void:
+	if not _desired.has(pos):
+		_dirty.erase(pos)
+		_generated.erase(pos)
+		return
 	if _pending.has(pos):
 		if preserve_if_pending:
 			_dirty[pos] = true
 		return
-	if _gen_queued.has(pos):
+	if _gen_queued.has(pos) or _mesh_queued.has(pos):
 		return
 	_dirty[pos] = true
-	_gen_queue.push_front(pos)
-	_gen_queued[pos] = true
+	var chunk: Chunk = _chunks.get(pos)
+	var can_remesh := chunk != null and chunk.lod == _chunk_uses_lod(pos)
+	if can_remesh:
+		if low_priority:
+			_mesh_queue.append(pos)
+		else:
+			_mesh_queue.push_front(pos)
+		_mesh_queued[pos] = true
+	else:
+		_generated.erase(pos)
+		if low_priority:
+			_gen_queue.append(pos)
+		else:
+			_gen_queue.push_front(pos)
+		_gen_queued[pos] = true
 
 
 func _unload_far() -> void:
@@ -929,14 +1204,16 @@ func get_worldgen_stats() -> Dictionary:
 	var full_chunks := 0
 	var lod_chunks := 0
 	for chunk_value in _chunks.values():
-		if (chunk_value as Chunk).lod:
+		var chunk := chunk_value as Chunk
+		if chunk.lod:
 			lod_chunks += 1
 		else:
 			full_chunks += 1
 	return {
 		"chunks": "%d full / %d lod" % [full_chunks, lod_chunks],
 		"pending": _pending.size(),
-		"queued": _gen_queue.size(),
+		"queued": _gen_queue.size() + _mesh_queue.size(),
+		"generated waiting": _generated.size(),
 		"commits": _commit_queue.size(),
 		"gen ms ema": _generation_ema_ms,
 		"terrain ms": _terrain_ema_ms,

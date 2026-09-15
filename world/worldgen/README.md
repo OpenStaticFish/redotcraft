@@ -31,11 +31,34 @@ catalogs/samplers used by worker jobs. A chunk then runs these ordered stages:
    population. `ChunkMesher.build_lod()` consumes those arrays directly, and
    full chunks expand compact neighbors on the worker thread. Keep the compact
    and full surface choices in sync: both come from `_surface_rule_values()`.
+7. `ChunkMesher.build_lod()` merges vertical material runs so permanent compact
+   distance meshes stay cheap to upload. Full-detail streaming does not use
+   temporary preview geometry: every visible near chunk is authoritative.
+
+`VoxelWorld` schedules cold chunks in two worker stages. It first generates the
+authoritative voxel/column data, then waits for the desired neighbor ring before
+meshing. This closes seams on the first upload and avoids regenerating/remeshing
+each chunk as eight neighbors arrive. Later edits, collision additions, and
+neighbor invalidations rebuild from immutable snapshots of loaded chunk data;
+only an actual full/LOD mode transition reruns terrain generation.
 
 All coordinates are global and all generation state is read-only after
 configuration. Do not add mutable sampler caches or scene-tree access to worker
 code. Any cache must be bounded, synchronized, and keyed by the complete config
 revision. `VoxelWorld.configure()` must still run before chunk jobs are queued.
+
+Measure changes with:
+
+```sh
+redot --headless --path . --script res://tools/chunk_loading_benchmark.gd
+```
+
+The warmed phase benchmark pins the seed and 5x5 position set and reports worker wall time,
+chunks/second, terrain/population/height/mesh averages, main-thread mesh and
+shape-resource creation time, and triangle count for both full and compact LOD
+chunks. It intentionally excludes `VoxelWorld` scheduling and neighbors; use
+`stream_full_verify.gd` to time the end-to-end authoritative stream.
+Compare like-for-like runs on the same machine.
 
 ## Main tuning controls
 

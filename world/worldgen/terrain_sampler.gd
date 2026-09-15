@@ -367,7 +367,7 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 
 
 ## Diagnostic-friendly point query. Unlike build_field, this deliberately returns
-## a Dictionary and may be used by tools, previews, or spawn inspection.
+## a Dictionary and may be used by tools, compact LOD, or spawn inspection.
 func sample_point(x: int, z: int) -> Dictionary:
 	_ensure_configured()
 	var mainland: float = _mainland_continentalness_at(x, z)

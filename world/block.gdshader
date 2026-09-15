@@ -1,7 +1,7 @@
 shader_type spatial;
 render_mode diffuse_burley, specular_schlick_ggx, alpha_to_coverage;
 
-uniform sampler2DArray albedo_texture : source_color, filter_linear_mipmap_anisotropic, repeat_disable;
+uniform sampler2DArray albedo_texture : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float block_emission : hint_range(0.0, 2.0) = 0.45;
 uniform float min_light : hint_range(0.0, 1.0) = 0.05;
 // Camera-submerged strength (0 above water), driven by DayNightCycle. Caustics

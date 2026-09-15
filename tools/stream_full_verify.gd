@@ -28,10 +28,25 @@ func _run() -> void:
 
 	var expected := (RENDER_DISTANCE * 2 + 1) * (RENDER_DISTANCE * 2 + 1)
 	var waited := 0
-	while (world._chunks.size() < expected or not world._pending.is_empty()) and waited < MAX_WAIT_TICKS:
+	var stream_start := Time.get_ticks_usec()
+	var visible_ms := -1.0
+	while (world._chunks.size() < expected or not world._pending.is_empty() \
+			or not world._gen_queue.is_empty() or not world._mesh_queue.is_empty() \
+			or not world._generated.is_empty() or not world._commit_queue.is_empty()) \
+			and waited < MAX_WAIT_TICKS:
 		await create_timer(WAIT_TICK).timeout
 		waited += 1
-	print("STREAM FULL: chunks=%d/%d wait_ticks=%d" % [world._chunks.size(), expected, waited])
+		if visible_ms < 0.0 and world._chunks.size() >= expected:
+			visible_ms = float(Time.get_ticks_usec() - stream_start) / 1000.0
+	print("STREAM FULL: chunks=%d/%d visible_ms=%.1f full_ms=%.1f wait_ticks=%d" % [
+		world._chunks.size(), expected, visible_ms,
+		float(Time.get_ticks_usec() - stream_start) / 1000.0, waited])
+	if world._chunks.size() != expected:
+		_fail("stream timed out with %d/%d chunks" % [world._chunks.size(), expected])
+	if not world._pending.is_empty() or not world._gen_queue.is_empty() \
+			or not world._mesh_queue.is_empty() or not world._generated.is_empty() \
+			or not world._commit_queue.is_empty():
+		_fail("stream timed out with unfinished generation, mesh, or commit work")
 
 	for pos in world._chunks.keys():
 		if (world._chunks[pos] as VoxelWorld.Chunk).lod:
@@ -59,7 +74,9 @@ func _run() -> void:
 		await create_timer(WAIT_TICK).timeout
 		waited += 1
 		if world._stream_center != center or world._pending.size() > 0 \
-				or world._gen_queue.size() > 0 or world._commit_queue.size() > 0:
+				or world._gen_queue.size() > 0 or world._mesh_queue.size() > 0 \
+				or world._generated.size() > 0 \
+				or world._commit_queue.size() > 0:
 			continue
 		var chunk: VoxelWorld.Chunk = world._chunks.get(center)
 		if chunk != null and chunk.shape.shape != null:
