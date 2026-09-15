@@ -4,6 +4,13 @@ render_mode diffuse_burley, specular_schlick_ggx, alpha_to_coverage;
 uniform sampler2DArray albedo_texture : source_color, filter_linear_mipmap_anisotropic, repeat_disable;
 uniform float block_emission : hint_range(0.0, 2.0) = 0.45;
 uniform float min_light : hint_range(0.0, 1.0) = 0.05;
+// Leaf shadow proxy. Leaves keep their cutout silhouette in the visible pass
+// but write opaque coverage in the shadow pass, so the shadow map never samples
+// mip-filtered leaf alpha and the canopy shadow silhouette stops crawling with
+// view/sun angle. This trades the dappled leaf-shadow look for a solid canopy
+// shadow. Non-leaf cutout blocks (glass, cross foliage) are unaffected. Set to
+// 0 to restore the plain cutout (dappled) leaf shadows.
+uniform float solid_leaf_shadows : hint_range(0.0, 1.0) = 1.0;
 // Camera-submerged strength (0 above water), driven by DayNightCycle. Caustics
 // are projected from the water surface onto sky-lit upward faces.
 global uniform float underwater_caustics;
@@ -49,7 +56,11 @@ void fragment() {
 		ALBEDO += tex.rgb * vec3(0.24, 0.34, 0.38) * caustic * underwater_caustics
 			* light_data.a * up_face;
 	}
-	ALPHA = tex.a;
+	// Leaves are the only blocks with a full wind weight (see ChunkMesher
+	// _build_light_tables), so COLOR.a doubles as the leaf marker here.
+	float leaf = step(0.99, COLOR.a);
+	float shadow_proxy = leaf * solid_leaf_shadows * (IN_SHADOW_PASS ? 1.0 : 0.0);
+	ALPHA = max(tex.a, shadow_proxy);
 	ALPHA_SCISSOR_THRESHOLD = 0.5;
 	ROUGHNESS = 1.0;
 	METALLIC = 0.0;
