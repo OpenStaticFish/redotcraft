@@ -134,6 +134,7 @@ func _verify_indoor_bed_spawn() -> void:
 		_check(position.y < 7.0, "indoor bed respawn stays below the roof")
 		_check(absi(floori(position.x) - bed.x) <= 3 and absi(floori(position.z) - bed.z) <= 3,
 			"bed respawn stays nearby")
+		_check(world.is_standable_spawn(position), "stored indoor bed respawn remains directly usable")
 
 
 func _set_fixture_block(data: PackedByteArray, position: Vector3i, block_id: int) -> void:

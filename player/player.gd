@@ -208,7 +208,8 @@ func respawn() -> void:
 	global_position = spawn_position
 	if world != null:
 		world.setup_player(self, true)
-		global_position = world.find_safe_spawn(spawn_position)
+		if not world.is_standable_spawn(spawn_position):
+			global_position = world.find_safe_spawn(spawn_position)
 		world.setup_player(self, true)
 	health = MAX_HEALTH
 	hunger = MAX_HUNGER
