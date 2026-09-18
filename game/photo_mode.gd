@@ -8,7 +8,7 @@ extends Node
 ##
 ## Main listens to camera_mode_changed to move world streaming, weather, and
 ## player control with the active camera; this node only owns presentation and
-## input. mouse_sensitivity_provider is injected so the node stays free of
+## input. Camera setting providers are injected so the node stays free of
 ## autoloads and can be exercised headlessly.
 
 signal status_requested(message: String)
@@ -24,7 +24,9 @@ const FOV_STEP := 2.0
 const PITCH_LIMIT := 1.553343
 const DEFAULT_SENSITIVITY := 0.0025
 
-var mouse_sensitivity_provider: Callable = Callable()
+var mouse_sensitivity_x_provider: Callable = Callable()
+var mouse_sensitivity_y_provider: Callable = Callable()
+var invert_y_provider: Callable = Callable()
 
 var _player_camera: Camera3D
 var _hud_root: Control
@@ -119,12 +121,22 @@ func _apply_free_movement(direction: Vector3, boost: float, delta: float) -> voi
 func _look(relative: Vector2) -> void:
 	if _camera == null:
 		return
-	var sensitivity := DEFAULT_SENSITIVITY
-	if mouse_sensitivity_provider.is_valid():
-		sensitivity = float(mouse_sensitivity_provider.call())
-	_yaw = wrapf(_yaw - relative.x * sensitivity, -PI, PI)
-	_pitch = clampf(_pitch - relative.y * sensitivity, -PITCH_LIMIT, PITCH_LIMIT)
+	var horizontal_sensitivity := _sensitivity_from(mouse_sensitivity_x_provider)
+	var vertical_sensitivity := _sensitivity_from(mouse_sensitivity_y_provider)
+	var vertical_direction := 1.0 if _is_invert_y() else -1.0
+	_yaw = wrapf(_yaw - relative.x * horizontal_sensitivity, -PI, PI)
+	_pitch = clampf(_pitch + relative.y * vertical_sensitivity * vertical_direction, -PITCH_LIMIT, PITCH_LIMIT)
 	_camera.rotation = Vector3(_pitch, _yaw, 0.0)
+
+
+func _sensitivity_from(provider: Callable) -> float:
+	if provider.is_valid():
+		return float(provider.call())
+	return DEFAULT_SENSITIVITY
+
+
+func _is_invert_y() -> bool:
+	return bool(invert_y_provider.call()) if invert_y_provider.is_valid() else false
 
 
 func _zoom(amount: float) -> void:

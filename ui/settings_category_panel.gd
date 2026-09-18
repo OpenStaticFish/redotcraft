@@ -103,7 +103,10 @@ func _category_definition() -> Dictionary:
 				"title": "Gameplay",
 				"advanced": false,
 				"rows": [
-					{"type": "slider", "label": "Mouse Sensitivity", "key": "mouse_sensitivity", "min": 0.0005, "max": 0.005, "step": 0.0001, "format": "%.2fx", "scale": 1000.0},
+					{"type": "slider", "label": "Horizontal Sensitivity", "key": "mouse_sensitivity_x", "min": GameConfig.MOUSE_SENSITIVITY_MIN, "max": GameConfig.MOUSE_SENSITIVITY_MAX, "step": 0.0001, "format": "%.2fx", "scale": 1000.0, "tooltip": "Mouse look speed when turning left or right."},
+					{"type": "slider", "label": "Vertical Sensitivity", "key": "mouse_sensitivity_y", "min": GameConfig.MOUSE_SENSITIVITY_MIN, "max": GameConfig.MOUSE_SENSITIVITY_MAX, "step": 0.0001, "format": "%.2fx", "scale": 1000.0, "tooltip": "Mouse look speed when looking up or down."},
+					{"type": "check", "label": "Invert Y Axis", "key": "invert_y", "tooltip": "Reverse vertical mouse look for gameplay and the photo camera."},
+					{"type": "check", "label": "Reduced Motion", "key": "reduced_motion", "tooltip": "Show menu, HUD, and modal changes instantly instead of playing motion effects."},
 					{"type": "option", "label": "Autosave", "key": "autosave_interval", "options": GameConfig.AUTOSAVE_INTERVAL_NAMES, "values": GameConfig.AUTOSAVE_INTERVAL_VALUES, "tooltip": "How often active gameplay is saved. Worlds are always saved when leaving or quitting."},
 				],
 			}

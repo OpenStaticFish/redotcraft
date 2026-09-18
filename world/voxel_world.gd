@@ -1,6 +1,11 @@
 class_name VoxelWorld
 extends Node3D
 
+## Main-thread streaming telemetry. Worker jobs only write their private slots;
+## these snapshots are assembled after completion/commit on the scene thread.
+signal stream_progress_changed(progress: Dictionary)
+signal initial_stream_ready
+
 const SPAWN_RADIUS := 1
 const SPAWN_SEARCH_RADIUS := 12
 ## Half the logical cores, capped at 8. Measured on a 16-thread desktop: 8
@@ -29,6 +34,8 @@ const STREAM_BOUNDARY_MARGIN := 0.05
 ## putting compression in the active meshing path.
 const ENABLE_COLD_CHUNK_COMPRESSION := false
 const COMMIT_BUDGET_MS := 2
+const STREAM_PROGRESS_INTERVAL := 0.15
+const STREAM_PROGRESS_EXTREME_INTERVAL := 1.0
 ## Diagnostic map rasters resolve one mode sample per pixel. The final-height
 ## family walks the erosion graph five times per sample, so map views request
 ## fewer pixels for those modes instead of freezing their refresh for seconds.
@@ -38,6 +45,10 @@ const DEBUG_MAP_HEAVY_MODES: Array[String] = ["height", "raw_height", "slope"]
 const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4, 128, 64, 32, 16]
 const WATER_TICK_INTERVAL := 0.25
 const WATER_CELLS_PER_TICK := 1024
+## Falling blocks use the same bounded main-thread cadence as water. A block
+## advances one cell per tick so a large collapse cannot stall one frame.
+const GRAVITY_TICK_INTERVAL := 0.25
+const GRAVITY_CELLS_PER_TICK := 512
 const TNT_BLAST_RADIUS := 5
 const NUKE_BLAST_RADIUS := 18
 ## Fire advances in discrete steps like water. A flammable block is never
@@ -101,6 +112,10 @@ var _water_queue: Array[Vector3i] = []
 var _water_queued: Dictionary = {}
 var _water_head := 0
 var _water_accum := 0.0
+var _gravity_queue: Array[Vector3i] = []
+var _gravity_queued: Dictionary = {}
+var _gravity_head := 0
+var _gravity_accum := 0.0
 var _fire_queue: Array[Vector3i] = []
 var _fire_queued: Dictionary = {}
 var _fire_accum := 0.0
@@ -113,6 +128,10 @@ var _burning_queue: Array[Vector3i] = []
 var _burning_queued: Dictionary = {}
 var _fire_overlay: FireOverlay
 var _worldgen_revision := 0
+var _stream_progress_time := 0.0
+var _initial_stream_center := Vector2i(999999, 999999)
+var _initial_stream_active := false
+var _initial_stream_complete := false
 var _max_active_jobs := MIN_ACTIVE_JOBS
 var _full_jobs_measured := 0
 var _lod_jobs_measured := 0
@@ -256,10 +275,20 @@ func _process(delta: float) -> void:
 	if _player == null:
 		return
 	_stream_tick()
+	_stream_progress_time += delta
+	var progress_interval := STREAM_PROGRESS_INTERVAL \
+		if _desired.size() <= 4096 else STREAM_PROGRESS_EXTREME_INTERVAL
+	if _stream_progress_time >= progress_interval:
+		_stream_progress_time = 0.0
+		_emit_stream_progress()
 	_water_accum += delta
 	if _water_accum >= WATER_TICK_INTERVAL:
 		_water_accum = 0.0
 		_water_tick()
+	_gravity_accum += delta
+	if _gravity_accum >= GRAVITY_TICK_INTERVAL:
+		_gravity_accum = 0.0
+		_gravity_tick()
 	_fire_accum += delta
 	if _fire_accum >= FIRE_TICK_INTERVAL:
 		_fire_accum = 0.0
@@ -415,6 +444,21 @@ func setup_player(player_node: Node3D, sync_spawn_area := false) -> void:
 	_schedule_jobs()
 
 
+## Starts the first world entry without synchronously generating a spawn ring.
+## Main keeps player input locked until `initial_stream_ready`; all chunk work
+## continues through the ordinary nearest-first worker queues.
+func begin_initial_stream(player_node: Node3D) -> void:
+	_player = player_node
+	_stream_center = _chunk_for_position(player_node.global_position)
+	_initial_stream_center = _stream_center
+	_initial_stream_active = true
+	_initial_stream_complete = false
+	_stream_progress_time = 0.0
+	_rebuild_desired()
+	_schedule_jobs()
+	_emit_stream_progress()
+
+
 func _stream_tick() -> void:
 	var center := _chunk_for_position(_player.global_position)
 	if center != _stream_center:
@@ -429,6 +473,21 @@ func _stream_tick() -> void:
 	# flight waits on a floor remesh that was only queued afterward.
 	_ensure_near_collision()
 	_schedule_jobs()
+	_update_initial_stream_state()
+
+
+func _update_initial_stream_state() -> void:
+	if not _initial_stream_active or _initial_stream_complete:
+		return
+	for dz in range(-SPAWN_RADIUS, SPAWN_RADIUS + 1):
+		for dx in range(-SPAWN_RADIUS, SPAWN_RADIUS + 1):
+			var pos := _initial_stream_center + Vector2i(dx, dz)
+			var chunk: Chunk = _chunks.get(pos)
+			if chunk == null or chunk.lod or not _is_chunk_collision_ready(pos):
+				return
+	_initial_stream_complete = true
+	_emit_stream_progress()
+	initial_stream_ready.emit()
 
 
 ## Distant full chunks are committed without a collision shape. Rebuilds are
@@ -1011,6 +1070,7 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> voi
 	chunk.mask = res.mask
 	if not lod:
 		_seed_fire_edits(pos)
+		_seed_gravity_edits(pos)
 	chunk.mesh.mesh = ChunkMesher.arrays_to_mesh(res.verts, res.normals, res.uvs, res.colors, res.indices, _blocks.material, res.light, res.layers)
 	chunk.water.mesh = ChunkMesher.arrays_to_mesh(res.water_verts, res.water_normals, res.water_uvs, res.water_colors, res.water_indices, _blocks.water_material, res.water_light)
 	if not lod and _within_collision_range(pos) and not res.collision.is_empty():
@@ -1336,6 +1396,7 @@ func break_block(block_position: Vector3i) -> int:
 	_record_edit(block_position, BlockRegistry.BLOCK_AIR)
 	_touch_chunk(chunk_position, block_position, block_id, BlockRegistry.BLOCK_AIR)
 	_seed_water(block_position)
+	_seed_gravity(block_position)
 	return BlockRegistry.canonical_id(block_id)
 
 
@@ -1369,6 +1430,7 @@ func place_block(block_position: Vector3i, block_id: int, facing: int = BlockReg
 	_record_edit(block_position, placed_id)
 	_touch_chunk(chunk_position, block_position, existing, placed_id)
 	_seed_water(block_position)
+	_seed_gravity(block_position)
 	return true
 
 
@@ -1398,6 +1460,7 @@ func _set_placed_block(position: Vector3i, block_id: int) -> void:
 	_record_edit(position, block_id)
 	_touch_chunk(chunk_position, position, existing, block_id)
 	_seed_water(position)
+	_seed_gravity(position)
 
 
 func _remove_door_part(position: Vector3i) -> void:
@@ -1413,6 +1476,7 @@ func _remove_door_part(position: Vector3i) -> void:
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
 	_touch_chunk(_chunk_for_block(position), position, existing, BlockRegistry.BLOCK_AIR)
 	_seed_water(position)
+	_seed_gravity(position)
 
 
 ## Opens or closes both persisted halves together. Interaction is valid from
@@ -1515,6 +1579,7 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 					door_counterparts[counterpart] = true
 				chunk.data[index] = BlockRegistry.BLOCK_AIR
 				_record_edit_in_chunk(position, BlockRegistry.BLOCK_AIR, chunk_position)
+				_seed_gravity(position)
 				removed += 1
 				column_changed = true
 				var dy := y - center.y
@@ -1814,6 +1879,7 @@ func _extinguish_fire(position: Vector3i, changed_chunks: Dictionary) -> void:
 	chunk.data[_data_index(position)] = BlockRegistry.BLOCK_AIR
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
 	_seed_water(position)
+	_seed_gravity(position)
 	changed_chunks[_chunk_for_block(position)] = true
 
 
@@ -1833,6 +1899,7 @@ func _destroy_burnt_block(position: Vector3i, changed_chunks: Dictionary) -> voi
 	chunk.data[_data_index(position)] = BlockRegistry.BLOCK_AIR
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
 	_seed_water(position)
+	_seed_gravity(position)
 	changed_chunks[_chunk_for_block(position)] = true
 
 
@@ -1847,6 +1914,7 @@ func _remove_door_for_batch(position: Vector3i, changed_chunks: Dictionary) -> i
 	chunk.data[index] = BlockRegistry.BLOCK_AIR
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
 	_seed_water(position)
+	_seed_gravity(position)
 	changed_chunks[_chunk_for_block(position)] = true
 	return 1
 
@@ -1926,6 +1994,48 @@ func _seed_fire_edits(pos: Vector2i) -> void:
 func _seed_water(block_position: Vector3i) -> void:
 	for offset in WATER_NEIGHBOR_OFFSETS:
 		_queue_water(block_position + offset)
+
+
+## A block update can either place a gravity block or remove/change its support.
+## Queue both the changed cell and the cell directly above it; that upper cell is
+## the only one in the column whose support can have changed.
+func _seed_gravity(block_position: Vector3i) -> void:
+	_queue_gravity(block_position)
+	_queue_gravity(block_position + Vector3i.UP)
+
+
+## Rehydrated edits store final voxel states rather than transient queue state.
+## Rechecking every edited cell and its upper neighbour resumes interrupted
+## falls after reload without depending on dictionary or chunk load order.
+func _seed_gravity_edits(pos: Vector2i) -> void:
+	var bucket: Dictionary = _edits_by_chunk.get(pos, {})
+	var positions: Array[Vector3i] = []
+	for key in bucket:
+		positions.append(key)
+	positions.sort_custom(func(a: Vector3i, b: Vector3i) -> bool:
+		if a.y != b.y:
+			return a.y < b.y
+		if a.z != b.z:
+			return a.z < b.z
+		return a.x < b.x
+	)
+	for position in positions:
+		_seed_gravity(position)
+
+
+func _queue_gravity(position: Vector3i) -> void:
+	if position.y <= 0 or position.y >= VoxelDefs.WORLD_HEIGHT:
+		return
+	if _gravity_queued.has(position):
+		return
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null or chunk.lod:
+		return
+	_restore_chunk_data(chunk)
+	if not _blocks.is_gravity_block(chunk.data[_data_index(position)]):
+		return
+	_gravity_queued[position] = true
+	_gravity_queue.append(position)
 
 
 func _queue_water(position: Vector3i) -> void:
@@ -2013,9 +2123,88 @@ func _water_place(position: Vector3i, block_id: int, changed_chunks: Dictionary)
 		return
 	chunk.data[index] = block_id
 	_record_edit(position, block_id)
+	_seed_gravity(position)
 	changed_chunks[_chunk_for_block(position)] = true
 	for offset in WATER_NEIGHBOR_OFFSETS:
 		_queue_water(position + offset)
+
+
+## Settles sand, red sand, and gravel after nearby persistent edits. A block
+## advances one cell per tick; every moved source and destination is recorded
+## before persistence/versioning is batched for the affected chunk ring.
+func _gravity_tick() -> void:
+	var budget := GRAVITY_CELLS_PER_TICK
+	var changed_chunks: Dictionary = {}
+	# Snapshot the tail: cells woken by a move wait for the next simulation step.
+	# Besides making the fall rate stable, this prevents one tall column from
+	# consuming the whole per-frame budget by repeatedly re-queuing itself.
+	var tick_end := _gravity_queue.size()
+	while budget > 0 and _gravity_head < tick_end:
+		var position: Vector3i = _gravity_queue[_gravity_head]
+		_gravity_head += 1
+		budget -= 1
+		_gravity_queued.erase(position)
+		_update_gravity_cell(position, changed_chunks)
+	_flush_gravity_changes(changed_chunks)
+	if _gravity_head == _gravity_queue.size():
+		_gravity_queue.clear()
+		_gravity_head = 0
+	elif _gravity_head > 4096:
+		_gravity_queue = _gravity_queue.slice(_gravity_head)
+		_gravity_head = 0
+
+
+func _update_gravity_cell(position: Vector3i, changed_chunks: Dictionary) -> void:
+	if position.y <= 1:
+		return
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null or chunk.lod:
+		return
+	_restore_chunk_data(chunk)
+	var source_index := _data_index(position)
+	var block_id: int = chunk.data[source_index]
+	if not _blocks.is_gravity_block(block_id):
+		return
+	var destination := position + Vector3i.DOWN
+	# Falling is vertical, so this is currently the same x/z chunk. Keep the
+	# resident check explicit so a future lateral reaction cannot treat unknown
+	# unloaded or compact LOD data as empty space.
+	var destination_chunk := _loaded_chunk_for(destination)
+	if destination_chunk == null or destination_chunk.lod:
+		return
+	_restore_chunk_data(destination_chunk)
+	var destination_index := _data_index(destination)
+	var destination_id: int = destination_chunk.data[destination_index]
+	if not _is_gravity_passable(destination_id):
+		return
+	chunk.data[source_index] = BlockRegistry.BLOCK_AIR
+	destination_chunk.data[destination_index] = block_id
+	_record_edit(position, BlockRegistry.BLOCK_AIR)
+	_record_edit(destination, block_id)
+	changed_chunks[_chunk_for_block(position)] = true
+	changed_chunks[_chunk_for_block(destination)] = true
+	_seed_water(position)
+	_seed_water(destination)
+	_queue_gravity(destination)
+	_queue_gravity(position + Vector3i.UP)
+
+
+func _is_gravity_passable(block_id: int) -> bool:
+	return block_id == BlockRegistry.BLOCK_AIR or _blocks.is_water_id(block_id) \
+		or _blocks.has_flag(block_id, BlockRegistry.FLAG_CROSS)
+
+
+func _flush_gravity_changes(changed_chunks: Dictionary) -> void:
+	if changed_chunks.is_empty():
+		return
+	var rebuild_chunks := {}
+	for chunk_position in changed_chunks:
+		_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
+		_stage_chunk_edits(chunk_position)
+		rebuild_chunks[chunk_position] = true
+		_add_loaded_light_ring(rebuild_chunks, chunk_position)
+	for chunk_position in rebuild_chunks:
+		_queue_rebuild(chunk_position, true)
 
 
 ## Single-cell edits always remesh their owner. Neighbor snapshots only need
@@ -2280,8 +2469,11 @@ func get_worldgen_stats() -> Dictionary:
 			lod_chunks += 1
 		else:
 			full_chunks += 1
+	var stream := get_streaming_progress()
 	return {
 		"chunks": "%d full / %d lod" % [full_chunks, lod_chunks],
+		"streamed": int(stream["loaded"]),
+		"stream total": int(stream["total"]),
 		"pending": _pending.size(),
 		"queued": _gen_queue.size() + _mesh_queue.size(),
 		"generated waiting": _generated.size(),
@@ -2292,6 +2484,48 @@ func get_worldgen_stats() -> Dictionary:
 		"mesh ms ema": _mesh_ema_ms,
 		"revision": _worldgen_revision,
 	}
+
+
+## A cheap scene-thread snapshot used by the entry overlay and compact HUD
+## feedback. `loaded` counts only chunks that match the current detail mode, so
+## a Full/LOD transition never reports stale terrain as finished streaming.
+func get_streaming_progress() -> Dictionary:
+	var loaded := 0
+	for pos in _desired:
+		var chunk: Chunk = _chunks.get(pos)
+		if chunk != null and chunk.lod == _chunk_uses_lod(pos):
+			loaded += 1
+	var total := _desired.size()
+	var spawn_loaded := 0
+	var spawn_collision := 0
+	var spawn_center := _initial_stream_center if _initial_stream_active else _stream_center
+	if spawn_center.x == 999999:
+		spawn_center = Vector2i.ZERO
+	for dz in range(-SPAWN_RADIUS, SPAWN_RADIUS + 1):
+		for dx in range(-SPAWN_RADIUS, SPAWN_RADIUS + 1):
+			var pos := spawn_center + Vector2i(dx, dz)
+			var chunk: Chunk = _chunks.get(pos)
+			if chunk != null and not chunk.lod:
+				spawn_loaded += 1
+				if _is_chunk_collision_ready(pos):
+					spawn_collision += 1
+	return {
+		"loaded": loaded,
+		"total": total,
+		"pending": _pending.size(),
+		"queued": _gen_queue.size() + _mesh_queue.size(),
+		"generated": _generated.size(),
+		"commits": _commit_queue.size(),
+		"spawn_loaded": spawn_loaded,
+		"spawn_collision": spawn_collision,
+		"spawn_total": (SPAWN_RADIUS * 2 + 1) * (SPAWN_RADIUS * 2 + 1),
+		"initial_ready": _initial_stream_complete,
+		"streaming": total > 0 and loaded < total,
+	}
+
+
+func _emit_stream_progress() -> void:
+	stream_progress_changed.emit(get_streaming_progress())
 
 
 ## Starts or polls an asynchronous diagnostic-map request. The expensive noise
