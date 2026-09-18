@@ -41,6 +41,8 @@ func _verify_border_edits() -> void:
 		corner, Vector2i(1, 1), "water level corner swap preserves diagonal water face")
 	_expect_neighbor(false, BlockRegistry.BLOCK_WATER_FLOW_7, BlockRegistry.BLOCK_WATER_FLOW_6,
 		corner, Vector2i(-1, -1), "water level corner swap excludes opposite diagonal")
+	_expect_neighbor(true, BlockRegistry.BLOCK_SEAGRASS, BlockRegistry.BLOCK_AIR, edge,
+		Vector2i(1, 0), "cross block boundary swap preserves adjacent water faces")
 
 
 func _verify_opaque_swaps() -> void:

@@ -214,10 +214,6 @@ func has_active_world() -> bool:
 	return not active_world_id.is_empty()
 
 
-func latest_saved_world() -> Dictionary:
-	return WorldStorage.latest_world_metadata()
-
-
 func get_setting(key: String) -> Variant:
 	return settings.get(key, DEFAULT_SETTINGS.get(key))
 

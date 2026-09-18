@@ -333,6 +333,11 @@ func _prepare_world_storage() -> Dictionary:
 		metadata = _world_storage.open_world(GameConfig.active_world_id)
 	if metadata.is_empty():
 		metadata = _world_storage.create_world(GameConfig.world)
+	if metadata.is_empty():
+		push_warning("World storage is unavailable; continuing without persistence")
+		_world_storage = null
+		GameConfig.clear_active_world()
+		return {}
 	GameConfig.activate_world(metadata)
 	return (metadata.get("state", {}) as Dictionary).duplicate(true)
 
@@ -380,9 +385,14 @@ func _build_persistent_state() -> Dictionary:
 func _flush_world_save() -> void:
 	if _world_storage == null or player == null:
 		return
-	world.flush_edit_store()
-	if _world_storage.flush(_build_persistent_state()) == OK:
+	var save_error := world.flush_edit_store()
+	if save_error == OK:
+		save_error = _world_storage.flush(_build_persistent_state())
+	if save_error == OK:
 		GameConfig.active_world_metadata = _world_storage.metadata.duplicate(true)
+	else:
+		push_warning("World save failed with error %d" % save_error)
+		set_status("Save failed - progress remains in memory")
 
 
 func _apply_graphics() -> void:

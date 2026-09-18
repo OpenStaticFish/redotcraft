@@ -169,6 +169,7 @@ func _physics_process(delta: float) -> void:
 	if global_position.y < FALL_RESET_Y:
 		global_position = spawn_position
 		velocity = Vector3.ZERO
+	_update_target()
 	# Never simulate movement in a chunk whose collision has not committed yet.
 	# Extreme streaming and boosted flight can otherwise outrun the nearest-first
 	# worker queue; a flying player could then descend straight through visible
@@ -230,7 +231,6 @@ func _physics_process(delta: float) -> void:
 	if camera:
 		var target_fov := base_fov + SPRINT_FOV_BOOST if sprinting and direction.length_squared() > 0.0 else base_fov
 		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * FOV_LERP_SPEED, 0.0, 1.0))
-	_update_target()
 	_update_footsteps(delta)
 
 

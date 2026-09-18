@@ -255,10 +255,9 @@ func _on_create_world(seed: int, world_type: int) -> void:
 	config["seed"] = seed
 	config["world_type"] = world_type
 	GameConfig.apply_world(config)
-	var storage := WorldStorage.new()
-	var metadata := storage.create_world(GameConfig.world)
-	if not GameConfig.activate_world(metadata):
-		return
+	# Main creates the durable world only after the gameplay scene loads, so a
+	# failed scene change cannot leave an empty world in the library.
+	GameConfig.clear_active_world()
 	_start_game()
 
 

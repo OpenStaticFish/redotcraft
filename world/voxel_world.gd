@@ -189,7 +189,7 @@ static func decompress_chunk_data(compressed: PackedByteArray) -> PackedByteArra
 	var palette_size := int(compressed[4]) | (int(compressed[5]) << 8)
 	var offset := CHUNK_DATA_RLE_HEADER_BYTES
 	if raw_size == 0:
-		return PackedByteArray() if palette_size == 0 and compressed.size() == offset else PackedByteArray()
+		return PackedByteArray()
 	if raw_size < 0 or palette_size <= 0 or compressed.size() < offset + palette_size:
 		return PackedByteArray()
 	var palette := compressed.slice(offset, offset + palette_size)
@@ -1930,6 +1930,8 @@ static func _single_edit_can_change_boundary_visibility(old_block_id: int,
 		return false
 	if _water_level_for_id(old_block_id) != _water_level_for_id(new_block_id):
 		return true
+	if _is_cross_id(old_block_id) != _is_cross_id(new_block_id):
+		return true
 	return _is_nonopaque_cube_id(old_block_id) or _is_nonopaque_cube_id(new_block_id)
 
 
@@ -1962,6 +1964,10 @@ static func _is_nonopaque_cube_id(block_id: int) -> bool:
 	return block_id != BlockRegistry.BLOCK_AIR and not _is_opaque_id(block_id) \
 		and not _is_water_id(block_id) \
 		and (_block_flags_for_id(block_id) & (BlockRegistry.FLAG_CROSS | BlockRegistry.FLAG_LEAVES)) == 0
+
+
+static func _is_cross_id(block_id: int) -> bool:
+	return (_block_flags_for_id(block_id) & BlockRegistry.FLAG_CROSS) != 0
 
 
 static func _is_water_id(block_id: int) -> bool:
