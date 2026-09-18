@@ -71,6 +71,7 @@ var _dynamic_resolution_timer := 0.0
 var _dynamic_resolution_active := false
 var _world_storage: WorldStorage
 var _autosave_time := 0.0
+var _storage_warning_shown := false
 
 
 func _ready() -> void:
@@ -411,6 +412,9 @@ func _flush_world_save() -> bool:
 		save_error = _world_storage.flush(_build_persistent_state())
 	if save_error == OK:
 		GameConfig.active_world_metadata = _world_storage.metadata.duplicate(true)
+		if not _storage_warning_shown and _world_storage.unreadable_region_count() > 0:
+			_storage_warning_shown = true
+			set_status("A damaged world region is read-only; edits there cannot be saved")
 		return true
 	else:
 		push_warning("World save failed with error %d" % save_error)

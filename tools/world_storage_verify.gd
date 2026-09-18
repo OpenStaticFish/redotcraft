@@ -146,6 +146,8 @@ func _verify_round_trip_and_regions() -> void:
 	rejected.open_world("verify-world")
 	_expect(rejected.load_chunk_edits(chunk_a).is_empty(), "future region version was not rejected")
 	var unreadable_bytes := FileAccess.get_file_as_bytes(negative_region_path)
+	_expect(rejected.unreadable_region_count() == 1,
+		"unreadable region was not exposed for one-time player feedback")
 	rejected.stage_chunk_edits(chunk_a, edits_a)
 	rejected.stage_chunk_edits(chunk_c, edits_c)
 	_expect(rejected.flush_dirty_regions() == OK,

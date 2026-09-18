@@ -148,6 +148,10 @@ func has_dirty_regions() -> bool:
 	return not _dirty_regions.is_empty()
 
 
+func unreadable_region_count() -> int:
+	return _unreadable_regions.size()
+
+
 static func latest_world_metadata(p_root_path: String = DEFAULT_ROOT) -> Dictionary:
 	var root := p_root_path.trim_suffix("/")
 	var last_path := root + "/" + LAST_WORLD_FILE
@@ -368,8 +372,10 @@ func _load_region(region_pos: Vector2i) -> void:
 	_regions[region_pos] = loaded.get("region", {}) if valid else {}
 	if not valid and (FileAccess.file_exists(_region_path(region_pos)) \
 			or FileAccess.file_exists(_region_backup_path(region_pos))):
+		var first_warning := not _unreadable_regions.has(region_pos)
 		_unreadable_regions[region_pos] = true
-		push_warning("World region %s is corrupt or from an unsupported version; edits to this region are blocked to preserve it." % region_pos)
+		if first_warning:
+			push_warning("World region %s is corrupt or from an unsupported version; edits to this region are blocked to preserve it." % region_pos)
 	_touch_region(region_pos)
 	_evict_clean_regions()
 
