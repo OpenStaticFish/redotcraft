@@ -77,6 +77,8 @@ func _run() -> void:
 		"incompatible world incorrectly enabled loading")
 	_expect(not play.get_node("Center/Panel/Box/LoadBox/LoadFooter/DeleteButton").disabled,
 		"incompatible world did not enable deletion")
+	_expect(play._rename_button.disabled and play._duplicate_button.disabled and play._backup_button.disabled,
+		"incompatible world enabled management operations")
 
 	# Disconnect the menu's scene-changing handler while verifying the panel's
 	# public signal in isolation.
@@ -86,6 +88,27 @@ func _run() -> void:
 	var beta_card: Button = play._cards.get("beta")
 	if beta_card != null:
 		beta_card.pressed.emit()
+	_expect(not play._rename_button.disabled and not play._duplicate_button.disabled and not play._backup_button.disabled,
+		"compatible world did not enable management operations")
+	play._rename_button.pressed.emit()
+	await process_frame
+	_expect(play._editing_rename and root.gui_get_focus_owner() == play._rename_field,
+		"rename did not open its editor and focus the name field")
+	play._rename_field.text = "Renamed Shore"
+	play._rename_confirm_button.pressed.emit()
+	await process_frame
+	_expect(String((WorldStorage.new(_library_root).open_world("beta")).get("name", "")) == "Renamed Shore",
+		"world rename did not persist through the management UI")
+	play._select_world("beta")
+	play._duplicate_button.pressed.emit()
+	await process_frame
+	var copy_id: String = play._selected_world_id
+	_expect(not copy_id.is_empty() and copy_id != "beta" and play._cards.size() == 4,
+		"world duplication did not refresh and select the new copy")
+	if not copy_id.is_empty() and copy_id != "beta":
+		_expect(WorldStorage.delete_world(copy_id, _library_root), "could not clean up duplicated UI fixture")
+	play._refresh_load_view()
+	play._select_world("beta")
 	play.get_node("Center/Panel/Box/LoadBox/LoadFooter/LoadButton").pressed.emit()
 	_expect(loaded_ids == ["beta"], "selected compatible world did not emit load_requested")
 
@@ -149,7 +172,14 @@ func _run() -> void:
 	_expect(settings.visible, "Settings did not open the hub")
 	var display: Node = settings.get_node("DisplayCategory")
 	var graphics: Node = settings.get_node("GraphicsCategory")
+	var gameplay: Node = settings.get_node("GameplayCategory")
 	var advanced: Node = settings.get_node("GraphicsPanel")
+	var gameplay_rows: Array = gameplay._category_definition()["rows"]
+	var has_autosave := false
+	for row in gameplay_rows:
+		if String(row.get("key", "")) == "autosave_interval":
+			has_autosave = true
+	_expect(has_autosave, "Gameplay settings omitted the autosave interval")
 	display.open_panel()
 	await process_frame
 	_expect(display.visible and settings.visible, "display category did not open over the hub")

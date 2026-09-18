@@ -104,6 +104,7 @@ func _category_definition() -> Dictionary:
 				"advanced": false,
 				"rows": [
 					{"type": "slider", "label": "Mouse Sensitivity", "key": "mouse_sensitivity", "min": 0.0005, "max": 0.005, "step": 0.0001, "format": "%.2fx", "scale": 1000.0},
+					{"type": "option", "label": "Autosave", "key": "autosave_interval", "options": GameConfig.AUTOSAVE_INTERVAL_NAMES, "values": GameConfig.AUTOSAVE_INTERVAL_VALUES, "tooltip": "How often active gameplay is saved. Worlds are always saved when leaving or quitting."},
 				],
 			}
 		_:

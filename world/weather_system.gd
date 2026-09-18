@@ -94,12 +94,13 @@ func set_state(new_state: State) -> void:
 
 
 func persistent_state() -> Dictionary:
-	return {"state": int(state)}
+	return {"state": int(state), "rain_amount": rain_amount}
 
 
 func restore_persistent_state(value: Dictionary) -> void:
 	set_state(clampi(int(value.get("state", State.SUNNY)), State.SUNNY, State.RAIN) as State)
-	rain_amount = 1.0 if state == State.RAIN else 0.0
+	var target := 1.0 if state == State.RAIN else 0.0
+	rain_amount = clampf(float(value.get("rain_amount", target)), 0.0, 1.0)
 	if _day_night != null:
 		_day_night.set_weather_dim(rain_amount)
 
