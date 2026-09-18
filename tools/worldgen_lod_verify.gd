@@ -174,9 +174,16 @@ func _verify_lod_shading(mesher: ChunkMesher) -> void:
 	var flat_config := BASE_CONFIG.duplicate()
 	flat_config["world_type"] = WorldGenConfig.WORLD_TYPE_FLAT
 	flat_config["decoration_density"] = 0.0
+	flat_config["tree_density"] = 0.0
 	flat_config["cave_density"] = 0.0
 	flat.configure(flat_config)
 	var flat_lod := flat.generate_data(Vector2i.ZERO, {}, true)
+	for column in VoxelDefs.CHUNK_AREA:
+		if flat_lod.lod_solid_y[column] != VoxelPopulator.FLAT_VOXEL_SURFACE_Y or flat_lod.lod_water_y[column] != -1:
+			_fail("flat shading fixture is not level dry ground at column %d" % column)
+	# Vertex colors include biome grass tint as well as occlusion. Neutralize
+	# tint in this lighting-only fixture, retaining the real terrain and patches.
+	flat_lod.foliage_tints.fill(Color.WHITE)
 	var flat_mesh := mesher.build_lod(flat_lod.lod_solid_y, flat_lod.lod_solid_id, flat_lod.lod_sub_id, flat_lod.lod_water_y, flat_lod.lod_water_level, flat_lod.max_y, flat_lod.foliage_tints, flat_lod.water_tints, ChunkMesher.LodNeighbors.new())
 	var flat_spread := _top_luminance_spread(flat_mesh)
 	if flat_spread > 0.002:
@@ -184,6 +191,7 @@ func _verify_lod_shading(mesher: ChunkMesher) -> void:
 	var hilly := TerrainGenerator.new()
 	hilly.configure(BASE_CONFIG)
 	var hilly_lod := hilly.generate_data(Vector2i(20, -12), {}, true)
+	hilly_lod.foliage_tints.fill(Color.WHITE)
 	var hilly_mesh := mesher.build_lod(hilly_lod.lod_solid_y, hilly_lod.lod_solid_id, hilly_lod.lod_sub_id, hilly_lod.lod_water_y, hilly_lod.lod_water_level, hilly_lod.max_y, hilly_lod.foliage_tints, hilly_lod.water_tints, ChunkMesher.LodNeighbors.new())
 	var hilly_spread := _top_luminance_spread(hilly_mesh)
 	if hilly_spread < 0.03:

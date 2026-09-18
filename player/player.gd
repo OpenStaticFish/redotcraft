@@ -102,7 +102,7 @@ func setup_world(world_node: VoxelWorld) -> void:
 
 func set_selected_block(block_id: int) -> void:
 	if selected_block != block_id:
-		_cancel_mining()
+		cancel_mining()
 	selected_block = block_id
 	_update_held_block()
 
@@ -223,14 +223,14 @@ func _reset_survival_motion() -> void:
 	_survival_clock = 0.0
 	_regen_clock = 0.0
 	_last_jump_time = -10.0
-	_cancel_mining()
+	cancel_mining()
 
 
 ## Detached photo-mode camera: freeze player simulation and hide the targeting
 ## highlight and the first-person held block so the composition cannot be
 ## disturbed or the hand model caught in the shot.
 func set_photo_mode(enabled: bool) -> void:
-	_cancel_mining()
+	cancel_mining()
 	process_mode = Node.PROCESS_MODE_DISABLED if enabled else Node.PROCESS_MODE_INHERIT
 	if enabled and _highlight != null:
 		_highlight.visible = false
@@ -246,7 +246,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
-		_cancel_mining()
+		cancel_mining()
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var sensitivity := GameConfig.get_mouse_sensitivity()
@@ -287,7 +287,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_handle_double_tap_jump()
 		elif event.is_action_pressed("third_person"):
 			third_person = not third_person
-			_cancel_mining()
+			cancel_mining()
 
 
 func _physics_process(delta: float) -> void:
@@ -309,7 +309,7 @@ func _physics_process(delta: float) -> void:
 	if world != null and not world.is_collision_ready_at(global_position):
 		velocity = Vector3.ZERO
 		_fall_start = NAN
-		_cancel_mining()
+		cancel_mining()
 		has_target = false
 		if _highlight != null:
 			_highlight.hide()
@@ -319,7 +319,7 @@ func _physics_process(delta: float) -> void:
 	if dead:
 		return
 	if _mining and (not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.mouse_mode != Input.MOUSE_MODE_CAPTURED):
-		_cancel_mining()
+		cancel_mining()
 	if not _mining and has_target and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_break_target()
 	_tick_mining(delta)
@@ -499,7 +499,7 @@ func _break_target() -> void:
 		_tick_mining(0.0)
 
 
-func _cancel_mining() -> void:
+func cancel_mining() -> void:
 	_mining = false
 	mining_progress = 0.0
 	if _effects != null:
@@ -511,11 +511,11 @@ func _tick_mining(delta: float) -> void:
 		return
 	if not has_target or target_block != _mining_position or selected_block != _mining_tool \
 			or world.get_block_world(target_block) != _mining_id:
-		_cancel_mining()
+		cancel_mining()
 		return
 	var seconds := BlockRegistry.break_seconds(_mining_id, _mining_tool)
 	if seconds < 0.0 or not is_finite(seconds):
-		_cancel_mining()
+		cancel_mining()
 		return
 	mining_progress = 1.0 if game_mode == GameMode.CREATIVE else minf(1.0, mining_progress + delta / maxf(0.05, seconds))
 	if _effects != null:
@@ -524,7 +524,7 @@ func _tick_mining(delta: float) -> void:
 		return
 	var position_mined := _mining_position
 	var harvest := BlockRegistry.can_harvest(_mining_id, _mining_tool)
-	_cancel_mining()
+	cancel_mining()
 	var removed := world.break_block(position_mined)
 	if removed == BlockRegistry.BLOCK_AIR:
 		return
@@ -538,9 +538,11 @@ func _tick_mining(delta: float) -> void:
 func _place_target() -> void:
 	if dead or world == null:
 		return
-	_cancel_mining()
+	cancel_mining()
 	if has_target and interact_check.is_valid() and interact_check.call(target_block):
 		block_interacted.emit(target_block)
+		return
+	if selected_block == BlockRegistry.BLOCK_AIR:
 		return
 	if ItemRegistry.food_value(selected_block) > 0.0:
 		item_used.emit(selected_block, target_block if has_target else Vector3i.ZERO)
@@ -664,7 +666,7 @@ func _update_survival(delta: float) -> void:
 		if feet_id == BlockRegistry.BLOCK_LAVA or head_id == BlockRegistry.BLOCK_LAVA or ground_id == BlockRegistry.BLOCK_LAVA:
 			take_damage(4.0, "lava")
 		elif feet_id == BlockRegistry.BLOCK_FIRE or head_id == BlockRegistry.BLOCK_FIRE \
-				or world._burning.has(ground_cell):
+				or world.is_burning_at(ground_cell):
 			take_damage(2.0, "fire")
 		if submerged and air <= 0.0:
 			take_damage(2.0, "drowning")

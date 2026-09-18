@@ -34,6 +34,10 @@ func _run() -> void:
 	chunk.shape.shape = BoxShape3D.new()
 	world.add_child(chunk.shape)
 	world._chunks[Vector2i.ZERO] = chunk
+	_expect(world.is_full_chunk_resident_at(Vector3i(4, 4, 4)), "full chunk residency")
+	_expect(not world.is_full_chunk_resident_at(Vector3i(-1, 4, 4)), "unloaded negative coordinate is not resident")
+	_expect(not world.is_full_chunk_resident_at(Vector3i(4, -1, 4))
+		and not world.is_full_chunk_resident_at(Vector3i(4, VoxelDefs.WORLD_HEIGHT, 4)), "out of height bounds is not resident")
 	var player = load("res://player/player.gd").new()
 	player.game_mode = GameMode.SURVIVAL
 	var head := Node3D.new()
@@ -151,6 +155,25 @@ func _run() -> void:
 	player.can_place_check = func() -> bool: return false
 	player._place_target()
 	_expect(interactions == [cell], "interaction precedes placement validation")
+	var statuses: Array[String] = []
+	player.status_requested.connect(func(message: String) -> void: statuses.append(message))
+	player.interact_check = func(_pos: Vector3i) -> bool: return false
+	player.can_place_check = func() -> bool:
+		statuses.append("placement checked")
+		return false
+	player._place_target()
+	_expect(statuses.is_empty(), "empty hand neither checks placement nor emits a toast")
+	player._break_target()
+	player._tick_mining(0.01)
+	player.cancel_mining()
+	_expect(not player._mining and player.mining_progress == 0.0 and not player._effects.cracks.visible, "public cancellation clears mining and cracks")
+	_set_block(chunk.data, cell, BlockRegistry.BLOCK_FIRE)
+	player._break_target()
+	player._tick_mining(1.0)
+	_expect(world.get_block_world(cell) == BlockRegistry.BLOCK_AIR and mined.back()[1] == BlockRegistry.BLOCK_FIRE,
+		"bare-hand mining extinguishes breakable fire")
+	_expect(ItemRegistry.harvest_drop(BlockRegistry.BLOCK_FIRE).is_empty(), "fire has no collectible harvest")
+	_set_block(chunk.data, cell, BlockRegistry.BLOCK_STONE)
 	player.third_person = true
 	player._effects.update_view(0.1)
 	_expect(camera.position.z > 0.0 and player._effects.body.visible and not player._held_block.visible, "third person")

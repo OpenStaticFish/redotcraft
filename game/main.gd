@@ -758,7 +758,7 @@ func _on_inventory_opened() -> void:
 	if player.dead or _pause_menu.visible or (_photo_mode != null and _photo_mode.is_camera_active()):
 		_inventory_overlay.close_panel()
 		return
-	player._cancel_mining()
+	player.cancel_mining()
 	if _map_overlay != null and _map_overlay.visible:
 		_map_overlay.close()
 	_inventory_overlay.set_weather_state(_weather.is_raining())
@@ -890,7 +890,9 @@ func _on_mined_block(position: Vector3i, block_id: int, harvest: bool) -> void:
 		inventory.wear_tool(selected_slot)
 	_drop_container_contents(position)
 	if harvest and _game_mode == GameMode.SURVIVAL:
-		_drops.spawn_drop(Vector3(position) + Vector3.ONE * 0.5, ItemRegistry.harvest_drop(block_id))
+		var drop := ItemRegistry.harvest_drop(block_id)
+		if not drop.is_empty():
+			_drops.spawn_drop(Vector3(position) + Vector3.ONE * 0.5, drop)
 	set_status("Mined %s" % world.get_block_name(block_id))
 
 
@@ -940,8 +942,7 @@ func _check_removed_containers() -> void:
 		return
 	for position: Vector3i in containers.containers.keys():
 		# get_block_world returns air for unloaded/LOD chunks, not actual absence.
-		var chunk := world._loaded_chunk_for(position)
-		if chunk == null or chunk.lod:
+		if not world.is_full_chunk_resident_at(position):
 			continue
 		if world.get_block_world(position) != int(containers.containers[position].block_id):
 			_drop_container_contents(position)
@@ -1004,7 +1005,7 @@ func _on_item_used(item_id: int, block_position: Vector3i) -> void:
 
 func select_slot(index: int) -> void:
 	if selected_slot != clampi(index, 0, ItemInventory.HOTBAR_SIZE - 1) and player != null:
-		player._cancel_mining()
+		player.cancel_mining()
 	selected_slot = clampi(index, 0, ItemInventory.HOTBAR_SIZE - 1)
 	_update_slot_styles()
 	if selected_slot < slot_panels.size():

@@ -165,7 +165,7 @@ func populate(chunk_pos: Vector2i, field: ChunkTerrainData, edits: Dictionary, f
 
 ## Compact LOD population: the distance mesh only needs each column's top/sub
 ## block and water surface, so no 192-block data array is allocated; caves,
-## ores, and ground flora are skipped. Real tree crowns from in-field anchors
+## buried ores, and ground flora are skipped. Real tree crowns from in-field anchors
 ## are baked into the compact columns so forests do not vanish past the
 ## full-detail ring. Far chunks cost kilobytes instead of ~50 KB and stream
 ## several times faster. Player edits are intentionally ignored here: LOD
@@ -208,6 +208,9 @@ func populate_lod(chunk_pos: Vector2i, field: ChunkTerrainData) -> Dictionary:
 			else:
 				max_y = maxi(max_y, surface_y)
 	_apply_lod_floor_patches(solid_y, solid_id, field, origin_x, origin_z)
+	if config.worldgen_version >= WorldGenConfigScript.CAVE_INDEPENDENT_ORES_VERSION \
+			and config.world_type != WorldGenConfigScript.WORLD_TYPE_FLAT:
+		_place_ore_veins(PackedByteArray(), origin_x, origin_z, solid_y, solid_id, sub_id)
 	var terrain_solid_y: PackedInt32Array = solid_y.duplicate()
 	var terrain_solid_id: PackedByteArray = solid_id.duplicate()
 	var terrain_sub_id: PackedByteArray = sub_id.duplicate()
@@ -859,7 +862,9 @@ func _fill_lava_lake(data: PackedByteArray, field: ChunkTerrainData, center: Vec
 				data[_index(local_x, y, local_z)] = BlockRegistryScript.BLOCK_LAVA
 
 
-func _place_ore_veins(data: PackedByteArray, origin_x: int, origin_z: int) -> void:
+func _place_ore_veins(data: PackedByteArray, origin_x: int, origin_z: int,
+		solid_y: PackedInt32Array = PackedInt32Array(), solid_id: PackedByteArray = PackedByteArray(),
+		sub_id: PackedByteArray = PackedByteArray()) -> void:
 	var first_x: int = WorldGenHashScript.floor_div(origin_x - 8, ORE_CELL_SIZE)
 	var last_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE + 8, ORE_CELL_SIZE)
 	var first_z: int = WorldGenHashScript.floor_div(origin_z - 8, ORE_CELL_SIZE)
@@ -873,7 +878,7 @@ func _place_ore_veins(data: PackedByteArray, origin_x: int, origin_z: int) -> vo
 					continue
 				var start := Vector3i(cell_x * ORE_CELL_SIZE + 2 + hash_value % 16, cell_y * ORE_CELL_SIZE + 2 + (hash_value / 17) % 16, cell_z * ORE_CELL_SIZE + 2 + (hash_value / 73) % 16)
 				var finish := start + Vector3i((hash_value / 7) % 7 - 3, (hash_value / 131) % 5 - 2, (hash_value / 251) % 7 - 3)
-				_stamp_ore_segment(data, origin_x, origin_z, start, finish, ore)
+				_stamp_ore_segment(data, origin_x, origin_z, start, finish, ore, solid_y, solid_id, sub_id)
 
 
 ## Sparse deterministic cave details. A global four-block lattice samples open
@@ -1069,7 +1074,9 @@ func _ore_for_anchor(hash_value: int, y: int) -> int:
 	return _ore_catalog.select(hash_value, y)
 
 
-func _stamp_ore_segment(data: PackedByteArray, origin_x: int, origin_z: int, start: Vector3i, finish: Vector3i, ore: int) -> void:
+func _stamp_ore_segment(data: PackedByteArray, origin_x: int, origin_z: int, start: Vector3i, finish: Vector3i, ore: int,
+		solid_y: PackedInt32Array = PackedInt32Array(), solid_id: PackedByteArray = PackedByteArray(),
+		sub_id: PackedByteArray = PackedByteArray()) -> void:
 	var distance: int = maxi(maxi(absi(finish.x - start.x), absi(finish.y - start.y)), absi(finish.z - start.z))
 	for step in range(distance + 1):
 		var center := Vector3i(start.x + (finish.x - start.x) * step / maxi(1, distance), start.y + (finish.y - start.y) * step / maxi(1, distance), start.z + (finish.z - start.z) * step / maxi(1, distance))
@@ -1080,6 +1087,18 @@ func _stamp_ore_segment(data: PackedByteArray, origin_x: int, origin_z: int, sta
 			for x in range(center.x - 1, center.x + 2):
 				var local_x: int = x - origin_x
 				if local_x < 0 or local_x >= VoxelDefsScript.CHUNK_SIZE:
+					continue
+				if not solid_y.is_empty():
+					# Same ordered stamps and stone-only replacement as full detail,
+					# but intersect just the two exposed cells, never a voxel volume.
+					var column: int = local_x + local_z * VoxelDefsScript.DATA_STRIDE_Z
+					var top_y: int = solid_y[column]
+					if top_y >= 1 and top_y < VoxelDefsScript.WORLD_HEIGHT \
+							and absi(top_y - center.y) <= 1 and solid_id[column] == BlockRegistryScript.BLOCK_STONE:
+						solid_id[column] = ore
+					if top_y > 1 and top_y <= VoxelDefsScript.WORLD_HEIGHT \
+							and absi(top_y - 1 - center.y) <= 1 and sub_id[column] == BlockRegistryScript.BLOCK_STONE:
+						sub_id[column] = ore
 					continue
 				for y in range(center.y - 1, center.y + 2):
 					if y < 1 or y >= VoxelDefsScript.WORLD_HEIGHT:

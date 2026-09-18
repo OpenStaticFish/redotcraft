@@ -100,6 +100,8 @@ static func fuel_seconds(item_id: int) -> float:
 
 static func harvest_drop(block_id: int) -> Dictionary:
 	match block_id:
+		BlockRegistry.BLOCK_FIRE:
+			return {}
 		BlockRegistry.BLOCK_STONE:
 			return {"id": BlockRegistry.BLOCK_COBBLESTONE, "count": 1}
 		BlockRegistry.BLOCK_COAL_ORE:

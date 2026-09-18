@@ -74,6 +74,9 @@ func _run() -> void:
 	_expect(main._drops.persistent_state().size() == 1 and main.inventory.slots[1].durability == 57, "failed harvest wears tool but yields no drop")
 	main._on_mined_block(Vector3i.ZERO, BlockRegistry.BLOCK_COAL_ORE, true)
 	_expect(main._drops.persistent_state()[1].stack.id == ItemRegistry.ITEM_COAL, "coal ore yields physical coal")
+	var before_fire: Array = main._drops.persistent_state()
+	main._on_mined_block(Vector3i.ZERO, BlockRegistry.BLOCK_FIRE, true)
+	_expect(main._drops.persistent_state() == before_fire, "extinguishing fire creates no physical drop")
 	var food_before: Array = main.inventory.persistent_state()
 	for index in main.inventory.slots.size():
 		main.inventory.slots[index] = {"id": BlockRegistry.BLOCK_DIRT, "count": 64, "durability": 0}
@@ -112,6 +115,13 @@ func _run() -> void:
 	main.containers.ensure_chest(chest_position).add_item(2, 80)
 	main._check_removed_containers()
 	_expect(main.containers.get_inventory(chest_position) != null, "unloaded chunks do not destroy containers")
+	var chest_chunk := VoxelWorld.Chunk.new()
+	chest_chunk.lod = true
+	main.world._chunks[Vector2i(10, 10)] = chest_chunk
+	_expect(not main.world.is_full_chunk_resident_at(chest_position), "LOD chunk is not full resident")
+	main._check_removed_containers()
+	_expect(main.containers.get_inventory(chest_position) != null, "LOD chunks do not destroy containers")
+	main.world._chunks.clear()
 	main._drop_container_contents(chest_position)
 	var drop_count := 0
 	for drop in main._drops.persistent_state():
