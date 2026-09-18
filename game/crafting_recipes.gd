@@ -35,6 +35,12 @@ const RECIPES := [
 	{"id": "melon_slices", "ingredients": {B.BLOCK_MELON: 1}, "output": I.ITEM_MELON_SLICE, "count": 4, "table": false, "category": "Food"},
 	{"id": "melon", "ingredients": {I.ITEM_MELON_SLICE: 4}, "output": B.BLOCK_MELON, "count": 1, "table": false, "category": "Building"},
 	{"id": "deepstone_cobblestone", "ingredients": {B.BLOCK_DEEPSTONE: 1}, "output": B.BLOCK_COBBLESTONE, "count": 1, "table": false, "category": "Building"},
+	{"id": "wood_stairs", "ingredients": {B.BLOCK_PLANKS: 6}, "output": B.BLOCK_WOOD_STAIRS, "count": 4, "table": true, "category": "Building"},
+	{"id": "wood_slabs", "ingredients": {B.BLOCK_PLANKS: 3}, "output": B.BLOCK_WOOD_SLAB, "count": 6, "table": true, "category": "Building"},
+	{"id": "wood_door", "ingredients": {B.BLOCK_PLANKS: 6}, "output": B.BLOCK_WOOD_DOOR, "count": 1, "table": true, "category": "Building"},
+	{"id": "wood_ladders", "ingredients": {B.BLOCK_PLANKS: 3, I.ITEM_STICK: 4}, "output": B.BLOCK_WOOD_LADDER, "count": 3, "table": true, "category": "Building"},
+	{"id": "wood_signs", "ingredients": {B.BLOCK_PLANKS: 6, I.ITEM_STICK: 1}, "output": B.BLOCK_WOOD_SIGN, "count": 3, "table": true, "category": "Building"},
+	{"id": "wood_bed", "ingredients": {B.BLOCK_PLANKS: 6}, "output": B.BLOCK_WOOD_BED, "count": 1, "table": true, "category": "Building", "description": "Use at night to skip to morning and set your respawn point."},
 ]
 
 ## Input ID -> output ID. One input and ten seconds produce one output.

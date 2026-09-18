@@ -124,6 +124,10 @@ var _debug_task := -1
 var _debug_slot: Dictionary = {}
 var _debug_key := ""
 var _debug_cache: Dictionary = {}
+## Future hostile-entity systems can install this query without coupling block
+## interactions to an entity implementation. Until mobs land there are no
+## threats, but sleeping already honors the contract when a query is present.
+var threat_check: Callable = Callable()
 
 
 class Chunk:
@@ -1225,6 +1229,10 @@ func is_burning_at(cell: Vector3i) -> bool:
 	return _burning.has(cell)
 
 
+func is_threatened(world_position: Vector3, radius: float = 8.0) -> bool:
+	return threat_check.is_valid() and bool(threat_check.call(world_position, radius))
+
+
 func get_block_world(block_position: Vector3i) -> int:
 	var chunk := _loaded_chunk_for(block_position)
 	if chunk == null or chunk.lod:
@@ -1319,16 +1327,33 @@ func break_block(block_position: Vector3i) -> int:
 	var block_id: int = chunk.data[index]
 	if not _blocks.is_breakable(block_id):
 		return BlockRegistry.BLOCK_AIR
+	if BlockRegistry.is_door(block_id):
+		var lower_position := block_position - Vector3i.UP if BlockRegistry.door_upper(block_id) else block_position
+		_remove_door_part(lower_position)
+		_remove_door_part(lower_position + Vector3i.UP)
+		return BlockRegistry.BLOCK_WOOD_DOOR
 	chunk.data[index] = BlockRegistry.BLOCK_AIR
 	_record_edit(block_position, BlockRegistry.BLOCK_AIR)
 	_touch_chunk(chunk_position, block_position, block_id, BlockRegistry.BLOCK_AIR)
 	_seed_water(block_position)
-	return block_id
+	return BlockRegistry.canonical_id(block_id)
 
 
-func place_block(block_position: Vector3i, block_id: int) -> bool:
+func place_block(block_position: Vector3i, block_id: int, facing: int = BlockRegistry.FACING_NORTH,
+		placement_normal: Vector3i = Vector3i.UP) -> bool:
 	if not _blocks.is_valid_id(block_id):
 		return false
+	var canonical := BlockRegistry.canonical_id(block_id)
+	var placed_id := BlockRegistry.placement_variant(canonical, facing, placement_normal)
+	if canonical == BlockRegistry.BLOCK_WOOD_DOOR:
+		return _place_door(block_position, placed_id)
+	if canonical == BlockRegistry.BLOCK_WOOD_LADDER:
+		if placement_normal.y != 0 or placement_normal == Vector3i.ZERO:
+			return false
+		var support := get_block_world(block_position - placement_normal)
+		if support == BlockRegistry.BLOCK_AIR or _blocks.is_water_id(support) \
+				or _blocks.has_flag(support, BlockRegistry.FLAG_CROSS):
+			return false
 	if block_position.y < 0 or block_position.y >= VoxelDefs.WORLD_HEIGHT:
 		return false
 	var chunk_position := _chunk_for_block(block_position)
@@ -1340,11 +1365,84 @@ func place_block(block_position: Vector3i, block_id: int) -> bool:
 	var existing: int = chunk.data[index]
 	if existing != BlockRegistry.BLOCK_AIR and not _blocks.is_water_id(existing):
 		return false
-	chunk.data[index] = block_id
-	_record_edit(block_position, block_id)
-	_touch_chunk(chunk_position, block_position, existing, block_id)
+	chunk.data[index] = placed_id
+	_record_edit(block_position, placed_id)
+	_touch_chunk(chunk_position, block_position, existing, placed_id)
 	_seed_water(block_position)
 	return true
+
+
+func _place_door(lower_position: Vector3i, lower_id: int) -> bool:
+	var upper_position := lower_position + Vector3i.UP
+	if lower_position.y < 0 or upper_position.y >= VoxelDefs.WORLD_HEIGHT:
+		return false
+	for position in [lower_position, upper_position]:
+		var loaded := _loaded_chunk_for(position)
+		if loaded == null or loaded.lod:
+			return false
+		var existing := get_block_world(position)
+		if existing != BlockRegistry.BLOCK_AIR and not _blocks.is_water_id(existing):
+			return false
+	_set_placed_block(lower_position, lower_id)
+	_set_placed_block(upper_position, BlockRegistry.door_with_upper(lower_id, true))
+	return true
+
+
+func _set_placed_block(position: Vector3i, block_id: int) -> void:
+	var chunk_position := _chunk_for_block(position)
+	var chunk: Chunk = _chunks[chunk_position]
+	_restore_chunk_data(chunk)
+	var index := _data_index(position)
+	var existing: int = chunk.data[index]
+	chunk.data[index] = block_id
+	_record_edit(position, block_id)
+	_touch_chunk(chunk_position, position, existing, block_id)
+	_seed_water(position)
+
+
+func _remove_door_part(position: Vector3i) -> void:
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null or chunk.lod:
+		return
+	_restore_chunk_data(chunk)
+	var index := _data_index(position)
+	var existing: int = chunk.data[index]
+	if not BlockRegistry.is_door(existing):
+		return
+	chunk.data[index] = BlockRegistry.BLOCK_AIR
+	_record_edit(position, BlockRegistry.BLOCK_AIR)
+	_touch_chunk(_chunk_for_block(position), position, existing, BlockRegistry.BLOCK_AIR)
+	_seed_water(position)
+
+
+## Opens or closes both persisted halves together. Interaction is valid from
+## either half and survives chunk boundaries because each voxel is an edit.
+func toggle_door(block_position: Vector3i) -> bool:
+	var clicked := get_block_world(block_position)
+	if not BlockRegistry.is_door(clicked):
+		return false
+	var lower_position := block_position - Vector3i.UP if BlockRegistry.door_upper(clicked) else block_position
+	var upper_position := lower_position + Vector3i.UP
+	var lower := get_block_world(lower_position)
+	var upper := get_block_world(upper_position)
+	if not BlockRegistry.is_door(lower) or not BlockRegistry.is_door(upper):
+		return false
+	var opened := not BlockRegistry.door_open(lower)
+	_set_existing_block(lower_position, BlockRegistry.door_with_open(lower, opened))
+	_set_existing_block(upper_position, BlockRegistry.door_with_open(upper, opened))
+	return true
+
+
+func _set_existing_block(position: Vector3i, block_id: int) -> void:
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null or chunk.lod:
+		return
+	_restore_chunk_data(chunk)
+	var index := _data_index(position)
+	var previous: int = chunk.data[index]
+	chunk.data[index] = block_id
+	_record_edit(position, block_id)
+	_touch_chunk(_chunk_for_block(position), position, previous, block_id)
 
 
 ## Activates an explosive block and returns a small result payload for HUD
@@ -1378,6 +1476,7 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 	var rebuild_chunks: Dictionary = {}
 	var water_shell: Array[Vector3i] = []
 	var interior_water: Dictionary = {}
+	var door_counterparts: Dictionary = {}
 	var removed := 0
 	var shell_inner_squared := (safe_radius - 1) * (safe_radius - 1)
 	# Walk vertical runs so the horizontal chunk lookup and local data offset are
@@ -1411,6 +1510,9 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 					continue
 				if not _blocks.is_breakable(block_id):
 					continue
+				if BlockRegistry.is_door(block_id):
+					var counterpart := position + (Vector3i.DOWN if BlockRegistry.door_upper(block_id) else Vector3i.UP)
+					door_counterparts[counterpart] = true
 				chunk.data[index] = BlockRegistry.BLOCK_AIR
 				_record_edit_in_chunk(position, BlockRegistry.BLOCK_AIR, chunk_position)
 				removed += 1
@@ -1420,6 +1522,8 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 					water_shell.append(position)
 			if column_changed:
 				changed_chunks[chunk_position] = true
+	for position: Vector3i in door_counterparts:
+		removed += _remove_door_for_batch(position, changed_chunks)
 	for chunk_position in changed_chunks:
 		_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
 		_stage_chunk_edits(chunk_position)
@@ -1717,6 +1821,11 @@ func _extinguish_fire(position: Vector3i, changed_chunks: Dictionary) -> void:
 ## only voxel change in the burning lifecycle, so it is the one persisted. Like
 ## `break_block()`/`carve_sphere()`, the new air lets adjacent water flow in.
 func _destroy_burnt_block(position: Vector3i, changed_chunks: Dictionary) -> void:
+	if BlockRegistry.is_door(get_block_world(position)):
+		var lower := position - Vector3i.UP if BlockRegistry.door_upper(get_block_world(position)) else position
+		_remove_door_for_batch(lower, changed_chunks)
+		_remove_door_for_batch(lower + Vector3i.UP, changed_chunks)
+		return
 	var chunk := _loaded_chunk_for(position)
 	if chunk == null or chunk.lod:
 		return
@@ -1725,6 +1834,21 @@ func _destroy_burnt_block(position: Vector3i, changed_chunks: Dictionary) -> voi
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
 	_seed_water(position)
 	changed_chunks[_chunk_for_block(position)] = true
+
+
+func _remove_door_for_batch(position: Vector3i, changed_chunks: Dictionary) -> int:
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null or chunk.lod:
+		return 0
+	_restore_chunk_data(chunk)
+	var index := _data_index(position)
+	if not BlockRegistry.is_door(chunk.data[index]):
+		return 0
+	chunk.data[index] = BlockRegistry.BLOCK_AIR
+	_record_edit(position, BlockRegistry.BLOCK_AIR)
+	_seed_water(position)
+	changed_chunks[_chunk_for_block(position)] = true
+	return 1
 
 
 ## Batches fire edits like the water tick: each touched chunk is versioned once
@@ -2076,6 +2200,41 @@ func find_safe_spawn(desired: Vector3) -> Vector3:
 				if ground_y >= 0:
 					return Vector3(float(base_x + dx) + 0.5, float(ground_y) + 1.5, float(base_z + dz) + 0.5)
 	return desired
+
+
+## Beds need a same-floor search rather than the surface spawn scanner above.
+## A roof is often the topmost opaque block in an indoor column, so using
+## find_safe_spawn() would incorrectly move the saved respawn onto the roof.
+func find_bed_spawn(bed_position: Vector3i, radius: int = 3) -> Dictionary:
+	var safe_radius := clampi(radius, 1, 8)
+	for ring in range(1, safe_radius + 1):
+		for dx in range(-ring, ring + 1):
+			for dz in range(-ring, ring + 1):
+				if maxi(absi(dx), absi(dz)) != ring:
+					continue
+				var feet_cell := bed_position + Vector3i(dx, 0, dz)
+				if not _is_standable_cell(feet_cell):
+					continue
+				return {"found": true, "position": Vector3(feet_cell) + Vector3(0.5, 0.5, 0.5)}
+	return {"found": false}
+
+
+## Tests whether a previously validated spawn is still safe. Bed respawns use
+## this before falling back to the surface-oriented find_safe_spawn().
+func is_standable_spawn(world_position: Vector3) -> bool:
+	if not world_position.is_finite():
+		return false
+	return _is_standable_cell(Vector3i(
+		floori(world_position.x), floori(world_position.y), floori(world_position.z)))
+
+
+func _is_standable_cell(feet_cell: Vector3i) -> bool:
+	if get_block_world(feet_cell) != BlockRegistry.BLOCK_AIR \
+			or get_block_world(feet_cell + Vector3i.UP) != BlockRegistry.BLOCK_AIR:
+		return false
+	var below := get_block_world(feet_cell + Vector3i.DOWN)
+	return below != BlockRegistry.BLOCK_AIR and not _blocks.is_water_id(below) \
+		and not _blocks.has_flag(below, BlockRegistry.FLAG_CROSS)
 
 
 func _find_column_spawn(block_x: int, block_z: int, scan_top: int) -> int:

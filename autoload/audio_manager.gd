@@ -126,6 +126,8 @@ func _build_block_materials() -> void:
 			_block_materials[block_id] = material
 	for level in range(BlockRegistry.BLOCK_WATER_FLOW_7, BlockRegistry.BLOCK_WATER_FLOW_1 + 1):
 		_block_materials[level] = "water"
+	for block_id in range(BlockRegistry.BLOCK_WOOD_STAIRS, BlockRegistry.BLOCK_WOOD_BED_LAST + 1):
+		_block_materials[block_id] = "wood"
 
 
 func material_for_block(block_id: int) -> String:

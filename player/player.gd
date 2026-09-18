@@ -208,7 +208,8 @@ func respawn() -> void:
 	global_position = spawn_position
 	if world != null:
 		world.setup_player(self, true)
-		global_position = world.find_safe_spawn(spawn_position)
+		if not world.is_standable_spawn(spawn_position):
+			global_position = world.find_safe_spawn(spawn_position)
 		world.setup_player(self, true)
 	health = MAX_HEALTH
 	hunger = MAX_HUNGER
@@ -342,7 +343,15 @@ func _physics_process(delta: float) -> void:
 		var acceleration := GROUND_ACCEL if is_on_floor() else AIR_ACCEL
 		velocity.x = move_toward(velocity.x, direction.x * speed, acceleration * delta)
 		velocity.z = move_toward(velocity.z, direction.z * speed, acceleration * delta)
-		if not is_on_floor():
+		if _on_ladder():
+			var climb := Input.get_action_strength("move_forward") - Input.get_action_strength("move_backward")
+			if Input.is_action_pressed("jump"):
+				climb = 1.0
+			elif crouching:
+				climb = -1.0
+			velocity.y = move_toward(velocity.y, climb * WALK_SPEED, GROUND_ACCEL * delta)
+			_fall_start = NAN
+		elif not is_on_floor():
 			velocity.y -= GRAVITY * delta
 		elif Input.is_action_just_pressed("jump"):
 			velocity.y = JUMP_VELOCITY
@@ -484,7 +493,7 @@ func _voxel_raycast(origin: Vector3, direction_value: Vector3, max_distance: flo
 
 func _pick_target() -> void:
 	if not dead and has_target and world != null:
-		block_picked.emit(world.get_block_world(target_block))
+		block_picked.emit(BlockRegistry.canonical_id(world.get_block_world(target_block)))
 
 
 func _break_target() -> void:
@@ -558,9 +567,40 @@ func _place_target() -> void:
 	var place_position := target_block + target_normal
 	if _player_occupies(place_position):
 		return
-	if world.place_block(place_position, selected_block):
+	if BlockRegistry.canonical_id(selected_block) == BlockRegistry.BLOCK_WOOD_DOOR \
+			and _player_occupies(place_position + Vector3i.UP):
+		return
+	if world.place_block(place_position, selected_block, _placement_facing(), target_normal):
 		block_placed.emit(selected_block)
 		AudioManager.play_block_place(selected_block, Vector3(place_position) + Vector3(0.5, 0.5, 0.5))
+
+
+func _placement_facing() -> int:
+	var forward := -global_transform.basis.z
+	if absf(forward.x) > absf(forward.z):
+		return BlockRegistry.FACING_EAST if forward.x > 0.0 else BlockRegistry.FACING_WEST
+	return BlockRegistry.FACING_SOUTH if forward.z > 0.0 else BlockRegistry.FACING_NORTH
+
+
+func _on_ladder() -> bool:
+	if world == null:
+		return false
+	var feet := world.get_block_world(Vector3i((global_position + Vector3.UP * 0.2).floor()))
+	var chest := world.get_block_world(Vector3i((global_position + Vector3.UP * 1.1).floor()))
+	for block_id in [feet, chest]:
+		if not BlockRegistry.is_ladder(block_id):
+			continue
+		var local := Vector2(fposmod(global_position.x, 1.0), fposmod(global_position.z, 1.0))
+		match BlockRegistry.facing(block_id):
+			BlockRegistry.FACING_NORTH:
+				return local.y < 0.4
+			BlockRegistry.FACING_EAST:
+				return local.x > 0.6
+			BlockRegistry.FACING_SOUTH:
+				return local.y > 0.6
+			BlockRegistry.FACING_WEST:
+				return local.x < 0.4
+	return false
 
 
 func _handle_double_tap_jump() -> void:
