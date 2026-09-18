@@ -3,6 +3,14 @@ extends Control
 
 signal closed
 
+## The creation UI intentionally exposes a conservative subset of the wider
+## import/config validation envelope in WorldGenConfig.
+const UI_TERRAIN_RANGE := Vector3(0.5, 2.0, 0.05)
+const UI_MACRO_RANGE := Vector3(192.0, 1024.0, 32.0)
+const UI_BIOME_RANGE := Vector3(384.0, 4096.0, 64.0)
+const UI_DENSITY_RANGE := Vector3(0.0, 2.0, 0.05)
+const UI_STRENGTH_RANGE := Vector3(0.0, 1.0, 0.05)
+
 @onready var _panel: PanelContainer = $Center/Panel
 @onready var _heading: Label = $Center/Panel/Box/Heading
 @onready var _hint: Label = $Center/Panel/Box/Hint
@@ -20,6 +28,10 @@ var _regional_erosion_slider: HSlider
 var _hydraulic_toggle: CheckButton
 var _caves_slider: HSlider
 var _decoration_slider: HSlider
+var _spline_terrain_toggle: CheckButton
+var _elevated_hydrology_toggle: CheckButton
+var _climate_variants_toggle: CheckButton
+var _region_structures_toggle: CheckButton
 
 
 func _ready() -> void:
@@ -30,39 +42,51 @@ func _ready() -> void:
 
 	var terrain := _section("TERRAIN")
 	_terrain_slider = UITheme.slider_row(
-		terrain, "Terrain Scale", 0.5, 2.0, 0.05,
+		terrain, "Terrain Scale", UI_TERRAIN_RANGE.x, UI_TERRAIN_RANGE.y, UI_TERRAIN_RANGE.z,
 		GameConfig.get_terrain_scale(), "%d%%", 100.0)
 	_macro_slider = UITheme.slider_row(
-		terrain, "Landmass Scale", 192.0, 1024.0, 32.0,
-		float(GameConfig.world.get("macro_scale", 384.0)), "%d blocks", 1.0)
+		terrain, "Landmass Scale", UI_MACRO_RANGE.x, UI_MACRO_RANGE.y, UI_MACRO_RANGE.z,
+		float(GameConfig.world.get("macro_scale", WorldGenConfig.DEFAULT_MACRO_SCALE)), "%d blocks", 1.0)
 	_biome_slider = UITheme.slider_row(
-		terrain, "Biome Scale", 384.0, 4096.0, 64.0,
-		float(GameConfig.world.get("biome_scale", 3072.0)), "%d blocks", 1.0)
+		terrain, "Biome Scale", UI_BIOME_RANGE.x, UI_BIOME_RANGE.y, UI_BIOME_RANGE.z,
+		float(GameConfig.world.get("biome_scale", WorldGenConfig.DEFAULT_BIOME_SCALE)), "%d blocks", 1.0)
+	_spline_terrain_toggle = _inline_toggle(
+		terrain, "Spline Terrain", "Experimental",
+		bool(GameConfig.world.get("spline_terrain", WorldGenConfig.DEFAULT_SPLINE_TERRAIN)))
+	_climate_variants_toggle = _inline_toggle(
+		terrain, "Climate Variants", "Third climate channel",
+		bool(GameConfig.world.get("climate_variants", WorldGenConfig.DEFAULT_CLIMATE_VARIANTS)))
 
 	var water := _section("WATER & EROSION")
 	_rivers_slider = UITheme.slider_row(
-		water, "River Density", 0.0, 2.0, 0.05,
-		float(GameConfig.world.get("river_density", 1.0)), "%d%%", 100.0)
+		water, "River Density", UI_DENSITY_RANGE.x, UI_DENSITY_RANGE.y, UI_DENSITY_RANGE.z,
+		float(GameConfig.world.get("river_density", WorldGenConfig.DEFAULT_RIVER_DENSITY)), "%d%%", 100.0)
 	_erosion_slider = UITheme.slider_row(
-		water, "Slope Erosion", 0.0, 1.0, 0.05,
-		float(GameConfig.world.get("erosion_strength", 0.55)), "%d%%", 100.0)
+		water, "Slope Erosion", UI_STRENGTH_RANGE.x, UI_STRENGTH_RANGE.y, UI_STRENGTH_RANGE.z,
+		float(GameConfig.world.get("erosion_strength", WorldGenConfig.DEFAULT_EROSION_STRENGTH)), "%d%%", 100.0)
 	_regional_erosion_slider = UITheme.slider_row(
-		water, "Regional Erosion", 0.0, 1.0, 0.05,
-		float(GameConfig.world.get("regional_erosion", 0.5)), "%d%%", 100.0)
+		water, "Regional Erosion", UI_STRENGTH_RANGE.x, UI_STRENGTH_RANGE.y, UI_STRENGTH_RANGE.z,
+		float(GameConfig.world.get("regional_erosion", WorldGenConfig.DEFAULT_REGIONAL_EROSION)), "%d%%", 100.0)
 	_hydraulic_toggle = _inline_toggle(
 		water, "Hydraulic Erosion", "High quality (slower)",
-		bool(GameConfig.world.get("hydraulic_erosion", false)))
+		bool(GameConfig.world.get("hydraulic_erosion", WorldGenConfig.DEFAULT_HYDRAULIC_EROSION)))
+	_elevated_hydrology_toggle = _inline_toggle(
+		water, "Elevated Hydrology", "Experimental",
+		bool(GameConfig.world.get("elevated_hydrology", WorldGenConfig.DEFAULT_ELEVATED_HYDROLOGY)))
 
 	var features := _section("FEATURES")
 	_trees_slider = UITheme.slider_row(
-		features, "Tree Density", 0.0, 2.0, 0.05,
+		features, "Tree Density", UI_DENSITY_RANGE.x, UI_DENSITY_RANGE.y, UI_DENSITY_RANGE.z,
 		GameConfig.get_tree_density(), "%d%%", 100.0)
 	_caves_slider = UITheme.slider_row(
-		features, "Cave Density", 0.0, 2.0, 0.05,
-		float(GameConfig.world.get("cave_density", 1.0)), "%d%%", 100.0)
+		features, "Cave Density", UI_DENSITY_RANGE.x, UI_DENSITY_RANGE.y, UI_DENSITY_RANGE.z,
+		float(GameConfig.world.get("cave_density", WorldGenConfig.DEFAULT_CAVE_DENSITY)), "%d%%", 100.0)
 	_decoration_slider = UITheme.slider_row(
-		features, "Ground Cover", 0.0, 2.0, 0.05,
-		float(GameConfig.world.get("decoration_density", 1.0)), "%d%%", 100.0)
+		features, "Ground Cover", UI_DENSITY_RANGE.x, UI_DENSITY_RANGE.y, UI_DENSITY_RANGE.z,
+		float(GameConfig.world.get("decoration_density", WorldGenConfig.DEFAULT_DECORATION_DENSITY)), "%d%%", 100.0)
+	_region_structures_toggle = _inline_toggle(
+		features, "Region Structures", "Camps and ruins",
+		bool(GameConfig.world.get("region_structures", WorldGenConfig.DEFAULT_REGION_STRUCTURES)))
 
 
 func _wrap_rows_in_scroll() -> void:
@@ -165,4 +189,8 @@ func build_config() -> Dictionary:
 		"hydraulic_erosion": _hydraulic_toggle.button_pressed,
 		"cave_density": snappedf(_caves_slider.value, 0.05),
 		"decoration_density": snappedf(_decoration_slider.value, 0.05),
+		"spline_terrain": _spline_terrain_toggle.button_pressed,
+		"elevated_hydrology": _elevated_hydrology_toggle.button_pressed,
+		"climate_variants": _climate_variants_toggle.button_pressed,
+		"region_structures": _region_structures_toggle.button_pressed,
 	}

@@ -23,9 +23,19 @@ var _water_level: PackedByteArray = PackedByteArray()
 var _layer_top: PackedInt32Array = PackedInt32Array()
 var _layer_bottom: PackedInt32Array = PackedInt32Array()
 var _layer_side: PackedInt32Array = PackedInt32Array()
+var _emissive: PackedByteArray = PackedByteArray()
 var _emission_r: PackedByteArray = PackedByteArray()
 var _emission_g: PackedByteArray = PackedByteArray()
 var _emission_b: PackedByteArray = PackedByteArray()
+
+
+class MeshTimings:
+	var light_assembly_us: int = 0
+	var sky_light_us: int = 0
+	var block_light_us: int = 0
+	var padding_us: int = 0
+	var face_emit_us: int = 0
+	var total_us: int = 0
 
 
 class MeshResult:
@@ -50,6 +60,9 @@ class MeshResult:
 	var water_light := PackedFloat32Array()
 	var water_indices := PackedInt32Array()
 	var light_volume: LightVolume
+	## Worker-side phase timings in microseconds. Kept on the transient result so
+	## benchmarks can diagnose regressions without mutable global counters.
+	var timings := MeshTimings.new()
 	## Distant full chunks skip collision triangles; approaching them rebuilds
 	## the chunk with collision enabled.
 	var build_collision := true
@@ -105,7 +118,13 @@ class NeighborSample:
 	## Compact neighbors answer per-voxel occupancy without materializing a tile.
 	func block_at(local_x: int, y: int, local_z: int) -> int:
 		if not lod:
-			return data[local_x + local_z * VoxelDefs.DATA_STRIDE_Z + y * VoxelDefs.DATA_STRIDE_Y]
+			var index := local_x + local_z * VoxelDefs.DATA_STRIDE_Z + y * VoxelDefs.DATA_STRIDE_Y
+			# Neighbor snapshots are immutable worker inputs. Treat a malformed or
+			# stale short snapshot as an opaque-boundary miss instead of flooding the
+			# runtime with out-of-bounds errors; gatherers normally provide full data.
+			if index < 0 or index >= data.size():
+				return BlockRegistry.BLOCK_AIR
+			return data[index]
 		var column := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
 		var top: int = lod_solid_y[column]
 		if y > top:
@@ -150,6 +169,9 @@ func _init(blocks: BlockRegistry) -> void:
 
 ## Thread-safe: only reads immutable block tables once constructed.
 func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, foliage_tints: PackedColorArray, water_tints: PackedColorArray, neighbors: NeighborSet, want_collision: bool = true) -> MeshResult:
+	# Scratch buffers remain call-local: this immutable mesher is shared by
+	# concurrent WorkerThreadPool jobs, so a mutable member pool would race.
+	var total_start: int = Time.get_ticks_usec()
 	var result := MeshResult.new()
 	result.data = data
 	result.heights = heights
@@ -161,11 +183,18 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, fo
 	# local meshing bound only; storing it made max_y grow on every remesh.
 	result.max_y = data_max_y
 	var max_y := clampi(data_max_y + 1, 1, VoxelDefs.WORLD_HEIGHT - 1)
+	var phase_start: int = Time.get_ticks_usec()
 	var light_volume := _assemble_light_volume(data, data_max_y, heights, neighbors)
+	result.timings.light_assembly_us = Time.get_ticks_usec() - phase_start
+	phase_start = Time.get_ticks_usec()
 	_compute_sky_light(light_volume)
+	result.timings.sky_light_us = Time.get_ticks_usec() - phase_start
+	phase_start = Time.get_ticks_usec()
 	_compute_block_light(light_volume)
+	result.timings.block_light_us = Time.get_ticks_usec() - phase_start
 	result.light_volume = light_volume
 	var pad_height := max_y + 3
+	phase_start = Time.get_ticks_usec()
 	var padded := PackedByteArray()
 	padded.resize(VoxelDefs.PAD_W * VoxelDefs.PAD_W * pad_height)
 	for pad_y in range(0, pad_height):
@@ -195,6 +224,8 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, fo
 						var neighbor_z := local_z - dz * VoxelDefs.CHUNK_SIZE
 						id = sample.block_at(neighbor_x, y, neighbor_z)
 				padded[pad_x + pad_z * VoxelDefs.PAD_STRIDE_Z + pad_y * VoxelDefs.PAD_STRIDE_Y] = id
+	result.timings.padding_us = Time.get_ticks_usec() - phase_start
+	phase_start = Time.get_ticks_usec()
 	for y in range(0, max_y + 1):
 		for local_z in VoxelDefs.CHUNK_SIZE:
 			for local_x in VoxelDefs.CHUNK_SIZE:
@@ -229,6 +260,8 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, fo
 					if not is_opaque and neighbor_id == id and _leaves[id] == 0:
 						continue
 					_append_face(face, pad_index, local_x, y, local_z, id, padded, tint, result)
+	result.timings.face_emit_us = Time.get_ticks_usec() - phase_start
+	result.timings.total_us = Time.get_ticks_usec() - total_start
 	result.light_volume = null
 	return result
 
@@ -247,6 +280,7 @@ const LOD_DEPTH_DARKEN: float = 0.055
 const LOD_MIN_SIDE_SHADE: float = 0.5
 
 func build_lod(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: PackedByteArray, water_y: PackedInt32Array, water_level: PackedByteArray, data_max_y: int, foliage_tints: PackedColorArray, water_tints: PackedColorArray, neighbors: LodNeighbors) -> MeshResult:
+	var total_start: int = Time.get_ticks_usec()
 	var result := MeshResult.new()
 	result.foliage_tints = foliage_tints
 	result.water_tints = water_tints
@@ -257,6 +291,7 @@ func build_lod(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: Pac
 	result.lod_sub_id = sub_id
 	result.lod_water_y = water_y
 	result.lod_water_level = water_level
+	var face_emit_start: int = Time.get_ticks_usec()
 	for z in VoxelDefs.CHUNK_SIZE:
 		for x in VoxelDefs.CHUNK_SIZE:
 			var column := x + z * VoxelDefs.DATA_STRIDE_Z
@@ -317,6 +352,8 @@ func build_lod(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: Pac
 					var run_from := maxi(water_from, neighbor_water + 1)
 					_append_lod_water_run(face, x, run_from, top_water, z, _water_top(level),
 						level < 8, _column_tint(column, water_tints), result)
+	result.timings.face_emit_us = Time.get_ticks_usec() - face_emit_start
+	result.timings.total_us = Time.get_ticks_usec() - total_start
 	return result
 
 
@@ -510,6 +547,7 @@ func _build_light_tables() -> void:
 	_layer_top.resize(256)
 	_layer_bottom.resize(256)
 	_layer_side.resize(256)
+	_emissive.resize(256)
 	_emission_r.resize(256)
 	_emission_g.resize(256)
 	_emission_b.resize(256)
@@ -529,6 +567,7 @@ func _build_light_tables() -> void:
 			_layer_top[id] = _blocks.layer_for(id, 0)
 			_layer_bottom[id] = _blocks.layer_for(id, 1)
 			_layer_side[id] = _blocks.layer_for(id, 2)
+		_emissive[id] = 1 if BlockRegistry.EMISSIVE_COLORS.has(id) else 0
 		var color := _blocks.emission_color(id)
 		if color == Color.BLACK:
 			continue
@@ -786,85 +825,87 @@ func _compute_sky_light(volume: LightVolume) -> void:
 
 func _compute_block_light(volume: LightVolume) -> void:
 	var blocks := volume.blocks
-	var found_emitter := false
-	for block_id in BlockRegistry.EMISSIVE_COLORS:
-		if blocks.find(block_id) != -1:
-			found_emitter = true
-			break
-	if not found_emitter:
-		return
 	var size := blocks.size()
 	var area := volume.w * volume.d
-	volume.block_r.resize(size)
-	volume.block_g.resize(size)
-	volume.block_b.resize(size)
-	var red := volume.block_r
-	var green := volume.block_g
-	var blue := volume.block_b
-	var queue := PackedInt32Array()
+	var found_emitter := false
+	var red: PackedByteArray
+	var green: PackedByteArray
+	var blue: PackedByteArray
+	var queue: PackedInt32Array
 	var head := 0
 	var volume_z := 0
 	var y := 0
 	var vx := 0
-	for block_id in BlockRegistry.EMISSIVE_COLORS:
-		var emitter := blocks.find(block_id)
+	for emitter in size:
+		var block_id := blocks[emitter]
+		if _emissive[block_id] == 0:
+			continue
+		if not found_emitter:
+			found_emitter = true
+			volume.block_r.resize(size)
+			volume.block_g.resize(size)
+			volume.block_b.resize(size)
+			red = volume.block_r
+			green = volume.block_g
+			blue = volume.block_b
+			queue = PackedInt32Array()
 		var seed_r := _emission_r[block_id]
 		var seed_g := _emission_g[block_id]
 		var seed_b := _emission_b[block_id]
 		if seed_r <= 0 and seed_g <= 0 and seed_b <= 0:
 			continue
 		var emitter_opaque := _opacity[block_id] >= MAX_LEVEL
-		while emitter != -1:
-			var remainder := int(emitter / volume.w)
-			vx = emitter % volume.w
-			volume_z = remainder % volume.d
-			y = int(remainder / volume.d)
-			if not emitter_opaque:
-				if red[emitter] < seed_r or green[emitter] < seed_g or blue[emitter] < seed_b:
-					red[emitter] = maxi(red[emitter], seed_r)
-					green[emitter] = maxi(green[emitter], seed_g)
-					blue[emitter] = maxi(blue[emitter], seed_b)
-					queue.push_back(emitter)
-			elif seed_r > 1 or seed_g > 1 or seed_b > 1:
-				var neighbor_r := maxi(seed_r - 1, 0)
-				var neighbor_g := maxi(seed_g - 1, 0)
-				var neighbor_b := maxi(seed_b - 1, 0)
-				for direction in 6:
-					var ni := emitter
-					match direction:
-						0:
-							if vx == 0:
-								continue
-							ni -= 1
-						1:
-							if vx == volume.w - 1:
-								continue
-							ni += 1
-						2:
-							if volume_z == 0:
-								continue
-							ni -= volume.w
-						3:
-							if volume_z == volume.d - 1:
-								continue
-							ni += volume.w
-						4:
-							if y == 0:
-								continue
-							ni -= area
-						_:
-							if y == volume.h - 1:
-								continue
-							ni += area
-					if _opacity[blocks[ni]] >= MAX_LEVEL:
-						continue
-					if red[ni] >= neighbor_r and green[ni] >= neighbor_g and blue[ni] >= neighbor_b:
-						continue
-					red[ni] = maxi(red[ni], neighbor_r)
-					green[ni] = maxi(green[ni], neighbor_g)
-					blue[ni] = maxi(blue[ni], neighbor_b)
-					queue.push_back(ni)
-			emitter = blocks.find(block_id, emitter + 1)
+		var remainder := int(emitter / volume.w)
+		vx = emitter % volume.w
+		volume_z = remainder % volume.d
+		y = int(remainder / volume.d)
+		if not emitter_opaque:
+			if red[emitter] < seed_r or green[emitter] < seed_g or blue[emitter] < seed_b:
+				red[emitter] = maxi(red[emitter], seed_r)
+				green[emitter] = maxi(green[emitter], seed_g)
+				blue[emitter] = maxi(blue[emitter], seed_b)
+				queue.push_back(emitter)
+		elif seed_r > 1 or seed_g > 1 or seed_b > 1:
+			var neighbor_r := maxi(seed_r - 1, 0)
+			var neighbor_g := maxi(seed_g - 1, 0)
+			var neighbor_b := maxi(seed_b - 1, 0)
+			for direction in 6:
+				var ni := emitter
+				match direction:
+					0:
+						if vx == 0:
+							continue
+						ni -= 1
+					1:
+						if vx == volume.w - 1:
+							continue
+						ni += 1
+					2:
+						if volume_z == 0:
+							continue
+						ni -= volume.w
+					3:
+						if volume_z == volume.d - 1:
+							continue
+						ni += volume.w
+					4:
+						if y == 0:
+							continue
+						ni -= area
+					_:
+						if y == volume.h - 1:
+							continue
+						ni += area
+				if _opacity[blocks[ni]] >= MAX_LEVEL:
+					continue
+				if red[ni] >= neighbor_r and green[ni] >= neighbor_g and blue[ni] >= neighbor_b:
+					continue
+				red[ni] = maxi(red[ni], neighbor_r)
+				green[ni] = maxi(green[ni], neighbor_g)
+				blue[ni] = maxi(blue[ni], neighbor_b)
+				queue.push_back(ni)
+	if not found_emitter:
+		return
 	while head < queue.size():
 		var index := queue[head]
 		head += 1

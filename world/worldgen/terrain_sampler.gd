@@ -7,6 +7,44 @@ extends RefCounted
 
 const VoxelDefsScript = preload("res://world/voxel_defs.gd")
 const HydraulicErosionScript = preload("res://world/worldgen/hydraulic_erosion.gd")
+const WorldGenConfigScript = preload("res://world/worldgen/world_gen_config.gd")
+
+const SPLINE_X := [0.0, 0.25, 0.50, 0.75, 1.0]
+const CONTINENT_SPLINE_Y := [0.0, 0.16, 0.55, 0.86, 1.0]
+const PROFILE_SPLINE_Y := [0.0, 0.12, 0.43, 0.80, 1.0]
+## V11's two-dimensional profile spline. Rows are continentalness anchors and
+## columns are broad landform anchors; values are normalized profile positions.
+const PROFILE_GRID := [
+	[0.00, 0.00, 0.00, 0.00, 0.00],
+	[0.00, 0.04, 0.10, 0.16, 0.22],
+	[0.00, 0.14, 0.34, 0.58, 0.78],
+	[0.00, 0.24, 0.54, 0.82, 1.00],
+	[0.00, 0.30, 0.62, 0.90, 1.00],
+]
+## A distinct, broad third climate axis. It deliberately lives at a longer
+## wavelength than temperature/moisture so a variant reads as a region, not a
+## per-column decoration lottery.
+const VARIANT_SCALE_MULTIPLIER: float = 1.45
+const SNOWY_TAIGA_VARIANT_THRESHOLD: float = 0.66
+const WOODED_BADLANDS_VARIANT_THRESHOLD: float = 0.64
+const STONY_SHORE_VARIANT_THRESHOLD: float = 0.62
+const INLAND_WATER_CELL_SIZE := 192
+const INLAND_WATER_Y := VoxelDefsScript.SEA_LEVEL + 8
+const INLAND_LAKE_RADIUS_MIN := 16.0
+const INLAND_LAKE_RADIUS_RANGE := 13
+const INLAND_REACH_HALF_LENGTH := 36.0
+const INLAND_REACH_RADIUS := 4.0
+const INLAND_BANK_WIDTH := 8.0
+# V11 hydrology retains the v10 owner-cell lake distribution, but routes each
+# accepted source across several fixed-length, cardinal reaches.  The route is
+# resolved entirely from the immutable pre-hydrology field; it never samples a
+# previously carved water result.
+const INLAND_ROUTE_REACH_LENGTH := 48
+const INLAND_ROUTE_REACH_COUNT := 4
+const INLAND_ROUTE_SOURCE_CHANCE := 18
+const INLAND_ROUTE_MIN_SOURCE_HEIGHT := VoxelDefsScript.SEA_LEVEL + 16
+const INLAND_ROUTE_MIN_WATER_Y := VoxelDefsScript.SEA_LEVEL + 4
+const INLAND_ROUTE_DIRECTIONS := [Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT, Vector2i.UP]
 
 const CHANNEL_CONTINENT: int = 0
 const CHANNEL_WARP_X: int = 1
@@ -26,10 +64,12 @@ const CHANNEL_SEABED: int = 14
 const CHANNEL_ECOTONE: int = 15
 const CHANNEL_LARGE_ISLAND: int = 16
 const CHANNEL_SMALL_ISLAND: int = 17
-const CHANNEL_COUNT: int = 18
+const CHANNEL_VARIANT: int = 18
+const CHANNEL_COUNT: int = 19
 
 const MIN_TERRAIN_HEIGHT: float = 3.0
 const HEIGHT_MARGIN: float = 8.0
+const SOFT_CEILING_BAND: float = 24.0
 
 # Underwater split. The same continental band shapes the seabed depth curve,
 # so a sea biome's label and its geometry cannot disagree. Patch fields decide
@@ -257,10 +297,13 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 				raw_value = _apply_river_carve(
 					world_x, world_z, raw_value, river_distance,
 					source_mainland[source_index], _river_width_scale_at(world_x, world_z))
-			raw_height[raw_index] = clampf(raw_value, MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
+			raw_height[raw_index] = _bounded_height(raw_value)
 
 	var final_height := PackedFloat64Array()
+	var final_water_y := PackedInt32Array()
 	final_height.resize(FINAL_SIDE * FINAL_SIDE)
+	final_water_y.resize(FINAL_SIDE * FINAL_SIDE)
+	final_water_y.fill(-1)
 	for local_z in range(FINAL_MIN, FINAL_MAX + 1):
 		var world_z: int = origin_z + local_z
 		var final_row: int = (local_z - FINAL_MIN) * FINAL_SIDE
@@ -299,10 +342,18 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 			var south := raw_height[raw_index + RAW_SIDE]
 			var gradient := sqrt((east - west) * (east - west) + (south - north) * (south - north)) * 0.5
 			var local_relief := absf(raw_height[raw_index] - (west + east + north + south) * 0.25)
-			final_height[final_index] = _apply_climate_terrain_shape(
+			var shaped_height := _apply_climate_terrain_shape(
 				height, source_profile[source_index], gradient, local_relief,
 				temperature_value + climate_altitude * 0.0035,
 				moisture_value + climate_altitude * 0.0015)
+			if _config.elevated_hydrology:
+				var hydrology := _elevated_hydrology_at(world_x, world_z, shaped_height)
+				final_height[final_index] = hydrology.x
+				final_water_y[final_index] = roundi(hydrology.y)
+			else:
+				# Do not round-trip v1-v10 heights through Vector2 (float32).
+				# Legacy worlds retain their original Float64 field values exactly.
+				final_height[final_index] = shaped_height
 			# Point queries and chunk fields must classify the same final height.
 			climate = _climate_at(world_x, world_z, final_height[final_index], source_river[source_index])
 			final_temperature[final_index] = climate.x
@@ -328,6 +379,9 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 			var south: float = final_height[final_index + FINAL_SIDE]
 			var slope_value: float = sqrt((east - west) * (east - west) + (south - north) * (south - north)) * 0.5
 			var river_value: float = source_river[source_index]
+			var inland_water: int = final_water_y[final_index]
+			if inland_water > VoxelDefsScript.SEA_LEVEL:
+				river_value = 1.0
 			var temperature_value: float = final_temperature[final_index]
 			var moisture_value: float = final_moisture[final_index]
 			var biome_choice := _biome_choice(temperature_value, moisture_value)
@@ -337,9 +391,10 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 			if profile == TerrainProfileCatalog.RIDGED_MOUNTAINS:
 				profile_fraction = 0.0
 			var continental: float = source_continental[source_index]
-			var biome: int = _apply_biome_override(
-				biome_choice.x, continental, final_value, river_value, profile,
-				temperature_value, world_x, world_z)
+			var biome: int = BiomeCatalog.RIVER if inland_water > VoxelDefsScript.SEA_LEVEL else _apply_biome_variant(
+				_apply_biome_override(biome_choice.x, continental, final_value, river_value, profile,
+					temperature_value, world_x, world_z),
+				continental, final_value, profile, world_x, world_z)
 			var secondary: int = biome_choice.y if biome == biome_choice.x else biome
 			var transition := _ecotone_choice(
 				biome, secondary, biome_choice.z if biome == biome_choice.x else 0,
@@ -353,6 +408,7 @@ func build_field(chunk_pos: Vector2i) -> ChunkTerrainData:
 			field.final_height[field_index] = final_value
 			field.slope[field_index] = slope_value
 			field.river[field_index] = river_value
+			field.inland_water_y[field_index] = inland_water
 			field.temperature[field_index] = temperature_value
 			field.moisture[field_index] = moisture_value
 			field.profile_id[field_index] = profile
@@ -374,7 +430,12 @@ func sample_point(x: int, z: int) -> Dictionary:
 	var continental: float = _continentalness_from_mainland(x, z, mainland)
 	var base: float = _base_height_at(x, z, continental)
 	var raw: float = _raw_height_at(x, z)
-	var final_value: float = _final_height_at(x, z)
+	var final_value: float = _final_height_without_hydrology_at(x, z)
+	var inland_water := -1
+	if _config.elevated_hydrology:
+		var hydrology := _elevated_hydrology_at(x, z, final_value)
+		final_value = hydrology.x
+		inland_water = roundi(hydrology.y)
 	var river_value: float = _river_at(x, z, mainland)
 	var climate := _climate_at(x, z, final_value, river_value)
 	var temperature_value: float = climate.x
@@ -382,8 +443,11 @@ func sample_point(x: int, z: int) -> Dictionary:
 	var profile_position: float = _profile_position_at(x, z, continental)
 	var profile: int = clampi(floori(profile_position), TerrainProfileCatalog.PLAINS, TerrainProfileCatalog.RIDGED_MOUNTAINS)
 	var choice := _biome_choice(temperature_value, moisture_value)
-	var biome: int = _apply_biome_override(
-		choice.x, continental, final_value, river_value, profile, temperature_value, x, z)
+	if inland_water > VoxelDefsScript.SEA_LEVEL:
+		river_value = 1.0
+	var biome: int = BiomeCatalog.RIVER if inland_water > VoxelDefsScript.SEA_LEVEL else _apply_biome_variant(
+		_apply_biome_override(choice.x, continental, final_value, river_value, profile, temperature_value, x, z),
+		continental, final_value, profile, x, z)
 	var secondary: int = choice.y if biome == choice.x else biome
 	var transition := _ecotone_choice(
 		biome, secondary, choice.z if biome == choice.x else 0,
@@ -398,6 +462,7 @@ func sample_point(x: int, z: int) -> Dictionary:
 		"final_height": final_value,
 		"slope": _slope_at(x, z),
 		"river": river_value,
+		"inland_water_y": inland_water,
 		"temperature": temperature_value,
 		"moisture": moisture_value,
 		"profile_id": profile,
@@ -407,6 +472,8 @@ func sample_point(x: int, z: int) -> Dictionary:
 		"biome_blend": transition.y / 255.0,
 		"ecotone_strength": transition.z / 255.0,
 		"dominant_biome_id": dominant,
+		"variant": _variant_value_at(x, z),
+		"base_biome_id": choice.x,
 	}
 
 
@@ -417,14 +484,20 @@ func sample_decoration_ground(x: int, z: int) -> Vector2i:
 	_ensure_configured()
 	var mainland := _mainland_continentalness_at(x, z)
 	var continental := _continentalness_from_mainland(x, z, mainland)
-	var final_value := _final_height_at(x, z)
+	var final_value := _final_height_without_hydrology_at(x, z)
+	var inland_water := -1
+	if _config.elevated_hydrology:
+		var hydrology := _elevated_hydrology_at(x, z, final_value)
+		final_value = hydrology.x
+		inland_water = roundi(hydrology.y)
 	var river_value := _river_at(x, z, mainland)
 	var climate := _climate_at(x, z, final_value, river_value)
 	var profile_position := _profile_position_at(x, z, continental)
 	var profile := clampi(floori(profile_position), TerrainProfileCatalog.PLAINS, TerrainProfileCatalog.RIDGED_MOUNTAINS)
 	var choice := _biome_choice(climate.x, climate.y)
-	var biome := _apply_biome_override(
-		choice.x, continental, final_value, river_value, profile, climate.x, x, z)
+	var biome := BiomeCatalog.RIVER if inland_water > VoxelDefsScript.SEA_LEVEL else _apply_biome_variant(
+		_apply_biome_override(choice.x, continental, final_value, river_value, profile, climate.x, x, z),
+		continental, final_value, profile, x, z)
 	var secondary: int = choice.y if biome == choice.x else biome
 	var transition := _ecotone_choice(
 		biome, secondary, choice.z if biome == choice.x else 0,
@@ -471,13 +544,21 @@ func sample_debug_point(mode: String, x: int, z: int) -> Dictionary:
 	var profile := clampi(floori(profile_position), TerrainProfileCatalog.PLAINS, TerrainProfileCatalog.RIDGED_MOUNTAINS)
 	if mode == "profile":
 		return {"profile_id": profile}
-	var biome := _apply_biome_override(
-		choice.x, continental, height, river_value, profile, climate.x, x, z)
+	if mode == "variant":
+		return {"variant": _variant_value_at(x, z)}
+	var biome := _apply_biome_variant(
+		_apply_biome_override(choice.x, continental, height, river_value, profile, climate.x, x, z),
+		continental, height, profile, x, z)
 	var secondary: int = choice.y if biome == choice.x else biome
 	var dominant: int = _ecotone_choice(
 		biome, secondary, choice.z if biome == choice.x else 0,
 		x, z, height, profile).x
-	return {"dominant_biome_id": dominant}
+	return {
+		"biome_id": biome,
+		"dominant_biome_id": dominant,
+		"variant": _variant_value_at(x, z),
+		"base_biome_id": choice.x,
+	}
 
 
 func _copy_catalogs(profiles: TerrainProfileCatalog, biomes: BiomeCatalog) -> void:
@@ -513,6 +594,7 @@ func _make_noise_channels() -> Array[FastNoiseLite]:
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1601],
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1709],
 		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1801],
+		[FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 1.0, 2, 1907],
 	]
 	var result: Array[FastNoiseLite] = []
 	for definition in definitions:
@@ -528,7 +610,7 @@ func _make_noise_channels() -> Array[FastNoiseLite]:
 	# GDScript warp channels. Point queries evaluate the corridor many times per
 	# decoration, so the native single-pass warp keeps that path affordable.
 	var river_noise: FastNoiseLite = result[CHANNEL_RIVER]
-	var sample_scale: float = _config.macro_scale * 0.70
+	var sample_scale: float = _config.macro_scale * WorldGenConfigScript.RIVER_CORRIDOR_SCALE
 	river_noise.domain_warp_enabled = true
 	river_noise.domain_warp_type = FastNoiseLite.DOMAIN_WARP_SIMPLEX
 	river_noise.domain_warp_amplitude = (_config.macro_scale * RIVER_MEANDER_AMOUNT) / sample_scale
@@ -555,16 +637,21 @@ func _mainland_continentalness_at(x: int, z: int) -> float:
 
 
 func _continentalness_from_mainland(x: int, z: int, mainland: float) -> float:
-	if mainland >= 0.38:
-		return mainland
-	var large_value: float = _noises[CHANNEL_LARGE_ISLAND].get_noise_2d(
-		float(x) / LARGE_ISLAND_SCALE, float(z) / LARGE_ISLAND_SCALE) * 0.5 + 0.5
-	var small_value: float = _noises[CHANNEL_SMALL_ISLAND].get_noise_2d(
-		float(x) / SMALL_ISLAND_SCALE, float(z) / SMALL_ISLAND_SCALE) * 0.5 + 0.5
-	var large_island: float = _smoothstep(0.66, 0.82, large_value) * 0.70
-	var small_island: float = _smoothstep(0.72, 0.86, small_value) * 0.58
-	var coast_fade: float = 1.0 - _smoothstep(0.24, 0.34, mainland)
-	return maxf(mainland, maxf(large_island, small_island) * coast_fade)
+	var effective := mainland
+	if mainland < 0.38:
+		var large_value: float = _noises[CHANNEL_LARGE_ISLAND].get_noise_2d(
+			float(x) / LARGE_ISLAND_SCALE, float(z) / LARGE_ISLAND_SCALE) * 0.5 + 0.5
+		var small_value: float = _noises[CHANNEL_SMALL_ISLAND].get_noise_2d(
+			float(x) / SMALL_ISLAND_SCALE, float(z) / SMALL_ISLAND_SCALE) * 0.5 + 0.5
+		var large_island: float = _smoothstep(0.66, 0.82, large_value) * 0.70
+		var small_island: float = _smoothstep(0.72, 0.86, small_value) * 0.58
+		var coast_fade: float = 1.0 - _smoothstep(0.24, 0.34, mainland)
+		effective = maxf(mainland, maxf(large_island, small_island) * coast_fade)
+	if not _config.spline_terrain:
+		return effective
+	if _config.worldgen_version >= 11:
+		return _monotone_cubic_sample(effective, CONTINENT_SPLINE_Y)
+	return _piecewise_cubic_remap(effective, CONTINENT_SPLINE_Y)
 
 
 func _base_height_at(x: int, z: int, continental: float) -> float:
@@ -718,7 +805,7 @@ func _apply_climate_terrain_shape(height: float, profile_position: float, gradie
 	height += 2.0 * tropical_weight * _smoothstep(0.6, 2.0, profile_position)
 	var cold_weight := 1.0 - _smoothstep(0.18, 0.36, temperature)
 	height += 3.0 * cold_weight * _smoothstep(2.2, 3.8, profile_position)
-	return clampf(height, MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
+	return _bounded_height(height)
 
 
 func _raw_height_at(x: int, z: int) -> float:
@@ -729,7 +816,7 @@ func _raw_height_at(x: int, z: int) -> float:
 		height = _apply_river_carve(
 			x, z, height, _river_distance_at(x, z),
 			_mainland_continentalness_at(x, z), _river_width_scale_at(x, z))
-	return clampf(height, MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
+	return _bounded_height(height)
 
 
 ## The analytic regional modifier remains the seam-safe foundation; the optional
@@ -738,10 +825,17 @@ func _height_with_regional_erosion(x: int, z: int) -> float:
 	var height: float = _height_without_regional_erosion(x, z)
 	if _config.world_type != WorldGenConfig.WORLD_TYPE_FLAT:
 		height += _regional_erosion.modifier(x, z, _erosion_height_source)
-	return clampf(height, MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
+	return _bounded_height(height)
 
 
 func _final_height_at(x: int, z: int) -> float:
+	var terrain_height := _final_height_without_hydrology_at(x, z)
+	if not _config.elevated_hydrology:
+		return terrain_height
+	return _elevated_hydrology_at(x, z, terrain_height).x
+
+
+func _final_height_without_hydrology_at(x: int, z: int) -> float:
 	var raw: float = _raw_height_at(x, z)
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT:
 		return raw
@@ -761,6 +855,203 @@ func _final_height_at(x: int, z: int) -> float:
 		height, _profile_position_at(x, z, continental), gradient, local_relief,
 		climate.x + climate_altitude * 0.0035,
 		climate.y + climate_altitude * 0.0015)
+
+
+## Experimental elevated water. V10's fixed-level lake/reach experiment is
+## kept byte-for-byte as a compatibility branch. V11 routes source lakes over
+## downhill coarse terrain with independently reproducible owner-cell routes.
+func _elevated_hydrology_at(x: int, z: int, terrain_height: float) -> Vector2:
+	if not _config.elevated_hydrology or _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT:
+		return Vector2(terrain_height, -1.0)
+	if _config.worldgen_version >= 11:
+		return _routed_elevated_hydrology_at(x, z, terrain_height)
+	return _legacy_elevated_hydrology_at(x, z, terrain_height)
+
+
+## The v10 implementation deliberately remains isolated from v11. Existing
+## saved v10 worlds therefore keep the exact fixed water surface and terrain
+## values they had before routed hydrology was introduced.
+func _legacy_elevated_hydrology_at(x: int, z: int, terrain_height: float) -> Vector2:
+	var owner_x := WorldGenHash.floor_div(x, INLAND_WATER_CELL_SIZE)
+	var owner_z := WorldGenHash.floor_div(z, INLAND_WATER_CELL_SIZE)
+	var nearest := INF
+	for cell_z in range(owner_z - 1, owner_z + 2):
+		for cell_x in range(owner_x - 1, owner_x + 2):
+			var hash_value := WorldGenHash.hash_2d(_config.seed + 2213, cell_x, cell_z)
+			if hash_value % 100 >= 30:
+				continue
+			var center_x := cell_x * INLAND_WATER_CELL_SIZE + 32 + (hash_value / 101) % 128
+			var center_z := cell_z * INLAND_WATER_CELL_SIZE + 32 + (hash_value / 307) % 128
+			var mainland := _mainland_continentalness_at(center_x, center_z)
+			if mainland < 0.55:
+				continue
+			var continental := _continentalness_from_mainland(center_x, center_z, mainland)
+			if _profile_position_at(center_x, center_z, continental) < 1.0:
+				continue
+			var radius := INLAND_LAKE_RADIUS_MIN + float((hash_value / 997) % INLAND_LAKE_RADIUS_RANGE)
+			var dx := float(x - center_x)
+			var dz := float(z - center_z)
+			var lake_distance := sqrt(dx * dx + dz * dz) - radius
+			var direction := _inland_reach_direction(hash_value)
+			var reach_distance := _distance_to_segment(
+				Vector2(float(x), float(z)),
+				Vector2(float(center_x), float(center_z)) - direction * INLAND_REACH_HALF_LENGTH,
+				Vector2(float(center_x), float(center_z)) + direction * INLAND_REACH_HALF_LENGTH) \
+				- INLAND_REACH_RADIUS
+			nearest = minf(nearest, minf(lake_distance, reach_distance))
+	if nearest == INF or nearest >= INLAND_BANK_WIDTH:
+		return Vector2(terrain_height, -1.0)
+	if nearest < 0.0 and terrain_height >= float(INLAND_WATER_Y):
+		var depth := 1.0 + 2.0 * _smoothstep(0.0, 3.0, -nearest)
+		return Vector2(minf(terrain_height, float(INLAND_WATER_Y) - depth), float(INLAND_WATER_Y))
+	var bank_target := lerpf(float(INLAND_WATER_Y), float(INLAND_WATER_Y + 2),
+		_smoothstep(0.0, INLAND_BANK_WIDTH, maxf(nearest, 0.0)))
+	return Vector2(minf(terrain_height, bank_target), -1.0)
+
+
+## V11 resolves all nearby global owners, selecting the closest signed lake or
+## reach shape. A water column always lowers to a solid bed at least one block
+## below its own surface. Dry banks are only lowered, so neither path nor bank
+## can form a raised/floating ribbon over the original terrain.
+func _routed_elevated_hydrology_at(x: int, z: int, terrain_height: float) -> Vector2:
+	var owner_x: int = WorldGenHash.floor_div(x, INLAND_WATER_CELL_SIZE)
+	var owner_z: int = WorldGenHash.floor_div(z, INLAND_WATER_CELL_SIZE)
+	var nearest: float = INF
+	var water_y: int = -1
+	for cell_z in range(owner_z - 1, owner_z + 2):
+		for cell_x in range(owner_x - 1, owner_x + 2):
+			var route := _v11_route_for_source(cell_x, cell_z)
+			if route.is_empty():
+				continue
+			var center: Vector2i = route["center"]
+			var lake_distance: float = Vector2(float(x - center.x), float(z - center.y)).length() - float(route["radius"])
+			if lake_distance < nearest:
+				nearest = lake_distance
+				water_y = int(route["source_water_y"])
+			var points: Array = route["points"]
+			var levels: PackedInt32Array = route["levels"]
+			for reach in levels.size():
+				var reach_distance: float = _distance_to_segment(
+					Vector2(float(x), float(z)), Vector2(points[reach]), Vector2(points[reach + 1])) \
+					- INLAND_REACH_RADIUS
+				if reach_distance < nearest:
+					nearest = reach_distance
+					water_y = levels[reach]
+	if nearest == INF or nearest >= INLAND_BANK_WIDTH:
+		return Vector2(terrain_height, -1.0)
+	if nearest < 0.0 and water_y > VoxelDefsScript.SEA_LEVEL:
+		var depth: float = 1.0 + 2.0 * _smoothstep(0.0, 3.0, -nearest)
+		return Vector2(minf(terrain_height, float(water_y) - depth), float(water_y))
+	var bank_target: float = lerpf(float(water_y), float(water_y + 2),
+		_smoothstep(0.0, INLAND_BANK_WIDTH, maxf(nearest, 0.0)))
+	return Vector2(minf(terrain_height, bank_target), -1.0)
+
+
+## Returns a complete immutable route description for one owner cell. The
+## source and every endpoint are evaluated using _coarse_pre_hydrology_height_at
+## instead of _final_height_at, preventing hydrology recursion by construction.
+## The dictionary is call-local scratch; no route state is cached or mutated.
+func _v11_route_for_source(cell_x: int, cell_z: int) -> Dictionary:
+	var hash_value: int = WorldGenHash.hash_2d(_config.seed + 2213, cell_x, cell_z)
+	if hash_value % 100 >= INLAND_ROUTE_SOURCE_CHANCE:
+		return {}
+	var center := Vector2i(
+		cell_x * INLAND_WATER_CELL_SIZE + 32 + (hash_value / 101) % 128,
+		cell_z * INLAND_WATER_CELL_SIZE + 32 + (hash_value / 307) % 128)
+	var mainland: float = _mainland_continentalness_at(center.x, center.y)
+	if mainland < 0.55:
+		return {}
+	var continental: float = _continentalness_from_mainland(center.x, center.y, mainland)
+	if _profile_position_at(center.x, center.y, continental) < 1.0:
+		return {}
+	var source_height: float = _coarse_pre_hydrology_height_at(center.x, center.y)
+	if source_height < float(INLAND_ROUTE_MIN_SOURCE_HEIGHT):
+		return {}
+	var points: Array = [center]
+	var levels := PackedInt32Array()
+	var current: Vector2i = center
+	var current_height: float = source_height
+	var current_water_y: int = clampi(floori(source_height) - 3, INLAND_ROUTE_MIN_WATER_Y,
+		VoxelDefsScript.WORLD_HEIGHT - 12)
+	for reach in INLAND_ROUTE_REACH_COUNT:
+		var downhill := _v11_downhill_endpoint(current, current_height, cell_x, cell_z, reach)
+		if downhill.is_empty():
+			break
+		var finish: Vector2i = downhill["point"]
+		var finish_height: float = downhill["height"]
+		# A reach only falls when its pre-hydrology terrain is sufficiently below
+		# the carried water. This produces explicit level steps (and thus exposed
+		# water side faces) instead of a sloped, raised water ribbon.
+		var next_water_y: int = mini(current_water_y, floori(finish_height) - 1)
+		next_water_y = maxi(next_water_y, INLAND_ROUTE_MIN_WATER_Y)
+		points.append(finish)
+		levels.append(next_water_y)
+		current = finish
+		current_height = finish_height
+		current_water_y = next_water_y
+	# A v11 source is a routed system, not a v10-style lake with an incidental
+	# stub. Reject incomplete candidates so every emitted v11 feature has at
+	# least two independently selected downhill reaches.
+	if levels.size() < 2:
+		return {}
+	return {
+		"center": center,
+		"radius": INLAND_LAKE_RADIUS_MIN + float((hash_value / 997) % INLAND_LAKE_RADIUS_RANGE),
+		"source_water_y": clampi(floori(source_height) - 3, INLAND_ROUTE_MIN_WATER_Y,
+			VoxelDefsScript.WORLD_HEIGHT - 12),
+		"points": points,
+		"levels": levels,
+	}
+
+
+## Chooses the lowest strictly downhill cardinal coarse sample. Hash-derived
+## rotation only breaks exact ties, so route direction cannot depend on chunk
+## generation order or which adjacent field first evaluates the owner.
+func _v11_downhill_endpoint(start: Vector2i, start_height: float, owner_x: int, owner_z: int,
+		reach: int) -> Dictionary:
+	var rotation: int = WorldGenHash.positive_mod(WorldGenHash.hash_3d(
+		_config.seed + 2269, owner_x, reach, owner_z), INLAND_ROUTE_DIRECTIONS.size())
+	var best_height: float = start_height
+	var best_point := Vector2i.ZERO
+	for offset in INLAND_ROUTE_DIRECTIONS.size():
+		var direction: Vector2i = INLAND_ROUTE_DIRECTIONS[(rotation + offset) % INLAND_ROUTE_DIRECTIONS.size()]
+		var candidate := start + direction * INLAND_ROUTE_REACH_LENGTH
+		var candidate_height: float = _coarse_pre_hydrology_height_at(candidate.x, candidate.y)
+		if candidate_height < best_height - 0.25:
+			best_height = candidate_height
+			best_point = candidate
+	if best_point == Vector2i.ZERO:
+		return {}
+	return {"point": best_point, "height": best_height}
+
+
+## Coarse, terrain-only routing source. It is intentionally earlier than
+## regional erosion, river carving, smoothing, climate shape, and hydrology;
+## that makes it cheap, globally point-evaluable, and impossible to recurse
+## through the carved elevated-water output.
+func _coarse_pre_hydrology_height_at(x: int, z: int) -> float:
+	return _height_without_regional_erosion(x, z)
+
+
+static func _inland_reach_direction(hash_value: int) -> Vector2:
+	match (hash_value / 37) % 4:
+		0:
+			return Vector2.RIGHT
+		1:
+			return Vector2.DOWN
+		2:
+			return Vector2(0.70710678, 0.70710678)
+		_:
+			return Vector2(0.70710678, -0.70710678)
+
+
+static func _distance_to_segment(point: Vector2, start: Vector2, finish: Vector2) -> float:
+	var segment := finish - start
+	var length_squared := segment.length_squared()
+	if length_squared <= 0.0001:
+		return point.distance_to(start)
+	var amount := clampf((point - start).dot(segment) / length_squared, 0.0, 1.0)
+	return point.distance_to(start + segment * amount)
 
 
 func _final_from_raw_neighborhood(x: int, z: int, raw: float, west: float, east: float, north: float, south: float) -> float:
@@ -794,7 +1085,7 @@ func _final_from_raw_neighborhood_with_profile(raw: float, west: float, east: fl
 	var terrace_weight: float = maxf(1.0 - absf(profile_position - 2.0) * 2.0, 0.0) * _smoothstep(0.2, 2.0, gradient) * _config.erosion_strength
 	var step: float = 2.0 + profile_position * 0.25
 	var terraced: float = floorf(talus / step + 0.5) * step
-	return clampf(lerpf(talus, terraced, terrace_weight * 0.22), MIN_TERRAIN_HEIGHT, float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN)
+	return _bounded_height(lerpf(talus, terraced, terrace_weight * 0.22))
 
 
 func _slope_at(x: int, z: int) -> float:
@@ -811,9 +1102,68 @@ func _profile_position_at(x: int, z: int, continental: float) -> float:
 		warped.x / (_config.macro_scale * 1.25), warped.y / (_config.macro_scale * 1.25)) * 0.5 + 0.5
 	# Broad landform regions choose the profile. Fine ridge detail must never
 	# switch a plain into a mountain over a handful of columns.
+	if _config.spline_terrain and _config.worldgen_version >= 11:
+		return clampf(_profile_grid_sample(continental, landform) \
+			* float(TerrainProfileCatalog.RIDGED_MOUNTAINS), 0.0,
+			float(TerrainProfileCatalog.RIDGED_MOUNTAINS))
 	var position: float = _smoothstep(0.30, 0.82, landform) * 4.0
 	position *= _smoothstep(0.44, 0.78, continental)
+	if _config.spline_terrain:
+		position = _piecewise_cubic_remap(
+			position / float(TerrainProfileCatalog.RIDGED_MOUNTAINS), PROFILE_SPLINE_Y) \
+			* float(TerrainProfileCatalog.RIDGED_MOUNTAINS)
 	return clampf(position, 0.0, float(TerrainProfileCatalog.RIDGED_MOUNTAINS))
+
+
+## V11's tensor-product monotone spline. Interpolating every landform row
+## first, then interpolating those results by continentalness, keeps the grid
+## continuous at both sets of cell boundaries and bounded by its four corners.
+func _profile_grid_sample(continental: float, landform: float) -> float:
+	var row_values: Array[float] = []
+	for row in PROFILE_GRID:
+		row_values.append(_monotone_cubic_sample(landform, row))
+	return _monotone_cubic_sample(continental, row_values)
+
+
+func _piecewise_cubic_remap(value: float, outputs: Array) -> float:
+	var normalized := clampf(value, 0.0, 1.0)
+	var segment := mini(floori(normalized * 4.0), 3)
+	var t: float = (normalized - float(SPLINE_X[segment])) \
+		/ (float(SPLINE_X[segment + 1]) - float(SPLINE_X[segment]))
+	var eased := t * t * (3.0 - 2.0 * t)
+	return lerpf(float(outputs[segment]), float(outputs[segment + 1]), eased)
+
+
+## Uniform-knot monotone cubic Hermite interpolation. Tangents use the harmonic
+## mean of neighboring secants, preventing overshoot while retaining C1 joins.
+func _monotone_cubic_sample(value: float, outputs: Array) -> float:
+	var normalized := clampf(value, 0.0, 1.0)
+	var count := outputs.size()
+	if count < 2:
+		return float(outputs[0]) if count == 1 else normalized
+	var scaled := normalized * float(count - 1)
+	var segment := mini(floori(scaled), count - 2)
+	var t := scaled - float(segment)
+	var y0 := float(outputs[segment])
+	var y1 := float(outputs[segment + 1])
+	var delta := y1 - y0
+	var previous_delta := delta if segment == 0 else y0 - float(outputs[segment - 1])
+	var next_delta := delta if segment + 2 >= count else float(outputs[segment + 2]) - y1
+	var m0 := _monotone_tangent(previous_delta, delta)
+	var m1 := _monotone_tangent(delta, next_delta)
+	var t2 := t * t
+	var t3 := t2 * t
+	return (2.0 * t3 - 3.0 * t2 + 1.0) * y0 \
+		+ (t3 - 2.0 * t2 + t) * m0 \
+		+ (-2.0 * t3 + 3.0 * t2) * y1 \
+		+ (t3 - t2) * m1
+
+
+static func _monotone_tangent(left_delta: float, right_delta: float) -> float:
+	if is_zero_approx(left_delta) or is_zero_approx(right_delta) \
+			or signf(left_delta) != signf(right_delta):
+		return 0.0
+	return 2.0 * left_delta * right_delta / (left_delta + right_delta)
 
 
 ## Raw river corridor field: absolute value of a warped low-frequency noise.
@@ -824,7 +1174,7 @@ func _river_corridor_at(x: int, z: int) -> float:
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT or _config.river_density <= 0.0:
 		return 10.0
 	var warped := _macro_warp(x, z)
-	var sample_scale: float = _config.macro_scale * 0.70
+	var sample_scale: float = _config.macro_scale * WorldGenConfigScript.RIVER_CORRIDOR_SCALE
 	return absf(_noises[CHANNEL_RIVER].get_noise_2d(
 		warped.x / sample_scale, warped.y / sample_scale))
 
@@ -850,7 +1200,7 @@ func _river_distance_at(x: int, z: int) -> float:
 ## variation, so reaches widen into pools and narrow into riffles instead of
 ## staying perfectly uniform.
 func _river_width_scale_at(x: int, z: int) -> float:
-	var density_norm: float = clampf(_config.river_density * 0.25, 0.0, 1.0)
+	var density_norm: float = clampf(_config.river_density * WorldGenConfigScript.RIVER_DENSITY_NORMALIZATION, 0.0, 1.0)
 	var base_scale: float = lerpf(RIVER_WIDTH_SCALE_MIN, RIVER_WIDTH_SCALE_MAX, density_norm)
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT or _config.river_density <= 0.0:
 		return base_scale
@@ -862,7 +1212,8 @@ func _river_width_scale_at(x: int, z: int) -> float:
 
 
 func _channel_half_width(width_scale: float) -> float:
-	return lerpf(RIVER_CHANNEL_HALF_MIN, RIVER_CHANNEL_HALF_MAX, clampf(_config.river_density * 0.25, 0.0, 1.0)) * width_scale
+	return lerpf(RIVER_CHANNEL_HALF_MIN, RIVER_CHANNEL_HALF_MAX,
+		clampf(_config.river_density * WorldGenConfigScript.RIVER_DENSITY_NORMALIZATION, 0.0, 1.0)) * width_scale
 
 
 ## Strength of the floodplain grading mask, 0 outside the river corridor and 1
@@ -873,7 +1224,7 @@ func _channel_half_width(width_scale: float) -> float:
 func _river_floodplain_weight(river_corridor: float, continental: float) -> float:
 	if _config.world_type == WorldGenConfig.WORLD_TYPE_FLAT or _config.river_density <= 0.0:
 		return 0.0
-	var density_norm: float = clampf(_config.river_density * 0.25, 0.0, 1.0)
+	var density_norm: float = clampf(_config.river_density * WorldGenConfigScript.RIVER_DENSITY_NORMALIZATION, 0.0, 1.0)
 	var extent: float = RIVER_FLOODPLAIN_CORRIDOR * lerpf(RIVER_WIDTH_SCALE_MIN, RIVER_WIDTH_SCALE_MAX, density_norm)
 	return _smoothstep(0.43, 0.60, continental) \
 		* (1.0 - _smoothstep(extent * 0.05, extent, river_corridor))
@@ -946,6 +1297,19 @@ func _climate_at(x: int, z: int, height: float, river_value: float) -> Vector2:
 	moisture_value += river_value * 0.14
 	moisture_value -= maxf(height - float(VoxelDefsScript.SEA_LEVEL), 0.0) * 0.0015
 	return Vector2(clampf(temperature_value, 0.0, 1.0), clampf(moisture_value, 0.0, 1.0))
+
+
+## V11's independent climate-variant field. The version/configuration gate is
+## here rather than at each caller so every legacy path receives the same
+## inert value without changing its selection math.
+func _variant_value_at(x: int, z: int) -> float:
+	if not _config.climate_variants:
+		return 0.5
+	var warped := _macro_warp(x, z)
+	var value: float = _noises[CHANNEL_VARIANT].get_noise_2d(
+		warped.x / (_config.biome_scale * VARIANT_SCALE_MULTIPLIER),
+		warped.y / (_config.biome_scale * VARIANT_SCALE_MULTIPLIER))
+	return clampf(value * 0.5 + 0.5, 0.0, 1.0)
 
 
 ## x=closest climate biome, y=second closest, z=blend weight toward y (0..255).
@@ -1022,7 +1386,7 @@ func _apply_biome_override(climate_biome: int, continental: float, height: float
 	# ocean-floor column falls through to the waterline checks below.
 	if continental < OCEAN_CONTINENTAL and height <= float(VoxelDefsScript.SEA_LEVEL):
 		return _underwater_biome(height, temperature, world_x, world_z)
-	if river_value > 0.62 and continental >= 0.45 and height <= float(VoxelDefsScript.SEA_LEVEL) + 2.0:
+	if river_value > WorldGenConfigScript.RIVER_CHANNEL_THRESHOLD and continental >= 0.45 and height <= float(VoxelDefsScript.SEA_LEVEL) + 2.0:
 		return BiomeCatalog.RIVER
 	if height <= float(VoxelDefsScript.SEA_LEVEL) + 1.0:
 		return BiomeCatalog.BEACH
@@ -1034,6 +1398,30 @@ func _apply_biome_override(climate_biome: int, continental: float, height: float
 	if climate_biome == BiomeCatalog.SWAMP and height > float(VoxelDefsScript.SEA_LEVEL) + 10.0:
 		return BiomeCatalog.FOREST
 	return climate_biome
+
+
+## Surface variants are applied after hard water/elevation overrides. That
+## makes rivers, oceans, and highlands authoritative while the third climate
+## channel forms broad, deterministic snowy forest, wooded mesa, and rocky
+## shore regions. This is intentionally a no-op for every v1-v10 config.
+func _apply_biome_variant(biome: int, continental: float, height: float, profile: int,
+		world_x: int, world_z: int) -> int:
+	if not _config.climate_variants:
+		return biome
+	var variant := _variant_value_at(world_x, world_z)
+	match biome:
+		BiomeCatalog.TAIGA:
+			if continental >= 0.48 and variant >= SNOWY_TAIGA_VARIANT_THRESHOLD:
+				return BiomeCatalog.SNOWY_TAIGA
+		BiomeCatalog.BADLANDS:
+			if profile >= TerrainProfileCatalog.HILLS \
+					and variant >= WOODED_BADLANDS_VARIANT_THRESHOLD:
+				return BiomeCatalog.WOODED_BADLANDS
+		BiomeCatalog.BEACH:
+			if continental >= OCEAN_CONTINENTAL and height > float(VoxelDefsScript.SEA_LEVEL) \
+					and variant >= STONY_SHORE_VARIANT_THRESHOLD:
+				return BiomeCatalog.STONY_SHORE
+	return biome
 
 
 ## Depth- and climate-appropriate underwater biome chosen from the same final
@@ -1076,6 +1464,19 @@ func _profile_value(profile: int, field: int) -> float:
 func _smoothstep(edge0: float, edge1: float, value: float) -> float:
 	var t: float = clampf((value - edge0) / (edge1 - edge0), 0.0, 1.0)
 	return t * t * (3.0 - 2.0 * t)
+
+
+## V11 replaces the hard world-height clip with an asymptotic shoulder. Extreme
+## imported/amplified settings retain tall relief without producing broad flat
+## mesas at the storage ceiling; legacy versions keep their exact clamp.
+func _bounded_height(value: float) -> float:
+	var ceiling := float(VoxelDefsScript.WORLD_HEIGHT) - HEIGHT_MARGIN
+	if _config.worldgen_version <= 10:
+		return clampf(value, MIN_TERRAIN_HEIGHT, ceiling)
+	var shoulder := ceiling - SOFT_CEILING_BAND
+	if value > shoulder:
+		value = shoulder + SOFT_CEILING_BAND * (1.0 - exp(-(value - shoulder) / SOFT_CEILING_BAND))
+	return clampf(value, MIN_TERRAIN_HEIGHT, ceiling)
 
 
 func _ensure_configured() -> void:

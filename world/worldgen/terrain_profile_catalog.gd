@@ -85,7 +85,7 @@ func _set_defaults() -> void:
 	_names = PackedStringArray(["plains", "hills", "plateau", "mountains", "ridged_mountains"])
 	_values = PackedFloat32Array([
 		# base, relief, broad detail frequency/strength, ridge, erosion,
-		# local (24-64 block) relief, fine (10 block) surface detail.
+		# local (32-80 block) relief, fine (13 block) surface detail.
 		54.0, 5.0, 0.012, 1.5, 0.0, 0.75, 1.9, 0.22,
 		61.0, 14.0, 0.014, 3.0, 0.18, 0.60, 3.4, 0.30,
 		70.0, 18.0, 0.010, 2.5, 0.12, 0.35, 2.6, 0.24,

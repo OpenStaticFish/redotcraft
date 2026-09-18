@@ -95,7 +95,8 @@ func _verify_tree_ground_validation() -> void:
 		field.set_height(index, ground_y, ground_y, ground_y, 0.0)
 		field.set_biome(index, BiomeCatalogScript.FOREST, BiomeCatalogScript.FOREST, 0, BiomeCatalogScript.FOREST)
 	field.seal()
-	_check(populator._tree_site_is_safe(field, {}, 8, ground_y, 8, 3, 10), "solid generated terrain must permit a tree root")
+	_check(populator._tree_site_is_safe(field, VoxelPopulatorScript.DecorationGroundScratch.new(),
+		8, ground_y, 8, 3, 10), "solid generated terrain must permit a tree root")
 	# Entrance tunnels are the one cave operation permitted to touch a terrain
 	# surface. The common immutable predicate, rather than owner-chunk voxel
 	# state, must reject them for every canopy chunk.
@@ -111,7 +112,9 @@ func _verify_tree_ground_validation() -> void:
 		if entrance_found:
 			break
 	_check(entrance_found, "surface-cave fixture must find an immutable entrance exclusion")
-	_check(not cave_populator._tree_site_is_safe(field, {}, entrance_position.x, ground_y, entrance_position.y, 3, 10), "surface-cave roots must be excluded consistently before stamping")
+	_check(not cave_populator._tree_site_is_safe(field, VoxelPopulatorScript.DecorationGroundScratch.new(),
+		entrance_position.x, ground_y, entrance_position.y, 3, 10),
+		"surface-cave roots must be excluded consistently before stamping")
 
 
 func _verify_grove_distribution() -> void:

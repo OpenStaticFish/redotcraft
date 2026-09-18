@@ -157,7 +157,7 @@ func water_tint_for(biome_id: int) -> Color:
 ## actually inside a cave before applying this 3D region label.
 func cave_biome_id_at(world_x: int, y: int, world_z: int) -> int:
 	_ensure_configured()
-	return BiomeCatalog.cave_biome_at(_config.seed, world_x, y, world_z)
+	return BiomeCatalog.cave_biome_at(_config.seed, world_x, y, world_z, _config.worldgen_version)
 
 
 func biome_color(biome_id: int) -> Color:
@@ -267,11 +267,18 @@ func find_spawn_position() -> Vector3:
 				candidates.append(Vector2i(radius, edge))
 			for coarse: Vector2i in candidates:
 				var point := coarse * 8
-				var sample: Dictionary = _sampler.sample_point(point.x, point.y)
-				var biome: int = int(sample["dominant_biome_id"])
-				var height: float = float(sample["final_height"])
+				# Reject unsuitable columns with the allocation-free ground query.
+				# The full point query resolves raw height and four neighbouring final
+				# heights for slope, so only pay for it on plausible dry land.
+				var ground := _sampler.sample_decoration_ground(point.x, point.y)
+				var biome: int = ground.y
+				var height: float = float(ground.x)
 				if _biomes.is_ocean_biome(biome) or biome in [BiomeCatalog.BEACH, BiomeCatalog.RIVER, BiomeCatalog.SWAMP]:
 					continue
+				if height <= VoxelDefs.SEA_LEVEL + 2:
+					continue
+				var sample: Dictionary = _sampler.sample_point(point.x, point.y)
+				height = float(sample["final_height"])
 				var slope: float = float(sample["slope"])
 				var score := height - slope * 8.0 - float(radius) * 0.12
 				if height > VoxelDefs.SEA_LEVEL + 2 and slope < 2.2 and score > best_score:

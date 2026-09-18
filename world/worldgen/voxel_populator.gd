@@ -8,6 +8,8 @@ const WorldGenConfigScript = preload("res://world/worldgen/world_gen_config.gd")
 const BiomeCatalogScript = preload("res://world/worldgen/biome_catalog.gd")
 const WorldGenHashScript = preload("res://world/worldgen/world_gen_hash.gd")
 const DecorationCatalogScript = preload("res://world/worldgen/decoration_catalog.gd")
+const OreCatalogScript = preload("res://world/worldgen/ore_catalog.gd")
+const StructureCatalogScript = preload("res://world/worldgen/structure_catalog.gd")
 const BlockRegistryScript = preload("res://world/block_registry.gd")
 const VoxelDefsScript = preload("res://world/voxel_defs.gd")
 
@@ -30,10 +32,87 @@ const CAVE_NETWORK_BANDS: int = 5
 const CAVE_NETWORK_BASE_Y: int = 14
 const CAVE_NETWORK_BAND_STEP: int = 18
 const ORE_CELL_SIZE: int = 20
+# Aquifers are sparse, overlapping global regions. A region is owned by its
+# 48-block cell only for candidate enumeration; every column evaluates the same
+# nearby candidates from world coordinates, so loading an adjacent chunk cannot
+# create or remove a water table at its border.
+const AQUIFER_REGION_CELL_SIZE: int = 48
+const AQUIFER_REGION_MIN_RADIUS: int = 22
+const AQUIFER_REGION_RADIUS_RANGE: int = 8
+const AQUIFER_MIN_WATER_LEVEL: int = 15
+const AQUIFER_WATER_LEVEL_RANGE: int = 13
+const FLAT_VOXEL_SURFACE_Y: int = 4
+
+
+## Call-owned decoration cache. VoxelPopulator instances are shared by worker
+## jobs, so mutable scratch must stay local to one populate() invocation.
+class DecorationGroundScratch:
+	const CAPACITY := 512
+	const SLOT_MASK := CAPACITY - 1
+	var occupied := PackedByteArray()
+	var world_xs := PackedInt32Array()
+	var world_zs := PackedInt32Array()
+	var heights := PackedInt32Array()
+	var biomes := PackedInt32Array()
+
+	func _init() -> void:
+		occupied.resize(CAPACITY)
+		world_xs.resize(CAPACITY)
+		world_zs.resize(CAPACITY)
+		heights.resize(CAPACITY)
+		biomes.resize(CAPACITY)
+
+	func find_slot(world_x: int, world_z: int) -> int:
+		var slot: int = ((world_x * 73856093) ^ (world_z * 19349663)) & SLOT_MASK
+		for _probe in CAPACITY:
+			if occupied[slot] == 0:
+				return -1
+			if world_xs[slot] == world_x and world_zs[slot] == world_z:
+				return slot
+			slot = (slot + 1) & SLOT_MASK
+		return -1
+
+	func insert(world_x: int, world_z: int, value: Vector2i) -> void:
+		var slot: int = ((world_x * 73856093) ^ (world_z * 19349663)) & SLOT_MASK
+		for _probe in CAPACITY:
+			if occupied[slot] == 0 or (world_xs[slot] == world_x and world_zs[slot] == world_z):
+				occupied[slot] = 1
+				world_xs[slot] = world_x
+				world_zs[slot] = world_z
+				heights[slot] = value.x
+				biomes[slot] = value.y
+				return
+			slot = (slot + 1) & SLOT_MASK
+
+	func value_at(slot: int) -> Vector2i:
+		return Vector2i(heights[slot], biomes[slot])
+
+
+## Packed struct-of-arrays replacement for one five-Variant Array per tree.
+class TreeCandidates:
+	var features := PackedInt32Array()
+	var world_xs := PackedInt32Array()
+	var ground_ys := PackedInt32Array()
+	var world_zs := PackedInt32Array()
+	var hashes := PackedInt32Array()
+
+	func append(feature: int, world_x: int, ground_y: int, world_z: int, hash_value: int) -> void:
+		features.append(feature)
+		world_xs.append(world_x)
+		ground_ys.append(ground_y)
+		world_zs.append(world_z)
+		hashes.append(hash_value)
+
+	func size() -> int:
+		return features.size()
+
+	func is_empty() -> bool:
+		return features.is_empty()
 
 var config: WorldGenConfig
 var biomes: BiomeCatalog
 var decorations: DecorationCatalog
+var _ore_catalog: OreCatalog
 var terrain_sampler: TerrainSampler
 var _cave_spaghetti_a: FastNoiseLite
 var _cave_spaghetti_b: FastNoiseLite
@@ -44,7 +123,8 @@ func _init(config_value: WorldGenConfig, biomes_value: BiomeCatalog, sampler_val
 	config = config_value if config_value != null else WorldGenConfigScript.new()
 	biomes = biomes_value if biomes_value != null else BiomeCatalogScript.new()
 	terrain_sampler = sampler_value
-	decorations = DecorationCatalogScript.new()
+	decorations = DecorationCatalogScript.new(config.worldgen_version)
+	_ore_catalog = OreCatalogScript.new(config.worldgen_version)
 	_cave_spaghetti_a = _make_cave_noise(1701, 0.018, 2)
 	_cave_spaghetti_b = _make_cave_noise(1877, 0.015, 2)
 	_cave_cheese = _make_cave_noise(1999, 0.009, 3)
@@ -70,8 +150,10 @@ func populate(chunk_pos: Vector2i, field: ChunkTerrainData, edits: Dictionary, f
 		_place_geodes(data, field, origin_x, origin_z)
 		_decorate_caves(data, field, origin_x, origin_z)
 	if full_detail and config.decoration_density > 0.0:
-		max_y = _decorate(data, field, origin_x, origin_z, max_y)
-		max_y = _decorate_underwater(data, field, origin_x, origin_z, max_y)
+		var decoration_scratch := DecorationGroundScratch.new()
+		max_y = _decorate(data, field, origin_x, origin_z, max_y, decoration_scratch)
+		max_y = _decorate_underwater(data, field, origin_x, origin_z, max_y, decoration_scratch)
+	max_y = maxi(max_y, _place_region_structures(data, field, origin_x, origin_z))
 	max_y = _apply_edits(data, edits, origin_x, origin_z, max_y)
 	return {"data": data, "max_y": _actual_max_y(data, max_y)}
 
@@ -107,10 +189,8 @@ func populate_lod(chunk_pos: Vector2i, field: ChunkTerrainData) -> Dictionary:
 			var surface_y: int = _surface_height(field, field_index)
 			var river: float = field.river[field_index]
 			var is_river: bool = config.world_type != WorldGenConfigScript.WORLD_TYPE_FLAT \
-				and river >= 0.62 and surface_y < VoxelDefsScript.SEA_LEVEL
-			var column_water_y := -1
-			if surface_y < VoxelDefsScript.SEA_LEVEL:
-				column_water_y = VoxelDefsScript.SEA_LEVEL
+				and river >= WorldGenConfigScript.RIVER_CHANNEL_THRESHOLD and surface_y < VoxelDefsScript.SEA_LEVEL
+			var column_water_y := _column_water_y(field, field_index, surface_y)
 			var values := _surface_rule_values(field, field_index, surface_y, column_water_y, is_river,
 				field.world_x(local_x), field.world_z(local_z))
 			solid_y[column] = surface_y
@@ -123,8 +203,13 @@ func populate_lod(chunk_pos: Vector2i, field: ChunkTerrainData) -> Dictionary:
 			else:
 				max_y = maxi(max_y, surface_y)
 	_apply_lod_floor_patches(solid_y, solid_id, field, origin_x, origin_z)
+	var terrain_solid_y: PackedInt32Array = solid_y.duplicate()
+	var terrain_solid_id: PackedByteArray = solid_id.duplicate()
+	var terrain_sub_id: PackedByteArray = sub_id.duplicate()
 	max_y = maxi(max_y, _apply_lod_scrub(solid_y, solid_id, sub_id, water_y, field, origin_x, origin_z))
 	max_y = maxi(max_y, _apply_lod_canopies(solid_y, solid_id, sub_id, water_y, field, origin_x, origin_z))
+	max_y = maxi(max_y, _apply_lod_region_structures(solid_y, solid_id, sub_id, water_y,
+		field, origin_x, origin_z, terrain_solid_y, terrain_solid_id, terrain_sub_id))
 	return {
 		"solid_y": solid_y,
 		"solid_id": solid_id,
@@ -142,15 +227,16 @@ func populate_lod(chunk_pos: Vector2i, field: ChunkTerrainData) -> Dictionary:
 ## two tree blocks become the column's solid/sub pair so side faces read as
 ## foliage instead of dirt.
 func _apply_lod_canopies(solid_y: PackedInt32Array, solid_id: PackedByteArray, sub_id: PackedByteArray, water_y: PackedInt32Array, field: ChunkTerrainData, origin_x: int, origin_z: int) -> int:
-	var trees: Array = _collect_trees(field, origin_x, origin_z, {}, true)
+	var trees := _collect_trees(field, origin_x, origin_z, DecorationGroundScratch.new(), true)
 	if trees.is_empty():
 		return 0
 	var buffer := PackedByteArray()
 	buffer.resize(VoxelDefsScript.CHUNK_AREA * VoxelDefsScript.WORLD_HEIGHT)
 	var tree_max_y := 0
-	for tree in trees:
+	for tree_index in trees.size():
 		tree_max_y = maxi(tree_max_y, _stamp_feature(
-			buffer, origin_x, origin_z, int(tree[1]), int(tree[2]), int(tree[3]), int(tree[0]), int(tree[4])))
+			buffer, origin_x, origin_z, trees.world_xs[tree_index], trees.ground_ys[tree_index],
+			trees.world_zs[tree_index], trees.features[tree_index], trees.hashes[tree_index]))
 	var top_y := PackedInt32Array()
 	var top_id := PackedByteArray()
 	var second_id := PackedByteArray()
@@ -179,6 +265,151 @@ func _apply_lod_canopies(solid_y: PackedInt32Array, solid_id: PackedByteArray, s
 	return max_y
 
 
+## Region structures are a separate, sparse feature tier. Each 160-block owner
+## cell supplies one candidate; the fixed structure bounding box expands the
+## owner range so every overlapping chunk independently makes the same stamp.
+## The terrain-only site test deliberately reads the sampler/scratch rather than
+## generated data, which avoids generation-order dependence at chunk borders.
+func _place_region_structures(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> int:
+	var structures := _accepted_region_structures(field, origin_x, origin_z, DecorationGroundScratch.new())
+	var max_y := 0
+	for entry in structures:
+		var candidate: StructureCatalog.Candidate = entry[0]
+		var ground_y: int = int(entry[1])
+		_clear_structure_volume(data, origin_x, origin_z, candidate.anchor, ground_y)
+		for offset_z in range(-StructureCatalogScript.HORIZONTAL_HALO, StructureCatalogScript.HORIZONTAL_HALO + 1):
+			for offset_x in range(-StructureCatalogScript.HORIZONTAL_HALO, StructureCatalogScript.HORIZONTAL_HALO + 1):
+				for local_y in range(1, StructureCatalogScript.max_height(candidate.kind) + 1):
+					var block_id: int = StructureCatalogScript.block_at(candidate.kind, candidate.orientation,
+						offset_x, local_y, offset_z)
+					if block_id == BlockRegistryScript.BLOCK_AIR:
+						continue
+					_set_structure_block(data, origin_x, origin_z, candidate.anchor.x + offset_x,
+						ground_y + local_y, candidate.anchor.y + offset_z, block_id)
+		max_y = maxi(max_y, ground_y + StructureCatalogScript.max_height(candidate.kind))
+	return max_y
+
+
+## Compact chunks carry the exact region-structure top columns. The clearing
+## reset is equally important: it removes a pre-existing compact tree canopy
+## from a POI footprint just as the full stamp clears its voxel volume.
+func _apply_lod_region_structures(solid_y: PackedInt32Array, solid_id: PackedByteArray,
+		sub_id: PackedByteArray, water_y: PackedInt32Array, field: ChunkTerrainData,
+		origin_x: int, origin_z: int, terrain_solid_y: PackedInt32Array,
+		terrain_solid_id: PackedByteArray, terrain_sub_id: PackedByteArray) -> int:
+	var structures := _accepted_region_structures(field, origin_x, origin_z, DecorationGroundScratch.new())
+	var max_y := 0
+	for entry in structures:
+		var candidate: StructureCatalog.Candidate = entry[0]
+		var ground_y: int = int(entry[1])
+		for offset_z in range(-StructureCatalogScript.HORIZONTAL_HALO, StructureCatalogScript.HORIZONTAL_HALO + 1):
+			var local_z: int = candidate.anchor.y + offset_z - origin_z
+			if local_z < 0 or local_z >= VoxelDefsScript.CHUNK_SIZE:
+				continue
+			for offset_x in range(-StructureCatalogScript.HORIZONTAL_HALO, StructureCatalogScript.HORIZONTAL_HALO + 1):
+				var local_x: int = candidate.anchor.x + offset_x - origin_x
+				if local_x < 0 or local_x >= VoxelDefsScript.CHUNK_SIZE:
+					continue
+				var column: int = local_x + local_z * VoxelDefsScript.DATA_STRIDE_Z
+				solid_y[column] = terrain_solid_y[column]
+				solid_id[column] = terrain_solid_id[column]
+				sub_id[column] = terrain_sub_id[column]
+				# Accepted structures are above the water line; leave a deterministic
+				# safety reset in case a future terrain rule adds a shallow water cap.
+				if water_y[column] > terrain_solid_y[column]:
+					water_y[column] = -1
+				var top_y: int = -1
+				var top_id: int = BlockRegistryScript.BLOCK_AIR
+				for local_y in range(1, StructureCatalogScript.max_height(candidate.kind) + 1):
+					var block_id: int = StructureCatalogScript.block_at(candidate.kind, candidate.orientation,
+						offset_x, local_y, offset_z)
+					# Compact columns intentionally omit cross blocks, matching the
+					# full-detail LOD scan (a torch is light/decoration, not terrain).
+					if block_id != BlockRegistryScript.BLOCK_AIR and block_id != BlockRegistryScript.BLOCK_TORCH:
+						top_y = ground_y + local_y
+						top_id = block_id
+				if top_y < 0:
+					continue
+				solid_y[column] = top_y
+				solid_id[column] = top_id
+				var below_id: int = StructureCatalogScript.block_at(candidate.kind, candidate.orientation,
+					offset_x, top_y - ground_y - 1, offset_z)
+				sub_id[column] = terrain_solid_id[column] if below_id == BlockRegistryScript.BLOCK_AIR else below_id
+				max_y = maxi(max_y, top_y)
+	return max_y
+
+
+func _accepted_region_structures(field: ChunkTerrainData, origin_x: int, origin_z: int,
+		ground_scratch: DecorationGroundScratch) -> Array:
+	var accepted: Array = []
+	if not config.region_structures or config.worldgen_version < WorldGenConfigScript.VARIANT_WORLDGEN_VERSION \
+			or terrain_sampler == null:
+		return accepted
+	var first_x: int = WorldGenHashScript.floor_div(origin_x - StructureCatalogScript.HORIZONTAL_HALO,
+		StructureCatalogScript.OWNER_CELL_SIZE)
+	var last_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1
+		+ StructureCatalogScript.HORIZONTAL_HALO, StructureCatalogScript.OWNER_CELL_SIZE)
+	var first_z: int = WorldGenHashScript.floor_div(origin_z - StructureCatalogScript.HORIZONTAL_HALO,
+		StructureCatalogScript.OWNER_CELL_SIZE)
+	var last_z: int = WorldGenHashScript.floor_div(origin_z + VoxelDefsScript.CHUNK_SIZE - 1
+		+ StructureCatalogScript.HORIZONTAL_HALO, StructureCatalogScript.OWNER_CELL_SIZE)
+	for owner_z in range(first_z, last_z + 1):
+		for owner_x in range(first_x, last_x + 1):
+			var candidate: StructureCatalog.Candidate = StructureCatalogScript.candidate_for(config.seed, owner_x, owner_z)
+			if candidate == null:
+				continue
+			var ground := _cached_decoration_ground(field, candidate.anchor.x, candidate.anchor.y, ground_scratch)
+			if _region_structure_site_is_valid(field, ground_scratch, candidate, ground.x):
+				accepted.append([candidate, ground.x])
+	return accepted
+
+
+func _region_structure_site_is_valid(field: ChunkTerrainData, ground_scratch: DecorationGroundScratch,
+		candidate: StructureCatalog.Candidate, ground_y: int) -> bool:
+	if ground_y <= VoxelDefsScript.SEA_LEVEL + 2 \
+			or ground_y + StructureCatalogScript.CLEAR_HEIGHT >= VoxelDefsScript.WORLD_HEIGHT:
+		return false
+	var radius: int = StructureCatalogScript.clear_radius(candidate.kind)
+	for offset_z in range(-radius, radius + 1):
+		for offset_x in range(-radius, radius + 1):
+			var sample := _cached_decoration_ground(field, candidate.anchor.x + offset_x,
+				candidate.anchor.y + offset_z, ground_scratch)
+			if sample.x != ground_y or biomes.is_ocean_biome(sample.y) \
+					or sample.y == BiomeCatalogScript.RIVER or sample.y == BiomeCatalogScript.SWAMP:
+				return false
+			# Entrances are the one cave stage allowed to reach the surface. Reject
+			# their small immutable exclusion so a structure foundation never spans
+			# an entrance and full/compact columns retain the same support.
+			if _tree_root_is_near_cave_entrance(candidate.anchor.x + offset_x,
+					candidate.anchor.y + offset_z):
+				return false
+	return true
+
+
+func _clear_structure_volume(data: PackedByteArray, origin_x: int, origin_z: int,
+		anchor: Vector2i, ground_y: int) -> void:
+	for offset_z in range(-StructureCatalogScript.HORIZONTAL_HALO, StructureCatalogScript.HORIZONTAL_HALO + 1):
+		var local_z: int = anchor.y + offset_z - origin_z
+		if local_z < 0 or local_z >= VoxelDefsScript.CHUNK_SIZE:
+			continue
+		for offset_x in range(-StructureCatalogScript.HORIZONTAL_HALO, StructureCatalogScript.HORIZONTAL_HALO + 1):
+			var local_x: int = anchor.x + offset_x - origin_x
+			if local_x < 0 or local_x >= VoxelDefsScript.CHUNK_SIZE:
+				continue
+			for y in range(ground_y + 1, ground_y + StructureCatalogScript.CLEAR_HEIGHT + 1):
+				data[_index(local_x, y, local_z)] = BlockRegistryScript.BLOCK_AIR
+
+
+func _set_structure_block(data: PackedByteArray, origin_x: int, origin_z: int,
+		world_x: int, y: int, world_z: int, block_id: int) -> void:
+	var local_x: int = world_x - origin_x
+	var local_z: int = world_z - origin_z
+	if local_x < 0 or local_x >= VoxelDefsScript.CHUNK_SIZE or local_z < 0 \
+			or local_z >= VoxelDefsScript.CHUNK_SIZE or y < 0 or y >= VoxelDefsScript.WORLD_HEIGHT:
+		return
+	data[_index(local_x, y, local_z)] = block_id
+
+
 func _fill_base_and_surface(data: PackedByteArray, field: ChunkTerrainData) -> int:
 	var max_y := 0
 	for local_z in VoxelDefsScript.CHUNK_SIZE:
@@ -187,10 +418,8 @@ func _fill_base_and_surface(data: PackedByteArray, field: ChunkTerrainData) -> i
 			var surface_y: int = _surface_height(field, field_index)
 			var river: float = field.river[field_index]
 			var is_river: bool = config.world_type != WorldGenConfigScript.WORLD_TYPE_FLAT \
-				and river >= 0.62 and surface_y < VoxelDefsScript.SEA_LEVEL
-			var water_y := -1
-			if surface_y < VoxelDefsScript.SEA_LEVEL:
-				water_y = VoxelDefsScript.SEA_LEVEL
+				and river >= WorldGenConfigScript.RIVER_CHANNEL_THRESHOLD and surface_y < VoxelDefsScript.SEA_LEVEL
+			var water_y := _column_water_y(field, field_index, surface_y)
 			for y in range(surface_y + 1):
 				var block_id := BlockRegistryScript.BLOCK_STONE
 				if y == 0:
@@ -204,6 +433,13 @@ func _fill_base_and_surface(data: PackedByteArray, field: ChunkTerrainData) -> i
 			else:
 				max_y = maxi(max_y, surface_y)
 	return max_y
+
+
+func _column_water_y(field: ChunkTerrainData, field_index: int, surface_y: int) -> int:
+	var inland_water: int = field.inland_water_y[field_index]
+	if inland_water > surface_y:
+		return inland_water
+	return VoxelDefsScript.SEA_LEVEL if surface_y < VoxelDefsScript.SEA_LEVEL else -1
 
 
 func _apply_surface_rule(data: PackedByteArray, field: ChunkTerrainData, local_x: int, local_z: int, surface_y: int, water_y: int, is_river: bool) -> void:
@@ -282,8 +518,9 @@ func _carve_noise_caves(data: PackedByteArray, field: ChunkTerrainData, origin_x
 		for local_x in VoxelDefsScript.CHUNK_SIZE:
 			var field_index := ChunkTerrainDataScript.cell_index(local_x, local_z)
 			var surface_limit := _surface_height(field, field_index) - SURFACE_CLEARANCE - 1
-			if field.river[field_index] >= 0.62:
-				surface_limit = mini(surface_limit, VoxelDefsScript.SEA_LEVEL - 3)
+			if field.river[field_index] >= WorldGenConfigScript.RIVER_CHANNEL_THRESHOLD:
+				surface_limit = mini(surface_limit,
+					VoxelDefsScript.SEA_LEVEL - WorldGenConfigScript.RIVER_UNDERGROUND_CLEARANCE)
 			var last_y := mini(surface_limit, VoxelDefsScript.SEA_LEVEL + 52)
 			if last_y < 4:
 				continue
@@ -476,8 +713,9 @@ func _carve_ellipsoid(data: PackedByteArray, field: ChunkTerrainData, center: Ve
 				continue
 			var field_index := ChunkTerrainDataScript.cell_index(local_x, local_z)
 			var column_last_y := mini(last_y, _surface_height(field, field_index) + (1 if allow_surface else -SURFACE_CLEARANCE - 1))
-			if field.river[field_index] >= 0.62:
-				column_last_y = mini(column_last_y, VoxelDefsScript.SEA_LEVEL - 3)
+			if field.river[field_index] >= WorldGenConfigScript.RIVER_CHANNEL_THRESHOLD:
+				column_last_y = mini(column_last_y,
+					VoxelDefsScript.SEA_LEVEL - WorldGenConfigScript.RIVER_UNDERGROUND_CLEARANCE)
 			for y in range(base_y, column_last_y + 1):
 				var dy := float(y - center.y) / float(radius_y)
 				if horizontal_squared + dy * dy > 1.0:
@@ -493,16 +731,26 @@ func _carve_ellipsoid(data: PackedByteArray, field: ChunkTerrainData, center: Ve
 
 
 func _fill_underground_liquids(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> void:
-	var aquifer_cell_x := WorldGenHashScript.floor_div(origin_x, VoxelDefsScript.CHUNK_SIZE)
-	var aquifer_cell_z := WorldGenHashScript.floor_div(origin_z, VoxelDefsScript.CHUNK_SIZE)
-	var aquifer_hash := WorldGenHashScript.hash_2d(config.seed + 907, aquifer_cell_x, aquifer_cell_z)
-	if aquifer_hash % 11 == 0:
-		var water_level := 15 + (aquifer_hash / 31) % 13
+	if config.worldgen_version <= 10:
+		_fill_legacy_aquifer(data, field, origin_x, origin_z)
+	else:
 		for local_z in VoxelDefsScript.CHUNK_SIZE:
+			var world_z: int = origin_z + local_z
 			for local_x in VoxelDefsScript.CHUNK_SIZE:
+				var world_x: int = origin_x + local_x
+				var water_level: int = _aquifer_water_level_at(world_x, world_z)
+				if water_level < 4:
+					continue
 				var field_index: int = ChunkTerrainDataScript.cell_index(local_x, local_z)
 				var top: int = _surface_height(field, field_index)
-				for y in range(4, mini(water_level, top - SURFACE_CLEARANCE) + 1):
+				# Keep the existing underground clearance and match cave carving's
+				# river ceiling, so an aquifer can never turn a protected channel or
+				# its banks into a generated surface-water source.
+				var protected_ceiling: int = top - SURFACE_CLEARANCE
+				if field.river[field_index] >= WorldGenConfigScript.RIVER_CHANNEL_THRESHOLD:
+					protected_ceiling = mini(protected_ceiling,
+						VoxelDefsScript.SEA_LEVEL - WorldGenConfigScript.RIVER_UNDERGROUND_CLEARANCE)
+				for y in range(4, mini(water_level, protected_ceiling) + 1):
 					var voxel_index: int = _index(local_x, y, local_z)
 					if data[voxel_index] == BlockRegistryScript.BLOCK_AIR:
 						data[voxel_index] = BlockRegistryScript.BLOCK_WATER
@@ -519,6 +767,50 @@ func _fill_underground_liquids(data: PackedByteArray, field: ChunkTerrainData, o
 			_fill_lava_lake(data, field, Vector3i(cell_x * 32 + 5 + lava_hash % 22, 5 + (lava_hash / 7) % 6, cell_z * 32 + 5 + (lava_hash / 43) % 22), 4 + lava_hash % 3)
 
 
+## V1-v10 worlds used one independently-selected aquifer per chunk. Preserve
+## that exact layout because untouched saved chunks regenerate from their
+## persisted worldgen version.
+func _fill_legacy_aquifer(data: PackedByteArray, field: ChunkTerrainData,
+		origin_x: int, origin_z: int) -> void:
+	var aquifer_cell_x := WorldGenHashScript.floor_div(origin_x, VoxelDefsScript.CHUNK_SIZE)
+	var aquifer_cell_z := WorldGenHashScript.floor_div(origin_z, VoxelDefsScript.CHUNK_SIZE)
+	var aquifer_hash := WorldGenHashScript.hash_2d(config.seed + 907, aquifer_cell_x, aquifer_cell_z)
+	if aquifer_hash % 11 != 0:
+		return
+	var water_level := 15 + (aquifer_hash / 31) % 13
+	for local_z in VoxelDefsScript.CHUNK_SIZE:
+		for local_x in VoxelDefsScript.CHUNK_SIZE:
+			var field_index: int = ChunkTerrainDataScript.cell_index(local_x, local_z)
+			var top: int = _surface_height(field, field_index)
+			for y in range(4, mini(water_level, top - SURFACE_CLEARANCE) + 1):
+				var voxel_index: int = _index(local_x, y, local_z)
+				if data[voxel_index] == BlockRegistryScript.BLOCK_AIR:
+					data[voxel_index] = BlockRegistryScript.BLOCK_WATER
+
+
+## Returns the table for the strongest nearby global aquifer region, or -1.
+## The lookup deliberately has no chunk coordinate: regions are independently
+## reproduced by every chunk they overlap, regardless of worker timing/order.
+func _aquifer_water_level_at(world_x: int, world_z: int) -> int:
+	var owner_x: int = WorldGenHashScript.floor_div(world_x, AQUIFER_REGION_CELL_SIZE)
+	var owner_z: int = WorldGenHashScript.floor_div(world_z, AQUIFER_REGION_CELL_SIZE)
+	var water_level := -1
+	for cell_z in range(owner_z - 1, owner_z + 2):
+		for cell_x in range(owner_x - 1, owner_x + 2):
+			var region_hash: int = WorldGenHashScript.hash_2d(config.seed + 907, cell_x, cell_z)
+			if region_hash % 11 != 0:
+				continue
+			var center_x: int = cell_x * AQUIFER_REGION_CELL_SIZE + 8 + region_hash % 32
+			var center_z: int = cell_z * AQUIFER_REGION_CELL_SIZE + 8 + (region_hash / 31) % 32
+			var radius: int = AQUIFER_REGION_MIN_RADIUS + (region_hash / 61) % AQUIFER_REGION_RADIUS_RANGE
+			var dx: int = world_x - center_x
+			var dz: int = world_z - center_z
+			if dx * dx + dz * dz > radius * radius:
+				continue
+			water_level = maxi(water_level, AQUIFER_MIN_WATER_LEVEL + (region_hash / 97) % AQUIFER_WATER_LEVEL_RANGE)
+	return water_level
+
+
 func _fill_lava_lake(data: PackedByteArray, field: ChunkTerrainData, center: Vector3i, radius: int) -> void:
 	for world_z in range(center.z - radius, center.z + radius + 1):
 		var local_z: int = world_z - field.chunk_z * VoxelDefsScript.CHUNK_SIZE
@@ -532,9 +824,31 @@ func _fill_lava_lake(data: PackedByteArray, field: ChunkTerrainData, center: Vec
 			var dz: int = world_z - center.z
 			if dx * dx + dz * dz > radius * radius:
 				continue
-			var voxel_index: int = _index(local_x, center.y, local_z)
-			if data[voxel_index] == BlockRegistryScript.BLOCK_AIR:
-				data[voxel_index] = BlockRegistryScript.BLOCK_LAVA
+			if config.worldgen_version <= 10:
+				var legacy_index: int = _index(local_x, center.y, local_z)
+				if data[legacy_index] == BlockRegistryScript.BLOCK_AIR:
+					data[legacy_index] = BlockRegistryScript.BLOCK_LAVA
+				continue
+			# V11 lakes are shallow supported basins rather than one-voxel discs.
+			# Their surface stays level while the interior gains up to three cells
+			# of depth; a solid floor is mandatory so lava never floats in a cavern.
+			var radial: float = sqrt(float(dx * dx + dz * dz)) / float(maxi(radius, 1))
+			var depth: int = 1 + roundi((1.0 - clampf(radial, 0.0, 1.0)) * 2.0)
+			var bottom_y: int = center.y - depth + 1
+			if bottom_y <= 1:
+				continue
+			var support: int = data[_index(local_x, bottom_y - 1, local_z)]
+			if support == BlockRegistryScript.BLOCK_AIR or support == BlockRegistryScript.BLOCK_WATER:
+				continue
+			var basin_clear := true
+			for y in range(bottom_y, center.y + 1):
+				if data[_index(local_x, y, local_z)] != BlockRegistryScript.BLOCK_AIR:
+					basin_clear = false
+					break
+			if not basin_clear:
+				continue
+			for y in range(bottom_y, center.y + 1):
+				data[_index(local_x, y, local_z)] = BlockRegistryScript.BLOCK_LAVA
 
 
 func _place_ore_veins(data: PackedByteArray, origin_x: int, origin_z: int) -> void:
@@ -580,7 +894,8 @@ func _decorate_caves(data: PackedByteArray, field: ChunkTerrainData, origin_x: i
 				var ceiling_y := _cave_solid_y(data, local_x, y, local_z, 1, 10)
 				if floor_y < 1 and ceiling_y < 1:
 					continue
-				var cave_biome := BiomeCatalogScript.cave_biome_at(config.seed, world_x, y, world_z)
+				var cave_biome := BiomeCatalogScript.cave_biome_at(
+					config.seed, world_x, y, world_z, config.worldgen_version)
 				if floor_y >= 1 and _is_cave_stone(data[_index(local_x, floor_y, local_z)]):
 					if cave_biome != BiomeCatalogScript.CAVE_BIOME_NONE and hash_value % 3 != 0:
 						_paint_cave_floor_patch(data, local_x, floor_y, local_z, cave_biome, hash_value)
@@ -590,7 +905,8 @@ func _decorate_caves(data: PackedByteArray, field: ChunkTerrainData, origin_x: i
 					_decorate_lush_cave(data, local_x, local_z, floor_y, ceiling_y, hash_value)
 				elif cave_biome == BiomeCatalogScript.DEEP_DARK:
 					_decorate_deep_dark(data, local_x, local_z, floor_y, ceiling_y, hash_value)
-				if (floor_y >= 1 or ceiling_y >= 1) and hash_value % 13 == 0:
+				var dripstone_divisor := 3 if cave_biome == BiomeCatalogScript.DRIPSTONE_CAVES else 13
+				if (floor_y >= 1 or ceiling_y >= 1) and hash_value % dripstone_divisor == 0:
 					_stamp_dripstone(data, local_x, local_z, floor_y, ceiling_y, hash_value)
 				if floor_y >= 4 and local_x >= 2 and local_x <= VoxelDefsScript.CHUNK_SIZE - 3 \
 						and local_z >= 2 and local_z <= VoxelDefsScript.CHUNK_SIZE - 3 and hash_value % 41 == 0:
@@ -742,14 +1058,7 @@ func _stamp_geode(data: PackedByteArray, field: ChunkTerrainData, center: Vector
 
 
 func _ore_for_anchor(hash_value: int, y: int) -> int:
-	var roll: int = hash_value % 100
-	if y < 32 and roll < 17:
-		return BlockRegistryScript.BLOCK_GOLD_ORE
-	if y < 58 and roll < 34:
-		return BlockRegistryScript.BLOCK_IRON_ORE
-	if y < 90 and roll < 57:
-		return BlockRegistryScript.BLOCK_COAL_ORE
-	return BlockRegistryScript.BLOCK_AIR
+	return _ore_catalog.select(hash_value, y)
 
 
 func _stamp_ore_segment(data: PackedByteArray, origin_x: int, origin_z: int, start: Vector3i, finish: Vector3i, ore: int) -> void:
@@ -771,14 +1080,15 @@ func _stamp_ore_segment(data: PackedByteArray, origin_x: int, origin_z: int, sta
 						data[_index(local_x, y, local_z)] = ore
 
 
-func _decorate(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int, max_y: int) -> int:
-	# This cache is strictly per populate() call. It avoids repeatedly resolving
-	# expensive immutable sampler queries without introducing worker-shared state.
-	var tree_ground_cache: Dictionary = {}
+func _decorate(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int,
+		max_y: int, ground_scratch: DecorationGroundScratch) -> int:
 	# Dense-biome groves plus the sparse tree lottery are collected once; the
 	# lattice pass below then only has to place non-tree features.
-	for tree in _collect_trees(field, origin_x, origin_z, tree_ground_cache):
-		max_y = maxi(max_y, _stamp_feature(data, origin_x, origin_z, int(tree[1]), int(tree[2]), int(tree[3]), int(tree[0]), int(tree[4])))
+	var trees := _collect_trees(field, origin_x, origin_z, ground_scratch)
+	for tree_index in trees.size():
+		max_y = maxi(max_y, _stamp_feature(data, origin_x, origin_z,
+			trees.world_xs[tree_index], trees.ground_ys[tree_index], trees.world_zs[tree_index],
+			trees.features[tree_index], trees.hashes[tree_index]))
 	var first_x: int = WorldGenHashScript.floor_div(origin_x - FEATURE_HALO, FEATURE_CELL_SIZE)
 	var last_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + FEATURE_HALO, FEATURE_CELL_SIZE)
 	var first_z: int = WorldGenHashScript.floor_div(origin_z - FEATURE_HALO, FEATURE_CELL_SIZE)
@@ -788,7 +1098,7 @@ func _decorate(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, or
 			var hash_value: int = WorldGenHashScript.hash_2d(config.seed + 1103, cell_x, cell_z)
 			var world_x: int = cell_x * FEATURE_CELL_SIZE + 1 + hash_value % (FEATURE_CELL_SIZE - 2)
 			var world_z: int = cell_z * FEATURE_CELL_SIZE + 1 + (hash_value / 31) % (FEATURE_CELL_SIZE - 2)
-			var ground := _cached_decoration_ground(field, world_x, world_z, tree_ground_cache)
+			var ground := _cached_decoration_ground(field, world_x, world_z, ground_scratch)
 			if ground.x < 0:
 				continue
 			var biome: int = ground.y
@@ -805,7 +1115,7 @@ func _decorate(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, or
 			var probability: float = float(entry[2]) * config.decoration_density
 			if WorldGenHashScript.float_01_2d(config.seed + 1129, cell_x, cell_z) >= minf(0.94, probability):
 				continue
-			if not _feature_site_is_valid(field, tree_ground_cache, world_x, ground.x, world_z, flags):
+			if not _feature_site_is_valid(field, ground_scratch, world_x, ground.x, world_z, flags):
 				continue
 			max_y = maxi(max_y, _stamp_feature(data, origin_x, origin_z, world_x, ground.x, world_z, feature, hash_value))
 	max_y = maxi(max_y, _decorate_ground_cover(data, field, origin_x, origin_z))
@@ -818,8 +1128,9 @@ func _decorate(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, or
 ## only considers anchors inside the padded field and skips site-validity
 ## probes: those probes leave the field and cost nearly a full population, and
 ## a distant crown on an occasional rejected site is invisible at that range.
-func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int, ground_cache: Dictionary, lod: bool = false) -> Array:
-	var trees: Array = []
+func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int,
+		ground_scratch: DecorationGroundScratch, lod: bool = false) -> TreeCandidates:
+	var trees := TreeCandidates.new()
 	if config.tree_density <= 0.0 or config.decoration_density <= 0.0:
 		return trees
 	var first_grove_x: int = WorldGenHashScript.floor_div(origin_x - TREE_FOOTPRINT_RADIUS, TREE_CELL_SIZE)
@@ -836,7 +1147,7 @@ func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int, groun
 			var world_z: int = cell_z * TREE_CELL_SIZE + 2 + (anchor_hash / 23) % 2
 			if lod and not ChunkTerrainDataScript.is_valid_local(world_x - origin_x, world_z - origin_z):
 				continue
-			var ground := _cached_decoration_ground(field, world_x, world_z, ground_cache)
+			var ground := _cached_decoration_ground(field, world_x, world_z, ground_scratch)
 			if ground.x < VoxelDefsScript.SEA_LEVEL - 3:
 				continue
 			var decoration_set: int = biomes.decoration_set(ground.y)
@@ -856,12 +1167,12 @@ func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int, groun
 			if decoration_set == BiomeCatalogScript.DECORATION_FOREST and grove_strength > 0.75 and anchor_hash % 3 == 0:
 				feature = DecorationCatalog.FEATURE_ANCIENT_TREE
 			if not lod:
-				if not _feature_site_is_valid(field, ground_cache, world_x, ground.x, world_z, int(entry[3])):
+				if not _feature_site_is_valid(field, ground_scratch, world_x, ground.x, world_z, int(entry[3])):
 					continue
 				if feature != DecorationCatalog.FEATURE_MANGROVE:
-					if not _tree_site_is_safe(field, ground_cache, world_x, ground.x, world_z, _tree_footprint_for(feature), _tree_top_offset_for(feature, feature_hash)):
+					if not _tree_site_is_safe(field, ground_scratch, world_x, ground.x, world_z, _tree_footprint_for(feature), _tree_top_offset_for(feature, feature_hash)):
 						continue
-			trees.append([feature, world_x, ground.x, world_z, feature_hash])
+			trees.append(feature, world_x, ground.x, world_z, feature_hash)
 	# Sparse tree lottery for biomes without grove trees (plains oak, savanna
 	# acacia, cold spruce, ...). Grove biomes use choose_non_tree above, so the
 	# two sources never overlap.
@@ -876,7 +1187,7 @@ func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int, groun
 			var world_z: int = cell_z * FEATURE_CELL_SIZE + 1 + (hash_value / 31) % (FEATURE_CELL_SIZE - 2)
 			if lod and not ChunkTerrainDataScript.is_valid_local(world_x - origin_x, world_z - origin_z):
 				continue
-			var ground := _cached_decoration_ground(field, world_x, world_z, ground_cache)
+			var ground := _cached_decoration_ground(field, world_x, world_z, ground_scratch)
 			if ground.x < 0:
 				continue
 			var decoration_set: int = biomes.decoration_set(ground.y)
@@ -892,12 +1203,12 @@ func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int, groun
 			if WorldGenHashScript.float_01_2d(config.seed + 1129, cell_x, cell_z) >= minf(0.94, probability):
 				continue
 			if not lod:
-				if not _feature_site_is_valid(field, ground_cache, world_x, ground.x, world_z, flags):
+				if not _feature_site_is_valid(field, ground_scratch, world_x, ground.x, world_z, flags):
 					continue
 				if feature != DecorationCatalog.FEATURE_MANGROVE:
-					if not _tree_site_is_safe(field, ground_cache, world_x, ground.x, world_z, _tree_footprint_for(feature), _tree_top_offset_for(feature, hash_value)):
+					if not _tree_site_is_safe(field, ground_scratch, world_x, ground.x, world_z, _tree_footprint_for(feature), _tree_top_offset_for(feature, hash_value)):
 						continue
-			trees.append([feature, world_x, ground.x, world_z, hash_value])
+			trees.append(feature, world_x, ground.x, world_z, hash_value)
 	return trees
 
 
@@ -948,10 +1259,11 @@ func _grove_tree_probability(decoration_set: int, grove_strength: float) -> floa
 
 ## Placement flags are evaluated from immutable terrain samples so every chunk
 ## touching a cross-border feature reaches the same ecological decision.
-func _feature_site_is_valid(field: ChunkTerrainData, ground_cache: Dictionary, world_x: int, ground_y: int, world_z: int, flags: int) -> bool:
+func _feature_site_is_valid(field: ChunkTerrainData, ground_scratch: DecorationGroundScratch,
+		world_x: int, ground_y: int, world_z: int, flags: int) -> bool:
 	if ground_y < 1 or ground_y + 1 >= VoxelDefsScript.WORLD_HEIGHT:
 		return false
-	var site_biome: int = _cached_decoration_ground(field, world_x, world_z, ground_cache).y
+	var site_biome: int = _cached_decoration_ground(field, world_x, world_z, ground_scratch).y
 	if (flags & DecorationCatalog.FLAG_DRY_GROUND) != 0:
 		var surface_block: int = biomes.surface_block(site_biome)
 		if surface_block != BlockRegistryScript.BLOCK_SAND and surface_block != BlockRegistryScript.BLOCK_RED_SAND:
@@ -962,7 +1274,7 @@ func _feature_site_is_valid(field: ChunkTerrainData, ground_cache: Dictionary, w
 			or (site_biome == BiomeCatalogScript.SWAMP and ground_y <= max_water_edge_y)
 		for direction in VoxelDefsScript.DIRS_4:
 			var neighbor := _cached_decoration_ground(
-				field, world_x + direction.x * 2, world_z + direction.y * 2, ground_cache)
+				field, world_x + direction.x * 2, world_z + direction.y * 2, ground_scratch)
 			if neighbor.x < VoxelDefsScript.SEA_LEVEL:
 				near_water = true
 				break
@@ -1003,7 +1315,8 @@ func _tree_top_offset_for(feature: int, hash_value: int) -> int:
 ## a solid top above sea level; the profile probes reject steep/embedded sites,
 ## and the only cave stage allowed to reach that surface (an entrance) is
 ## reproduced below as a shared immutable exclusion.
-func _tree_site_is_safe(field: ChunkTerrainData, ground_cache: Dictionary, world_x: int, ground_y: int, world_z: int, footprint: int, top_offset: int) -> bool:
+func _tree_site_is_safe(field: ChunkTerrainData, ground_scratch: DecorationGroundScratch,
+		world_x: int, ground_y: int, world_z: int, footprint: int, top_offset: int) -> bool:
 	if ground_y <= VoxelDefsScript.SEA_LEVEL + 1 or ground_y + top_offset >= VoxelDefsScript.WORLD_HEIGHT:
 		return false
 	if _tree_root_is_near_cave_entrance(world_x, world_z):
@@ -1012,18 +1325,20 @@ func _tree_site_is_safe(field: ChunkTerrainData, ground_cache: Dictionary, world
 	# the low canopy. Nine fixed probes (root plus this ring) replace the former
 	# 29 point-query footprint scan; results are cached per chunk job.
 	for direction in VoxelDefsScript.DIRS_8:
-		var nearby_ground := _cached_decoration_ground(field, world_x + direction.x * footprint, world_z + direction.y * footprint, ground_cache)
+		var nearby_ground := _cached_decoration_ground(field, world_x + direction.x * footprint,
+			world_z + direction.y * footprint, ground_scratch)
 		if nearby_ground.x < 0 or nearby_ground.x > ground_y + 1 or nearby_ground.x < ground_y - 3:
 			return false
 	return true
 
 
-func _cached_decoration_ground(field: ChunkTerrainData, world_x: int, world_z: int, ground_cache: Dictionary) -> Vector2i:
-	var position := Vector2i(world_x, world_z)
-	if ground_cache.has(position):
-		return ground_cache[position]
+func _cached_decoration_ground(field: ChunkTerrainData, world_x: int, world_z: int,
+		ground_scratch: DecorationGroundScratch) -> Vector2i:
+	var slot := ground_scratch.find_slot(world_x, world_z)
+	if slot >= 0:
+		return ground_scratch.value_at(slot)
 	var ground := _decoration_ground(field, world_x, world_z)
-	ground_cache[position] = ground
+	ground_scratch.insert(world_x, world_z, ground)
 	return ground
 
 
@@ -1130,8 +1445,8 @@ const UNDERWATER_CELL_SIZE: int = 6
 const UNDERWATER_HALO: int = 4
 const UNDERWATER_TUFT_RADIUS: int = 2
 
-func _decorate_underwater(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int, max_y: int) -> int:
-	var ground_cache: Dictionary = {}
+func _decorate_underwater(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int,
+		max_y: int, ground_scratch: DecorationGroundScratch) -> int:
 	var first_x: int = WorldGenHashScript.floor_div(origin_x - UNDERWATER_HALO, UNDERWATER_CELL_SIZE)
 	var last_x: int = WorldGenHashScript.floor_div(origin_x + VoxelDefsScript.CHUNK_SIZE - 1 + UNDERWATER_HALO, UNDERWATER_CELL_SIZE)
 	var first_z: int = WorldGenHashScript.floor_div(origin_z - UNDERWATER_HALO, UNDERWATER_CELL_SIZE)
@@ -1141,7 +1456,7 @@ func _decorate_underwater(data: PackedByteArray, field: ChunkTerrainData, origin
 			var anchor_hash: int = WorldGenHashScript.hash_2d(config.seed + 1423, cell_x, cell_z)
 			var center_x: int = cell_x * UNDERWATER_CELL_SIZE + 2 + anchor_hash % (UNDERWATER_CELL_SIZE - 4)
 			var center_z: int = cell_z * UNDERWATER_CELL_SIZE + 2 + (anchor_hash / 29) % (UNDERWATER_CELL_SIZE - 4)
-			var ground := _cached_decoration_ground(field, center_x, center_z, ground_cache)
+			var ground := _cached_decoration_ground(field, center_x, center_z, ground_scratch)
 			if ground.x < 0 or not biomes.is_ocean_biome(ground.y):
 				continue
 			var set_id: int = biomes.decoration_set(ground.y)
@@ -1157,7 +1472,7 @@ func _decorate_underwater(data: PackedByteArray, field: ChunkTerrainData, origin
 				var tuft_hash: int = WorldGenHashScript.hash_3d(config.seed + 1451, cell_x, tuft_index, cell_z)
 				var world_x: int = center_x + (tuft_hash % (UNDERWATER_TUFT_RADIUS * 2 + 1)) - UNDERWATER_TUFT_RADIUS
 				var world_z: int = center_z + ((tuft_hash / 13) % (UNDERWATER_TUFT_RADIUS * 2 + 1)) - UNDERWATER_TUFT_RADIUS
-				var tuft_ground := _cached_decoration_ground(field, world_x, world_z, ground_cache)
+				var tuft_ground := _cached_decoration_ground(field, world_x, world_z, ground_scratch)
 				if tuft_ground.x < 0 or not biomes.is_ocean_biome(tuft_ground.y):
 					continue
 				var depth: int = VoxelDefsScript.SEA_LEVEL - tuft_ground.x
@@ -1666,7 +1981,7 @@ func _actual_max_y(data: PackedByteArray, hinted_max_y: int) -> int:
 
 func _surface_height(field: ChunkTerrainData, field_index: int) -> int:
 	if config.world_type == WorldGenConfigScript.WORLD_TYPE_FLAT:
-		return 4
+		return FLAT_VOXEL_SURFACE_Y
 	return clampi(roundi(field.final_height[field_index]), 2, VoxelDefsScript.WORLD_HEIGHT - 2)
 
 

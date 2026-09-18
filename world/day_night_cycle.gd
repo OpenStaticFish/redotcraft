@@ -77,6 +77,7 @@ const UNDERWATER_FALLBACK_COLOR := Color(0.06, 0.24, 0.36)
 const CAVE_FOG_ADD := 0.012
 const CAVE_VOLUMETRIC_SCALE := 1.22
 const LUSH_CAVE_LIGHT_FLOOR := 0.48
+const DRIPSTONE_CAVE_LIGHT_FLOOR := 0.34
 const DEEP_DARK_LIGHT_FLOOR := 0.16
 # Lightning is a short additive flash on the sun/ambient and fog; `WeatherSystem`
 # schedules the strikes and `Main` calls trigger_lightning().
@@ -148,6 +149,16 @@ func trigger_lightning(strength: float = 1.0) -> void:
 
 func set_time(hours: float) -> void:
 	time_hours = fposmod(hours, 24.0)
+	_apply()
+
+
+func persistent_state() -> Dictionary:
+	return {"hours": time_hours, "moon_phase": _moon_phase}
+
+
+func restore_persistent_state(state: Dictionary) -> void:
+	time_hours = fposmod(float(state.get("hours", start_hour)), 24.0)
+	_moon_phase = fposmod(float(state.get("moon_phase", 0.5)), 1.0)
 	_apply()
 
 
@@ -230,7 +241,11 @@ func _apply() -> void:
 			_fill_light.light_energy *= lerpf(1.0, UNDERWATER_LIGHT_FLOOR, submerged)
 	if cave_amount > 0.001 and underwater_amount < 0.5:
 		var cave_mix := cave_amount * lerpf(0.65, 1.0, cave_depth)
-		var light_floor := DEEP_DARK_LIGHT_FLOOR if cave_biome == BiomeCatalog.DEEP_DARK else LUSH_CAVE_LIGHT_FLOOR
+		var light_floor := LUSH_CAVE_LIGHT_FLOOR
+		if cave_biome == BiomeCatalog.DEEP_DARK:
+			light_floor = DEEP_DARK_LIGHT_FLOOR
+		elif cave_biome == BiomeCatalog.DRIPSTONE_CAVES:
+			light_floor = DRIPSTONE_CAVE_LIGHT_FLOOR
 		environment.fog_light_color = environment.fog_light_color.lerp(cave_color, cave_mix)
 		environment.fog_density += CAVE_FOG_ADD * cave_mix
 		environment.volumetric_fog_density *= lerpf(1.0, CAVE_VOLUMETRIC_SCALE, cave_mix)
