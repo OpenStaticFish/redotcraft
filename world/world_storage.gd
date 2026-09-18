@@ -30,7 +30,7 @@ var _region_access: Dictionary = {}
 var _access_tick := 0
 var _regions_loaded_from_backup: Dictionary = {}
 var _metadata_loaded_from_backup := false
-var _region_load_error: Error = OK
+var _unreadable_regions: Dictionary = {}
 
 
 func _init(p_root_path: String = DEFAULT_ROOT) -> void:
@@ -106,6 +106,8 @@ func load_chunk_edits(chunk_pos: Vector2i) -> Dictionary:
 func stage_chunk_edits(chunk_pos: Vector2i, edits: Dictionary) -> void:
 	var region_pos := _chunk_region(chunk_pos)
 	_load_region(region_pos)
+	if _unreadable_regions.has(region_pos):
+		return
 	var region: Dictionary = _regions.get(region_pos, {})
 	if edits.is_empty():
 		region.erase(chunk_pos)
@@ -129,8 +131,6 @@ func flush(state: Dictionary = {}) -> Error:
 
 
 func flush_dirty_regions() -> Error:
-	if _region_load_error != OK:
-		return _region_load_error
 	var dirty: Array[Vector2i] = []
 	for key in _dirty_regions:
 		dirty.append(key)
@@ -226,7 +226,8 @@ static func duplicate_world(p_world_id: String, p_root_path: String = DEFAULT_RO
 		source_metadata.get("worldgen", {}), source_metadata.get("state", {}), "", false)
 	if created.is_empty():
 		return {}
-	copy.metadata["name"] = "%s Copy" % String(source_metadata.get("name", "World"))
+	var source_name := String(source_metadata.get("name", "World"))
+	copy.metadata["name"] = "%s Copy" % source_name.substr(0, 59)
 	var source_regions := p_root_path.trim_suffix("/") + "/" + p_world_id + "/regions"
 	var destination_regions := p_root_path.trim_suffix("/") + "/" + copy.world_id + "/regions"
 	if not _copy_directory_contents(source_regions, destination_regions) or copy._write_metadata() != OK:
@@ -367,8 +368,8 @@ func _load_region(region_pos: Vector2i) -> void:
 	_regions[region_pos] = loaded.get("region", {}) if valid else {}
 	if not valid and (FileAccess.file_exists(_region_path(region_pos)) \
 			or FileAccess.file_exists(_region_backup_path(region_pos))):
-		_region_load_error = ERR_FILE_CORRUPT
-		push_warning("World region %s is corrupt or from an unsupported version; saves are blocked to preserve it." % region_pos)
+		_unreadable_regions[region_pos] = true
+		push_warning("World region %s is corrupt or from an unsupported version; edits to this region are blocked to preserve it." % region_pos)
 	_touch_region(region_pos)
 	_evict_clean_regions()
 
@@ -654,7 +655,7 @@ func _reset_cache() -> void:
 	_region_access.clear()
 	_regions_loaded_from_backup.clear()
 	_metadata_loaded_from_backup = false
-	_region_load_error = OK
+	_unreadable_regions.clear()
 	_access_tick = 0
 
 

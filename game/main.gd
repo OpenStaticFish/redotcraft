@@ -23,7 +23,7 @@ const CAVE_FADE_SECONDS := 0.65
 const DYNAMIC_RESOLUTION_INTERVAL := 0.5
 const DYNAMIC_RESOLUTION_SMOOTHING := 0.2
 const SESSION_STATE_VERSION := 1
-const AUTOSAVE_RETRY_SECONDS := 5.0
+const AUTOSAVE_RETRY_SECONDS := 30.0
 
 @onready var world: VoxelWorld = $World
 @onready var player: Player = $Player
@@ -235,7 +235,7 @@ func _process(delta: float) -> void:
 			if _flush_world_save():
 				_autosave_time = 0.0
 			else:
-				_autosave_time = maxf(autosave_interval - AUTOSAVE_RETRY_SECONDS, 0.0)
+				_autosave_time = maxf(autosave_interval - minf(AUTOSAVE_RETRY_SECONDS, autosave_interval), 0.0)
 	if status_time > 0.0:
 		status_time -= delta
 		if status_time <= 0.0:

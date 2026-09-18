@@ -145,8 +145,13 @@ func _verify_round_trip_and_regions() -> void:
 	var rejected := WorldStorage.new(_root)
 	rejected.open_world("verify-world")
 	_expect(rejected.load_chunk_edits(chunk_a).is_empty(), "future region version was not rejected")
-	_expect(rejected.flush_dirty_regions() == ERR_FILE_CORRUPT,
-		"save was not blocked after an unreadable region was discovered")
+	var unreadable_bytes := FileAccess.get_file_as_bytes(negative_region_path)
+	rejected.stage_chunk_edits(chunk_a, edits_a)
+	rejected.stage_chunk_edits(chunk_c, edits_c)
+	_expect(rejected.flush_dirty_regions() == OK,
+		"an unreadable region blocked unrelated region saves")
+	_expect(FileAccess.get_file_as_bytes(negative_region_path) == unreadable_bytes,
+		"an unreadable region was overwritten after staging an edit")
 
 	# Metadata also recovers from a syntactically valid but structurally corrupt primary.
 	var metadata_path := _root + "/verify-world/metadata.json"
@@ -213,6 +218,9 @@ func _verify_world_management() -> void:
 	var renamed := WorldStorage.new(_root).open_world("manage-world")
 	_expect(String(renamed.get("name", "")) == "Managed World", "renamed title did not persist")
 	_expect(not WorldStorage.rename_world("manage-world", "", _root), "empty world name was accepted")
+	var maximum_name := "W".repeat(64)
+	_expect(WorldStorage.rename_world("manage-world", maximum_name, _root),
+		"maximum-length world name was rejected")
 	_expect(WorldStorage.new(_root).create_world({"seed": 1}, {}, "manage-world").is_empty(),
 		"world creation overwrote an existing requested id")
 
@@ -226,7 +234,8 @@ func _verify_world_management() -> void:
 	_expect(duplicate_storage.load_chunk_edits(Vector2i.ZERO) == {
 		Vector3i(1, 2, 3): BlockRegistry.BLOCK_STONE,
 	}, "duplicated world lost region edits")
-	_expect(String(duplicated.get("name", "")).ends_with(" Copy"), "duplicated world name was not distinguished")
+	_expect(String(duplicated.get("name", "")) == "%s Copy" % maximum_name.substr(0, 59),
+		"duplicated world name did not stay within the rename limit")
 
 	var backup_root := _root + "_backups"
 	var backup_path := WorldStorage.backup_world("manage-world", _root, backup_root)

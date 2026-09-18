@@ -96,7 +96,7 @@ func restore_persistent_state(state: Dictionary) -> bool:
 	var restored := Vector3(float(position_value[0]), float(position_value[1]), float(position_value[2]))
 	if not is_finite(restored.x) or not is_finite(restored.y) or not is_finite(restored.z):
 		return false
-	if restored.y < 0.0 or restored.y >= float(VoxelDefs.WORLD_HEIGHT):
+	if restored.y < 0.0:
 		return false
 	global_position = restored
 	rotation.y = float(state.get("yaw", 0.0))
@@ -108,7 +108,7 @@ func restore_persistent_state(state: Dictionary) -> bool:
 	if typeof(spawn_value) == TYPE_ARRAY and spawn_value.size() == 3:
 		var restored_spawn := Vector3(float(spawn_value[0]), float(spawn_value[1]), float(spawn_value[2]))
 		if is_finite(restored_spawn.x) and is_finite(restored_spawn.y) and is_finite(restored_spawn.z) \
-				and restored_spawn.y >= 0.0 and restored_spawn.y < float(VoxelDefs.WORLD_HEIGHT):
+				and restored_spawn.y >= 0.0:
 			spawn_position = restored_spawn
 		else:
 			spawn_position = restored

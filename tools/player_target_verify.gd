@@ -91,6 +91,14 @@ func _ready() -> void:
 	add_child(flight_player)
 	flight_player.set_physics_process(false)
 	flight_player.world = world
+	if not flight_player.restore_persistent_state({
+		"position": [15.75, 210.0, 8.0],
+		"spawn": [15.75, 205.0, 8.0],
+		"flying": true,
+	}) or not is_equal_approx(flight_player.global_position.y, 210.0) \
+			or not is_equal_approx(flight_player.spawn_position.y, 205.0):
+		push_error("player_target_verify: legitimate above-ceiling flight state was rejected")
+		failed = true
 	flight_player.flying = true
 	flight_player.global_position = Vector3(15.75, 70.0, 8.0)
 	flight_player.velocity = Vector3(10.0, -10.0, 0.0)

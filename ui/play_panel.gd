@@ -573,7 +573,7 @@ func _confirm_rename() -> void:
 	var id := _selected_world_id
 	var name := _rename_field.text.strip_edges()
 	if not WorldStorage.rename_world(id, name, _library_root):
-		_operation_status.text = "Rename failed. Use 1-64 visible characters."
+		_set_operation_status("Rename failed. Use 1-64 visible characters.", true)
 		_rename_field.grab_focus()
 		return
 	if GameConfig.active_world_id == id:
@@ -581,7 +581,7 @@ func _confirm_rename() -> void:
 	_editing_rename = false
 	_refresh_load_view()
 	_select_world(id)
-	_operation_status.text = "Renamed to %s." % name
+	_set_operation_status("Renamed to %s." % name)
 
 
 func _duplicate_selected() -> void:
@@ -589,20 +589,22 @@ func _duplicate_selected() -> void:
 		return
 	var duplicated := WorldStorage.duplicate_world(_selected_world_id, _library_root)
 	if duplicated.is_empty():
-		_operation_status.text = "Could not duplicate this world."
+		_set_operation_status("Could not duplicate this world.", true)
 		return
 	var copy_id := String(duplicated.get("id", ""))
 	_refresh_load_view()
 	_select_world(copy_id)
-	_operation_status.text = "Created %s." % _display_name(duplicated)
+	_set_operation_status("Created %s." % _display_name(duplicated))
 
 
 func _backup_selected() -> void:
 	if _confirming_delete or _editing_rename or _selected_world_id.is_empty():
 		return
 	var backup_path := WorldStorage.backup_world(_selected_world_id, _library_root)
-	_operation_status.text = "Backup saved to %s." % backup_path if not backup_path.is_empty() \
-		else "Could not back up this world."
+	if backup_path.is_empty():
+		_set_operation_status("Could not back up this world.", true)
+	else:
+		_set_operation_status("Backup saved to %s." % backup_path)
 	_backup_button.grab_focus()
 
 
@@ -749,6 +751,11 @@ func _set_management_enabled(enabled: bool) -> void:
 	_rename_button.tooltip_text = "Rename the selected world" if enabled else hint
 	_duplicate_button.tooltip_text = "Create an independent copy" if enabled else hint
 	_backup_button.tooltip_text = "Copy the save to user://world_backups" if enabled else hint
+
+
+func _set_operation_status(text: String, failed: bool = false) -> void:
+	_operation_status.text = text
+	_operation_status.add_theme_color_override("font_color", UITheme.WARN if failed else UITheme.CYAN)
 
 
 func _style_row_label(label: Label, text: String) -> void:
