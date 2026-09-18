@@ -13,7 +13,7 @@ signal setting_changed(key: String, value: Variant)
 
 const RENDER_DISTANCE_MAX := 32.0
 const RENDER_DISTANCE_EXTREME_MAX := 100.0
-const EXTREME_WARNING := "Warning: extreme render distance can take minutes to load and use several GB of memory."
+const EXTREME_WARNING := "Warning: extreme render distance can take minutes to load and use several GB of memory. Full Detail generates every selected chunk; choose Balanced terrain detail to reduce memory and loading time."
 
 @onready var _panel: PanelContainer = $Center/Panel
 @onready var _heading: Label = $Center/Panel/Box/Heading
@@ -112,6 +112,7 @@ func _category_definition() -> Dictionary:
 				"advanced": false,
 				"rows": [
 					{"type": "render_distance", "label": "Render Distance", "key": "render_distance", "min": 4.0, "max": RENDER_DISTANCE_MAX, "step": 1.0, "format": "%d chunks"},
+					{"type": "option", "label": "Terrain Detail", "key": "lod_mode", "options": GameConfig.LOD_MODE_NAMES, "tooltip": "Full Detail generates real chunks through the selected distance. Balanced uses compact terrain beyond 8 chunks."},
 					{"type": "slider", "label": "Field of View", "key": "fov", "min": 60.0, "max": 100.0, "step": 1.0, "format": "%d"},
 					{"type": "check", "label": "Fullscreen", "key": "fullscreen", "window": true},
 					{"type": "option", "label": "UI Scale", "key": "ui_scale", "options": GameConfig.UI_SCALE_NAMES, "values": GameConfig.UI_SCALE_VALUES, "tooltip": "Scales the HUD and menus without changing the 3D render resolution."},

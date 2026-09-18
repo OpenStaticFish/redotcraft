@@ -3,16 +3,18 @@
 [ext_resource type="Script" path="res://ui/play_panel.gd" id="1_play"]
 
 [node name="PlayPanel" type="Control"]
+visible = false
 layout_mode = 3
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-visible = false
 script = ExtResource("1_play")
 
 [node name="Dim" type="ColorRect" parent="."]
 layout_mode = 1
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
@@ -21,14 +23,15 @@ color = Color(0, 0.02, 0.03, 0.62)
 
 [node name="Center" type="CenterContainer" parent="."]
 layout_mode = 1
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
 [node name="Panel" type="PanelContainer" parent="Center"]
-layout_mode = 2
 custom_minimum_size = Vector2(560, 0)
+layout_mode = 2
 
 [node name="Box" type="VBoxContainer" parent="Center/Panel"]
 layout_mode = 2
@@ -36,18 +39,46 @@ theme_override_constants/separation = 14
 
 [node name="Heading" type="Label" parent="Center/Panel/Box"]
 layout_mode = 2
-theme_override_colors/font_color = Color(0.545, 0.827, 0.78, 1)
 theme_override_font_sizes/font_size = 30
-text = "CREATE WORLD"
+theme_override_colors/font_color = Color(0.545, 0.827, 0.78, 1)
+text = "WORLDS"
 horizontal_alignment = 1
+
+[node name="LandingBox" type="VBoxContainer" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ContinueButton" type="Button" parent="Center/Panel/Box/LandingBox"]
+layout_mode = 2
+text = "Continue"
+
+[node name="NewWorldButton" type="Button" parent="Center/Panel/Box/LandingBox"]
+layout_mode = 2
+text = "New World"
+
+[node name="LoadWorldButton" type="Button" parent="Center/Panel/Box/LandingBox"]
+layout_mode = 2
+text = "Load World"
+
+[node name="LandingHint" type="Label" parent="Center/Panel/Box/LandingBox"]
+layout_mode = 2
+text = "No saved worlds yet"
+
+[node name="LandingFooter" type="HBoxContainer" parent="Center/Panel/Box/LandingBox"]
+layout_mode = 2
+alignment = 2
+
+[node name="LandingBackButton" type="Button" parent="Center/Panel/Box/LandingBox/LandingFooter"]
+layout_mode = 2
+text = "Back"
 
 [node name="TypeRow" type="HBoxContainer" parent="Center/Panel/Box"]
 layout_mode = 2
 theme_override_constants/separation = 14
 
 [node name="TypeLabel" type="Label" parent="Center/Panel/Box/TypeRow"]
-layout_mode = 2
 custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
 
 [node name="TypeOption" type="OptionButton" parent="Center/Panel/Box/TypeRow"]
 layout_mode = 2
@@ -58,8 +89,8 @@ layout_mode = 2
 theme_override_constants/separation = 14
 
 [node name="SeedLabel" type="Label" parent="Center/Panel/Box/SeedRow"]
-layout_mode = 2
 custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
 
 [node name="SeedField" type="LineEdit" parent="Center/Panel/Box/SeedRow"]
 layout_mode = 2
@@ -72,6 +103,80 @@ text = "Import"
 [node name="RandomSeedButton" type="Button" parent="Center/Panel/Box/SeedRow"]
 layout_mode = 2
 text = "Random"
+
+[node name="LoadBox" type="VBoxContainer" parent="Center/Panel/Box"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="LoadScroll" type="ScrollContainer" parent="Center/Panel/Box/LoadBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="WorldList" type="VBoxContainer" parent="Center/Panel/Box/LoadBox/LoadScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="EmptyState" type="VBoxContainer" parent="Center/Panel/Box/LoadBox/LoadScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="EmptyTitle" type="Label" parent="Center/Panel/Box/LoadBox/LoadScroll/EmptyState"]
+layout_mode = 2
+text = "No saved worlds yet"
+
+[node name="EmptyBody" type="Label" parent="Center/Panel/Box/LoadBox/LoadScroll/EmptyState"]
+layout_mode = 2
+text = "Worlds you create are stored on this device and appear here."
+
+[node name="EmptySpacer" type="Control" parent="Center/Panel/Box/LoadBox/LoadScroll/EmptyState"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
+
+[node name="EmptyCreateButton" type="Button" parent="Center/Panel/Box/LoadBox/LoadScroll/EmptyState"]
+layout_mode = 2
+text = "Create New World"
+
+[node name="ConfirmRow" type="HBoxContainer" parent="Center/Panel/Box/LoadBox"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ConfirmLabel" type="Label" parent="Center/Panel/Box/LoadBox/ConfirmRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Delete this world?"
+
+[node name="CancelDeleteButton" type="Button" parent="Center/Panel/Box/LoadBox/ConfirmRow"]
+layout_mode = 2
+text = "Cancel"
+
+[node name="ConfirmDeleteButton" type="Button" parent="Center/Panel/Box/LoadBox/ConfirmRow"]
+layout_mode = 2
+text = "Delete"
+
+[node name="LoadFooter" type="HBoxContainer" parent="Center/Panel/Box/LoadBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 2
+
+[node name="DeleteButton" type="Button" parent="Center/Panel/Box/LoadBox/LoadFooter"]
+layout_mode = 2
+text = "Delete..."
+
+[node name="LoadBackButton" type="Button" parent="Center/Panel/Box/LoadBox/LoadFooter"]
+layout_mode = 2
+text = "Back"
+
+[node name="LoadButton" type="Button" parent="Center/Panel/Box/LoadBox/LoadFooter"]
+layout_mode = 2
+text = "Load World"
+
+[node name="DeleteAllButton" type="Button" parent="Center/Panel/Box/LoadBox/LoadFooter"]
+layout_mode = 2
+text = "Delete All…"
 
 [node name="Footer" type="HBoxContainer" parent="Center/Panel/Box"]
 layout_mode = 2

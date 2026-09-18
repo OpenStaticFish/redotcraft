@@ -74,6 +74,46 @@ func set_selected_block(block_id: int) -> void:
 	_update_held_block()
 
 
+func persistent_state() -> Dictionary:
+	# During scene shutdown children can already be detached when Main performs
+	# its final save. A detached Node3D has no global transform; Player is a
+	# direct child of the identity gameplay root, so its local position is the
+	# correct fallback and avoids get_global_transform() shutdown errors.
+	var saved_position := global_position if is_inside_tree() else position
+	return {
+		"position": [saved_position.x, saved_position.y, saved_position.z],
+		"yaw": rotation.y,
+		"pitch": head.rotation.x if head != null else 0.0,
+		"flying": flying,
+		"spawn": [spawn_position.x, spawn_position.y, spawn_position.z],
+	}
+
+
+func restore_persistent_state(state: Dictionary) -> bool:
+	var position_value: Variant = state.get("position", [])
+	if typeof(position_value) != TYPE_ARRAY or position_value.size() != 3:
+		return false
+	var restored := Vector3(float(position_value[0]), float(position_value[1]), float(position_value[2]))
+	if not is_finite(restored.x) or not is_finite(restored.y) or not is_finite(restored.z):
+		return false
+	global_position = restored
+	rotation.y = float(state.get("yaw", 0.0))
+	if head != null:
+		head.rotation.x = clampf(float(state.get("pitch", 0.0)), -pitch_limit, pitch_limit)
+	flying = bool(state.get("flying", false))
+	velocity = Vector3.ZERO
+	var spawn_value: Variant = state.get("spawn", [])
+	if typeof(spawn_value) == TYPE_ARRAY and spawn_value.size() == 3:
+		var restored_spawn := Vector3(float(spawn_value[0]), float(spawn_value[1]), float(spawn_value[2]))
+		if is_finite(restored_spawn.x) and is_finite(restored_spawn.y) and is_finite(restored_spawn.z):
+			spawn_position = restored_spawn
+		else:
+			spawn_position = restored
+	else:
+		spawn_position = restored
+	return true
+
+
 ## Detached photo-mode camera: freeze player simulation and hide the targeting
 ## highlight and the first-person held block so the composition cannot be
 ## disturbed or the hand model caught in the shot.
@@ -126,6 +166,17 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if global_position.y < FALL_RESET_Y:
+		global_position = spawn_position
+		velocity = Vector3.ZERO
+	_update_target()
+	# Never simulate movement in a chunk whose collision has not committed yet.
+	# Extreme streaming and boosted flight can otherwise outrun the nearest-first
+	# worker queue; a flying player could then descend straight through visible
+	# terrain while the authoritative collision shape was still being built.
+	if world != null and not world.is_collision_ready_at(global_position):
+		velocity = Vector3.ZERO
+		return
 	var input_vector := Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
 	var direction := Vector3(input_vector.x, 0.0, input_vector.y).rotated(Vector3.UP, rotation.y)
 	if direction.length_squared() > 1.0:
@@ -151,14 +202,35 @@ func _physics_process(delta: float) -> void:
 			velocity.y = JUMP_VELOCITY
 		else:
 			velocity.y = -0.5
+	if world != null:
+		var intended_position := global_position + velocity * delta
+		var loaded_fraction := world.loaded_motion_fraction(global_position, intended_position)
+		if loaded_fraction < 1.0:
+			var x_fraction := world.loaded_motion_fraction(global_position,
+				global_position + Vector3(velocity.x * delta, 0.0, 0.0))
+			var z_fraction := world.loaded_motion_fraction(global_position,
+				global_position + Vector3(0.0, 0.0, velocity.z * delta))
+			if x_fraction < 1.0 or z_fraction < 1.0:
+				velocity.x *= x_fraction
+				velocity.z *= z_fraction
+			# At an exact corner both cardinal chunks can be ready while the
+			# diagonal is not. Keep the dominant axis so movement slides along
+			# the loaded edge instead of entering the missing diagonal chunk.
+			elif absf(velocity.x) >= absf(velocity.z):
+				velocity.z = 0.0
+			else:
+				velocity.x = 0.0
+		# Entering a rendered chunk is allowed even if its approach collision
+		# rebuild is one frame behind, but neither gravity nor flight descent may
+		# spend that frame crossing its uncommitted floor. The next tick pauses all
+		# movement until collision is ready.
+		var constrained_position := global_position + velocity * delta
+		if velocity.y < 0.0 and not world.is_collision_ready_at(constrained_position):
+			velocity.y = 0.0
 	move_and_slide()
-	if global_position.y < FALL_RESET_Y:
-		global_position = spawn_position
-		velocity = Vector3.ZERO
 	if camera:
 		var target_fov := base_fov + SPRINT_FOV_BOOST if sprinting and direction.length_squared() > 0.0 else base_fov
 		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * FOV_LERP_SPEED, 0.0, 1.0))
-	_update_target()
 	_update_footsteps(delta)
 
 

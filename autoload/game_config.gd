@@ -4,6 +4,7 @@ const SETTINGS_PATH := "user://settings.cfg"
 
 const DEFAULT_SETTINGS := {
 	"render_distance": 10,
+	"lod_mode": 0,
 	"extreme_render_distance": false,
 	"fov": 76.0,
 	"mouse_sensitivity": 0.0022,
@@ -44,6 +45,9 @@ const DYNAMIC_RESOLUTION_MIN_SCALE := 0.5
 const DYNAMIC_RESOLUTION_STEP := 0.05
 const DYNAMIC_RESOLUTION_DOWN_MARGIN := 1.05
 const DYNAMIC_RESOLUTION_UP_MARGIN := 0.85
+const LOD_MODE_FULL := 0
+const LOD_MODE_BALANCED := 1
+const LOD_MODE_NAMES := ["Full Detail", "Balanced LOD"]
 
 # Rebindable input actions in menu order. The InputMap's non-`ui_*` actions are
 # the source of truth: anything missing from this table still gets a row with a
@@ -163,25 +167,13 @@ const GRAPHICS_PRESETS := {
 	},
 }
 
-const DEFAULT_WORLD := {
-	"seed": 0,
-	"world_type": 0,
-	"terrain_scale": 1.0,
-	"tree_density": 1.0,
-	"worldgen_version": 8,
-	"macro_scale": 384.0,
-	"biome_scale": 3072.0,
-	"river_density": 1.0,
-	"erosion_strength": 0.55,
-	"regional_erosion": 0.5,
-	"hydraulic_erosion": false,
-	"cave_density": 1.0,
-	"decoration_density": 1.0,
-}
+var DEFAULT_WORLD: Dictionary = WorldGenConfig.default_dictionary()
 
 var settings: Dictionary = DEFAULT_SETTINGS.duplicate()
 var world: Dictionary = DEFAULT_WORLD.duplicate()
 var graphics: Dictionary = {}
+var active_world_id := ""
+var active_world_metadata: Dictionary = {}
 
 
 func _ready() -> void:
@@ -202,6 +194,24 @@ func reset_world_defaults() -> void:
 func apply_world(config: Dictionary) -> void:
 	for key in DEFAULT_WORLD.keys():
 		world[key] = config.get(key, DEFAULT_WORLD[key])
+
+
+func activate_world(metadata: Dictionary) -> bool:
+	if metadata.is_empty() or typeof(metadata.get("worldgen", null)) != TYPE_DICTIONARY:
+		return false
+	active_world_id = String(metadata.get("id", ""))
+	active_world_metadata = metadata.duplicate(true)
+	apply_world(metadata["worldgen"])
+	return not active_world_id.is_empty()
+
+
+func clear_active_world() -> void:
+	active_world_id = ""
+	active_world_metadata.clear()
+
+
+func has_active_world() -> bool:
+	return not active_world_id.is_empty()
 
 
 func get_setting(key: String) -> Variant:
@@ -450,6 +460,10 @@ func is_graphics_custom() -> bool:
 
 func get_render_distance() -> int:
 	return int(settings.get("render_distance", DEFAULT_SETTINGS["render_distance"]))
+
+
+func get_lod_mode() -> int:
+	return clampi(int(settings.get("lod_mode", LOD_MODE_FULL)), LOD_MODE_FULL, LOD_MODE_BALANCED)
 
 
 func get_ui_scale() -> float:

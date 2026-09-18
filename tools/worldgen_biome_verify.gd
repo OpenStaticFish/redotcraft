@@ -21,6 +21,9 @@ func _init() -> void:
 		"biome_scale": 3072.0,
 		"tree_density": 1.0,
 		"decoration_density": 1.0,
+		# This verifier isolates biome vegetation; POI cobblestone is covered by
+		# worldgen_poi_verify and is not procedural debris.
+		"region_structures": false,
 	})
 	var samples := {}
 	var secondary_samples := {}

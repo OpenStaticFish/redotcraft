@@ -93,6 +93,17 @@ func set_state(new_state: State) -> void:
 	weather_changed.emit(state)
 
 
+func persistent_state() -> Dictionary:
+	return {"state": int(state)}
+
+
+func restore_persistent_state(value: Dictionary) -> void:
+	set_state(clampi(int(value.get("state", State.SUNNY)), State.SUNNY, State.RAIN) as State)
+	rain_amount = 1.0 if state == State.RAIN else 0.0
+	if _day_night != null:
+		_day_night.set_weather_dim(rain_amount)
+
+
 func toggle() -> void:
 	set_state(State.SUNNY if state == State.RAIN else State.RAIN)
 

@@ -54,6 +54,7 @@ func _ready() -> void:
 	_play_panel.closed.connect(_on_panel_closed)
 	_play_panel.advanced_requested.connect(_on_play_advanced)
 	_play_panel.create_requested.connect(_on_create_world)
+	_play_panel.load_requested.connect(_on_load_world)
 	_settings_menu.closed.connect(_on_panel_closed)
 	_world_gen_panel.closed.connect(_on_world_gen_closed)
 	$Center/Column/PlayButton.grab_focus()
@@ -254,7 +255,22 @@ func _on_create_world(seed: int, world_type: int) -> void:
 	config["seed"] = seed
 	config["world_type"] = world_type
 	GameConfig.apply_world(config)
+	# Main creates the durable world only after the gameplay scene loads, so a
+	# failed scene change cannot leave an empty world in the library.
+	GameConfig.clear_active_world()
 	_start_game()
+
+
+func _on_load_world(world_id: String) -> void:
+	var storage := WorldStorage.new()
+	var metadata := storage.open_world(world_id)
+	if metadata.is_empty():
+		# Removed on disk, unreadable, or from a newer build: the play panel
+		# refreshes its lists so the stale entry disappears.
+		_play_panel.notify_load_failed()
+		return
+	if GameConfig.activate_world(metadata):
+		_start_game()
 
 
 func _start_game() -> void:

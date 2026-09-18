@@ -22,6 +22,7 @@ const UNDERWATER_DEEP_COLOR := Color(0.02, 0.08, 0.16)
 const CAVE_FADE_SECONDS := 0.65
 const DYNAMIC_RESOLUTION_INTERVAL := 0.5
 const DYNAMIC_RESOLUTION_SMOOTHING := 0.2
+const AUTOSAVE_INTERVAL := 30.0
 
 @onready var world: VoxelWorld = $World
 @onready var player: Player = $Player
@@ -67,12 +68,16 @@ var _hotbar_icon_size := SLOT_ICON
 var _frame_time := 1.0 / 60.0
 var _dynamic_resolution_timer := 0.0
 var _dynamic_resolution_active := false
+var _world_storage: WorldStorage
+var _autosave_time := 0.0
 
 
 func _ready() -> void:
+	var saved_state := _prepare_world_storage()
 	UITheme.apply(_hud_root)
 	_style_hud()
 	_apply_config()
+	world.set_edit_store(_world_storage)
 	_build_hotbar()
 	GameConfig.interface_scale_changed.connect(_apply_hud_text_layout)
 	_build_crosshair()
@@ -81,13 +86,25 @@ func _ready() -> void:
 	_inventory_overlay.opened.connect(_on_inventory_opened)
 	_inventory_overlay.closed.connect(_on_inventory_closed)
 	_inventory_overlay.time_selected.connect(_on_inventory_time_selected)
-	var spawn := world.get_spawn_position()
-	player.global_position = spawn
-	player.spawn_position = spawn
-	world.setup_player(player)
-	spawn = world.find_safe_spawn(spawn)
-	player.global_position = spawn
-	player.spawn_position = spawn
+	var resumed := not saved_state.is_empty() and player.restore_persistent_state(saved_state.get("player", {}))
+	if resumed:
+		world.setup_player(player, true)
+		# Recover saves written after the player had already entered unloaded or
+		# incomplete terrain. The synchronous ring above makes this validation
+		# authoritative without relocating valid cave or airborne saves.
+		if not world.is_player_volume_clear(player.global_position):
+			var recovered_spawn := world.find_safe_spawn(player.global_position)
+			player.global_position = recovered_spawn
+			player.spawn_position = recovered_spawn
+			player.velocity = Vector3.ZERO
+	else:
+		var spawn := world.get_spawn_position()
+		player.global_position = spawn
+		player.spawn_position = spawn
+		world.setup_player(player)
+		spawn = world.find_safe_spawn(spawn)
+		player.global_position = spawn
+		player.spawn_position = spawn
 	player.setup_world(world)
 	_worldgen_overlay = WorldgenOverlayScene.instantiate() as WorldgenOverlay
 	add_child(_worldgen_overlay)
@@ -106,6 +123,7 @@ func _ready() -> void:
 	_weather.lightning.connect(_on_lightning)
 	_weather.ambience_changed.connect(_on_weather_ambience)
 	_inventory_overlay.weather_toggled.connect(_on_weather_toggled)
+	_restore_session_state(saved_state)
 	player.set_selected_block(HOTBAR[selected_slot])
 	_update_inventory_display()
 	_show_control_hint()
@@ -176,6 +194,7 @@ func _get_shadow_capture_state() -> Dictionary:
 
 
 func _exit_tree() -> void:
+	_flush_world_save()
 	get_tree().paused = false
 
 
@@ -207,6 +226,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	if not get_tree().paused:
+		_autosave_time += delta
+		if _autosave_time >= AUTOSAVE_INTERVAL:
+			_autosave_time = 0.0
+			_flush_world_save()
 	if status_time > 0.0:
 		status_time -= delta
 		if status_time <= 0.0:
@@ -297,9 +321,78 @@ func _update_frame_pacing(delta: float) -> void:
 
 func _apply_config() -> void:
 	var render_distance := GameConfig.get_render_distance()
-	world.configure(GameConfig.world, render_distance)
+	world.configure(GameConfig.world, render_distance, GameConfig.get_lod_mode())
 	_apply_graphics()
 	_update_camera_far(render_distance)
+
+
+func _prepare_world_storage() -> Dictionary:
+	_world_storage = WorldStorage.new()
+	var metadata: Dictionary = {}
+	if GameConfig.has_active_world():
+		metadata = _world_storage.open_world(GameConfig.active_world_id)
+	if metadata.is_empty():
+		metadata = _world_storage.create_world(GameConfig.world)
+	if metadata.is_empty():
+		push_warning("World storage is unavailable; continuing without persistence")
+		_world_storage = null
+		GameConfig.clear_active_world()
+		return {}
+	GameConfig.activate_world(metadata)
+	return (metadata.get("state", {}) as Dictionary).duplicate(true)
+
+
+func _restore_session_state(state: Dictionary) -> void:
+	if state.is_empty():
+		return
+	var saved_inventory: Variant = state.get("inventory", [])
+	if typeof(saved_inventory) == TYPE_ARRAY:
+		var restored_inventory: Dictionary = {}
+		for entry in saved_inventory:
+			if typeof(entry) != TYPE_ARRAY or entry.size() != 2:
+				continue
+			var item_id := int(entry[0])
+			var count := clampi(int(entry[1]), 0, 9999)
+			if item_id > 0:
+				restored_inventory[item_id] = count
+		inventory = restored_inventory
+	selected_slot = clampi(int(state.get("selected_slot", 0)), 0, HOTBAR.size() - 1)
+	var day_state: Variant = state.get("day_night", {})
+	if typeof(day_state) == TYPE_DICTIONARY:
+		_day_night.restore_persistent_state(day_state)
+	var weather_state: Variant = state.get("weather", {})
+	if typeof(weather_state) == TYPE_DICTIONARY:
+		_weather.restore_persistent_state(weather_state)
+
+
+func _build_persistent_state() -> Dictionary:
+	var inventory_rows: Array = []
+	var item_ids: Array[int] = []
+	for key in inventory:
+		item_ids.append(int(key))
+	item_ids.sort()
+	for item_id in item_ids:
+		inventory_rows.append([item_id, int(inventory[item_id])])
+	return {
+		"player": player.persistent_state(),
+		"inventory": inventory_rows,
+		"selected_slot": selected_slot,
+		"day_night": _day_night.persistent_state(),
+		"weather": _weather.persistent_state(),
+	}
+
+
+func _flush_world_save() -> void:
+	if _world_storage == null or player == null:
+		return
+	var save_error := world.flush_edit_store()
+	if save_error == OK:
+		save_error = _world_storage.flush(_build_persistent_state())
+	if save_error == OK:
+		GameConfig.active_world_metadata = _world_storage.metadata.duplicate(true)
+	else:
+		push_warning("World save failed with error %d" % save_error)
+		set_status("Save failed - progress remains in memory")
 
 
 func _apply_graphics() -> void:
@@ -687,6 +780,8 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 			var render_distance := int(value)
 			world.set_render_distance(render_distance)
 			_update_camera_far(render_distance)
+		"lod_mode":
+			world.set_lod_mode(int(value))
 		"fov":
 			player.set_fov(float(value))
 		"graphics_preset":
@@ -698,11 +793,14 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 
 
 func _on_new_world() -> void:
+	_flush_world_save()
+	GameConfig.clear_active_world()
 	get_tree().paused = false
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 
 func _on_quit_game() -> void:
+	_flush_world_save()
 	GameConfig.save_settings()
 	get_tree().quit()
 

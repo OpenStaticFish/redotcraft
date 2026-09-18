@@ -38,19 +38,22 @@ static func dim_in(dim: ColorRect, duration: float = 0.16) -> void:
 ## Staggered entrance for a column of controls (menu buttons).
 static func stagger_in(controls: Array, step: float = 0.055, duration: float = 0.26) -> void:
 	for control in controls:
-		if control is Control:
+		if is_instance_valid(control) and control is Control:
 			(control as Control).modulate.a = 0.0
 	var tree: SceneTree = null
 	for control in controls:
-		if control is Control and (control as Control).get_tree() != null:
+		if is_instance_valid(control) and control is Control and (control as Control).get_tree() != null:
 			tree = (control as Control).get_tree()
 			break
 	if tree == null:
 		return
 	await tree.process_frame
 	for index in controls.size():
-		var control: Control = controls[index]
-		if control == null or not is_instance_valid(control) or not control.visible:
+		var candidate: Variant = controls[index]
+		if candidate == null or not is_instance_valid(candidate) or not (candidate is Control):
+			continue
+		var control := candidate as Control
+		if not control.visible:
 			continue
 		control.pivot_offset = control.size * 0.5
 		control.scale = Vector2(0.985, 0.985)

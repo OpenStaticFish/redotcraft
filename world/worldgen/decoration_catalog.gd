@@ -56,7 +56,7 @@ var _sets: Dictionary = {}
 var _underwater_sets: Dictionary = {}
 
 
-func _init() -> void:
+func _init(worldgen_version: int = 9) -> void:
 	# Entries are [feature type, relative weight, independent occurrence chance,
 	# placement flags]. The occurrence chance is multiplied by world settings.
 	_sets = {
@@ -77,10 +77,9 @@ func _init() -> void:
 		],
 		BiomeCatalog.DECORATION_FOREST: [
 			[FEATURE_OAK, 30, 0.44, FLAG_TREE], [FEATURE_BIRCH, 15, 0.30, FLAG_TREE],
-			[FEATURE_LARGE_TREE, 7, 0.0, FLAG_TREE],
 			[FEATURE_YELLOW_FLOWER, 5, 0.35, 0], [FEATURE_RED_FLOWER, 5, 0.35, 0],
 			[FEATURE_BUSH, 10, 0.24, 0], [FEATURE_PEBBLE, 3, 0.05, 0],
-			[FEATURE_FALLEN_LOG, 6, 0.14, 0], [FEATURE_STUMP, 5, 0.12, 0],
+			[FEATURE_STUMP, 5, 0.12, 0],
 			[FEATURE_BROWN_MUSHROOM, 8, 0.40, FLAG_SHADE], [FEATURE_RED_MUSHROOM, 3, 0.20, FLAG_SHADE],
 		],
 		BiomeCatalog.DECORATION_DESERT: [
@@ -90,44 +89,64 @@ func _init() -> void:
 		BiomeCatalog.DECORATION_SWAMP: [
 			[FEATURE_MANGROVE, 28, 0.72, FLAG_TREE | FLAG_WATER_EDGE], [FEATURE_REEDS, 48, 0.90, FLAG_WATER_EDGE],
 			[FEATURE_VINE, 20, 0.70, FLAG_WATER_EDGE], [FEATURE_BROWN_MUSHROOM, 8, 0.42, FLAG_SHADE],
-			[FEATURE_RED_MUSHROOM, 4, 0.24, FLAG_SHADE], [FEATURE_DRIFTWOOD, 5, 0.14, FLAG_WATER_EDGE],
+			[FEATURE_RED_MUSHROOM, 4, 0.24, FLAG_SHADE],
 			[FEATURE_STUMP, 3, 0.10, 0],
 		],
 		BiomeCatalog.DECORATION_RIVERBANK: [
 			[FEATURE_REEDS, 58, 0.92, FLAG_WATER_EDGE], [FEATURE_YELLOW_FLOWER, 8, 0.36, FLAG_WATER_EDGE],
-			[FEATURE_RED_FLOWER, 6, 0.32, FLAG_WATER_EDGE], [FEATURE_DRIFTWOOD, 8, 0.20, FLAG_WATER_EDGE],
+			[FEATURE_RED_FLOWER, 6, 0.32, FLAG_WATER_EDGE],
 			[FEATURE_PEBBLE, 5, 0.12, FLAG_WATER_EDGE],
 		],
 		BiomeCatalog.DECORATION_BEACH: [
-			[FEATURE_DRIFTWOOD, 12, 0.26, 0], [FEATURE_PEBBLE, 10, 0.22, 0],
+			[FEATURE_PEBBLE, 10, 0.22, 0],
 			[FEATURE_REEDS, 8, 0.16, FLAG_WATER_EDGE],
 		],
 		BiomeCatalog.DECORATION_TROPICAL: [
-			[FEATURE_JUNGLE, 34, 0.62, FLAG_TREE], [FEATURE_LARGE_TREE, 6, 0.0, FLAG_TREE],
+			[FEATURE_JUNGLE, 34, 0.62, FLAG_TREE],
 			[FEATURE_BAMBOO, 28, 0.80, 0],
 			[FEATURE_VINE, 22, 0.75, 0], [FEATURE_BUSH, 10, 0.22, 0], [FEATURE_MELON, 10, 0.30, 0],
-			[FEATURE_FALLEN_LOG, 5, 0.12, 0], [FEATURE_STUMP, 4, 0.10, 0],
+			[FEATURE_STUMP, 4, 0.10, 0],
 		],
 		BiomeCatalog.DECORATION_TAIGA: [
 			[FEATURE_SPRUCE, 48, 0.62, FLAG_TREE], [FEATURE_BUSH, 6, 0.16, 0],
 			[FEATURE_BROWN_MUSHROOM, 10, 0.38, FLAG_SHADE], [FEATURE_RED_MUSHROOM, 4, 0.20, FLAG_SHADE],
-			[FEATURE_STUMP, 6, 0.14, 0], [FEATURE_FALLEN_LOG, 6, 0.14, 0],
+			[FEATURE_STUMP, 6, 0.14, 0],
 			[FEATURE_DEAD_TREE, 3, 0.07, 0], [FEATURE_PEBBLE, 3, 0.06, 0],
 		],
 		BiomeCatalog.DECORATION_SNOWFIELD: [
 			[FEATURE_SPRUCE, 18, 0.20, FLAG_TREE],
-			[FEATURE_ROCK_OUTCROP, 4, 0.10, 0], [FEATURE_PEBBLE, 4, 0.10, 0],
+			[FEATURE_PEBBLE if worldgen_version >= 12 else FEATURE_ROCK_OUTCROP, 4, 0.10, 0],
+			[FEATURE_PEBBLE, 4, 0.10, 0],
 		],
 		BiomeCatalog.DECORATION_BADLANDS: [
 			[FEATURE_CACTUS, 20, 0.34, FLAG_DRY_GROUND], [FEATURE_DEAD_BUSH, 38, 0.56, FLAG_DRY_GROUND],
-			[FEATURE_PEBBLE, 10, 0.20, FLAG_DRY_GROUND], [FEATURE_ROCK_OUTCROP, 6, 0.14, FLAG_DRY_GROUND],
+			[FEATURE_PEBBLE, 10, 0.20, FLAG_DRY_GROUND],
+			[FEATURE_PEBBLE if worldgen_version >= 12 else FEATURE_ROCK_OUTCROP, 6, 0.14, FLAG_DRY_GROUND],
 			[FEATURE_DEAD_TREE, 3, 0.08, FLAG_DRY_GROUND],
 		],
 		BiomeCatalog.DECORATION_ALPINE: [
 			[FEATURE_SPRUCE, 12, 0.18, FLAG_TREE],
-			[FEATURE_ROCK_OUTCROP, 8, 0.18, 0], [FEATURE_PEBBLE, 6, 0.14, 0],
+			[FEATURE_PEBBLE if worldgen_version >= 12 else FEATURE_ROCK_OUTCROP, 8, 0.18, 0],
+			[FEATURE_PEBBLE, 6, 0.14, 0],
 		],
 	}
+	if worldgen_version <= 12:
+		# Preserve the exact pre-v13 weighted order for existing worlds. New worlds
+		# omit these rigid horizontal log props entirely.
+		_sets[BiomeCatalog.DECORATION_FOREST].insert(6, [FEATURE_FALLEN_LOG, 6, 0.14, 0])
+		_sets[BiomeCatalog.DECORATION_SWAMP].insert(5, [FEATURE_DRIFTWOOD, 5, 0.14, FLAG_WATER_EDGE])
+		_sets[BiomeCatalog.DECORATION_RIVERBANK].insert(3, [FEATURE_DRIFTWOOD, 8, 0.20, FLAG_WATER_EDGE])
+		_sets[BiomeCatalog.DECORATION_BEACH].insert(0, [FEATURE_DRIFTWOOD, 12, 0.26, 0])
+		_sets[BiomeCatalog.DECORATION_TROPICAL].insert(5, [FEATURE_FALLEN_LOG, 5, 0.12, 0])
+		_sets[BiomeCatalog.DECORATION_TAIGA].insert(5, [FEATURE_FALLEN_LOG, 6, 0.14, 0])
+	if worldgen_version >= 9:
+		_sets[BiomeCatalog.DECORATION_ALPINE].append([FEATURE_BOULDER, 2, 0.06, 0])
+	if worldgen_version >= 11:
+		# The old rows used a zero occurrence chance and were permanently dead.
+		# Activate the existing large-tree stamp only for v11+ so legacy worlds
+		# remain byte-identical.
+		_sets[BiomeCatalog.DECORATION_FOREST].append([FEATURE_LARGE_TREE, 4, 0.035, FLAG_TREE])
+		_sets[BiomeCatalog.DECORATION_TROPICAL].append([FEATURE_LARGE_TREE, 3, 0.025, FLAG_TREE])
 	# Entry shape matches the land sets: [feature, weight, chance, flags].
 	_underwater_sets = {
 		BiomeCatalog.DECORATION_SHELF: [
@@ -199,15 +218,11 @@ func tree_entries_for_set(decoration_set: int) -> Array:
 
 
 func choose_tree(decoration_set: int, selector: float) -> Array:
-	return _choose_from(tree_entries_for_set(decoration_set), selector)
+	return _choose_filtered(entries_for_set(decoration_set), selector, true)
 
 
 func choose_non_tree(decoration_set: int, selector: float) -> Array:
-	var decorations: Array = []
-	for entry in entries_for_set(decoration_set):
-		if (int(entry[3]) & FLAG_TREE) == 0:
-			decorations.append(entry)
-	return _choose_from(decorations, selector)
+	return _choose_filtered(entries_for_set(decoration_set), selector, false)
 
 
 ## Ground cover is populated independently of the one-feature-per-cell lottery.
@@ -249,3 +264,27 @@ func _choose_from(entries: Array, selector: float) -> Array:
 		if target < running:
 			return entry
 	return entries[entries.size() - 1]
+
+
+## Weighted selection without allocating a filtered Array for every candidate.
+## The two ordered passes intentionally match `_choose_from()`'s arithmetic and
+## fallback so generation output remains byte-for-byte deterministic.
+func _choose_filtered(entries: Array, selector: float, want_tree: bool) -> Array:
+	var total_weight := 0
+	var last_match: Array = []
+	for entry in entries:
+		if ((int(entry[3]) & FLAG_TREE) != 0) != want_tree:
+			continue
+		total_weight += int(entry[1])
+		last_match = entry
+	if total_weight <= 0:
+		return []
+	var target := clampf(selector, 0.0, 0.999999) * float(total_weight)
+	var running := 0.0
+	for entry in entries:
+		if ((int(entry[3]) & FLAG_TREE) != 0) != want_tree:
+			continue
+		running += float(entry[1])
+		if target < running:
+			return entry
+	return last_match

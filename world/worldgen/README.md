@@ -14,7 +14,8 @@ catalogs/samplers used by worker jobs. A chunk then runs these ordered stages:
 2. Domain-warped continentalness and blended terrain profiles establish ocean,
    coast, plains, hills, plateaus, and mountain relief.
 3. Analytic erosion and optional cached hydraulic erosion shape raw heights;
-   the river channel is then carved from cached corridor fields, and climate
+   the river channel is then carved from cached corridor fields, optional v10
+   fixed-level or v11 routed elevated hydrology lowers supported lake/reach beds, and climate
    shaping/smoothing follows before surface selection.
 4. Temperature/moisture choose primary and secondary biomes. Continuous fields
    shape terrain and tint foliage/water; broad terrain-aware ecotones carry the
@@ -22,11 +23,11 @@ catalogs/samplers used by worker jobs. A chunk then runs these ordered stages:
    per-block biome dithering.
 5. `VoxelPopulator.populate()` fills strata, carves caves, adds liquids and ore
    veins, cave biomes/dressing and geodes, stamps global-cell surface
-   decorations, then applies player edits last.
+   decorations and v11 region POIs, then applies player edits last.
 6. `VoxelPopulator.populate_lod()` handles distance chunks: it writes compact
-   per-column top/sub/water arrays instead of a full voxel volume and skips
-   caves, ores, and ground flora. Real tree crowns are baked in using in-field
-   anchors only and the shared stamp functions; site-validity probes are
+	per-column top/sub/water arrays instead of a full voxel volume and skips
+	caves, ores, and detailed flora. It retains floor patches, low scrub, and real
+	tree crowns using in-field anchors and shared stamp functions; site-validity probes are
    skipped because they leave the padded field and cost nearly full
    population. `ChunkMesher.build_lod()` consumes those arrays directly, and
    full chunks expand compact neighbors on the worker thread. Keep the compact
@@ -62,8 +63,9 @@ Compare like-for-like runs on the same machine.
 
 ## Main tuning controls
 
-Defaults and persisted values live in `autoload/game_config.gd`; validation and
-ranges live in `world_gen_config.gd`.
+Canonical defaults, validation, and import ranges live in `world_gen_config.gd`;
+`GameConfig` clones that default dictionary for the next world. The Advanced UI
+intentionally exposes a narrower, conservative tuning envelope than imports.
 
 - `terrain_scale`: multiplies local relief; Amplified applies an additional scale.
 - `macro_scale`: size of continents and broad terrain regions.
@@ -75,11 +77,35 @@ ranges live in `world_gen_config.gd`.
 - `erosion_strength`: local talus smoothing and profile terracing.
 - `regional_erosion`: broad rainfall/transport erosion strength.
 - `hydraulic_erosion`: deterministic 64x64 droplet tiles. This is deliberately
-  off by default because cold generation is substantially slower.
+	off by default because cold generation is substantially slower. It uses
+	`regional_erosion` as its strength and is inactive when that value is zero.
 - `cave_density`: spaghetti thickness plus cross-link, chamber, cavern, and
   mega-cave frequency. A thin canonical trunk remains at every nonzero value.
 - `tree_density`: multiplier for tree-class decorations only.
-- `decoration_density`: multiplier for all surface decoration.
+- `decoration_density`: multiplier for trees, feature-lattice decoration,
+  ground cover, and underwater plants. Floor patches are a separate pass.
+- `spline_terrain`: v10 experimental monotone cubic continentalness/profile
+  remapping; v11 expands it to a monotone 2D continentalness/landform grid. Off
+  by default.
+- `elevated_hydrology`: v10 experimental fixed-level highland lakes/reaches with
+  lowered banks and supported beds; v11 routes deterministic downhill reaches,
+  lakes, and stepped waterfall sections. Off by default.
+- `climate_variants`: v11 third climate channel enabling snowy taiga, wooded
+  badlands, and stony shore variants. On by default.
+- `region_structures`: v11 deterministic region-cell camps and watchtower ruins.
+  On by default; player edits are applied after their cross-chunk stamps.
+
+`worldgen_version` is persisted as a compatibility boundary. Version 8 retains
+the original cave-biome classifier and excludes later boulders; version 9 adds
+dripstone cave regions and highland boulders; version 10 preserves the original
+one-dimensional spline and fixed-level hydrology outputs; version 11 adds the
+variant climate channel, 2D spline grid, routed hydrology, organic cave regions,
+large trees, improved lava basins, region POIs, and asymptotic height ceiling;
+version 12 replaces frequent raised cobblestone outcrop props with low stone
+pebbles while preserving rare boulders and intentional structure masonry; version
+13 removes the rigid fallen-log and driftwood props from natural decoration.
+Output-changing changes require an explicit legacy path before `CURRENT_VERSION`
+is raised.
 
 Tune profile geometry in `terrain_profile_catalog.gd`, biome climate/layers/tints
 in `biome_catalog.gd`, and weighted feature sets in `decoration_catalog.gd`.
@@ -148,8 +174,8 @@ use `dominant_biome` for discrete surface/vegetation choices and keep the smooth
 primary/secondary blend for foliage and water tinting.
 
 Local detail is controlled separately from mountain height: each profile has
-`FIELD_LOCAL_RELIEF` (24/64-block knolls and shoulders, with shallow 48-block
-gullies in uplands) and `FIELD_SURFACE_DETAIL` (10-block undulations). These are
+`FIELD_LOCAL_RELIEF` (32/80-block knolls and shoulders, with shallow 52-block
+gullies in uplands) and `FIELD_SURFACE_DETAIL` (13-block undulations). These are
 amplitudes in blocks, smoothly blended across profiles and faded near shores.
 Increase these rather than shortening the mountain-region wavelength. The fine
 layer is deliberately weakest in plains so walking terrain stays usable.
@@ -192,6 +218,18 @@ smoothing; the same cached corridor and distance grids feed both, so
 field/point parity and seams hold. The lowland and continental gates keep
 channels sea-connected and prevent cuts through uplands; only downward motion
 is applied, so natural hollows are never filled.
+
+### Versioned optional terrain
+
+Spline terrain uses monotone piecewise cubic curves to remap continentalness
+and profile response without overshooting control points; v11 selects among a
+second landform axis. Elevated hydrology is a global-cell system rather than a
+local flood simulation: every touched chunk independently resolves the same
+route, water level, bed, and bank shape, and
+`ChunkTerrainData.inland_water_y` is authoritative for both full and compact
+population. River biome ownership suppresses land decoration inside these
+water cells. Both switches default off so worlds retain the established terrain
+unless explicitly enabled.
 
 ### Terrain-shape guardrails
 
@@ -271,7 +309,7 @@ to review it; an already-running world retains its configured sampler and chunks
   deterministic output, neighboring seams, edit priority, concurrent generation,
   biome/river coverage, height limits, field/point parity, flat-world height,
   coherent surface blankets, and adjacent height/slope limits plus the share of
-  2-block steps (`rough_ratio`) near and far from the origin. It also checks
+  steps greater than 2 blocks (`rough_ratio`) near and far from the origin. It also checks
   that all six underwater biomes appear at the right depth/climate, that no land
   biome strands below sea level, that reef mounds raise the shelf floor without
   breaking the water surface, and that seabed plants stay on their biome's
@@ -282,12 +320,30 @@ to review it; an already-running world retains its configured sampler and chunks
 - `redot --headless --path . --script res://tools/worldgen_cave_verify.gd`
   checks cave-biome classification and dressing, hollow layered geodes, crystal
   emission, sealed cave darkness, opening falloff, and mesher light bounds.
+- `redot --headless --path . --script res://tools/worldgen_water_verify.gd`
+  checks aquifer determinism, cross-chunk continuity, stable water tables, and
+  surface/river protection for positive and negative chunk coordinates.
+- `redot --headless --path . --script res://tools/worldgen_ore_verify.gd`
+  checks ordered ore-catalog selection and frozen chunk SHA-256 fixtures.
+- `redot --headless --path . --script res://tools/worldgen_structure_verify.gd`
+  checks version-gated highland boulders and cross-chunk footprints.
+- `redot --headless --path . --script res://tools/worldgen_spline_verify.gd`
+  checks v10 compatibility, the v11 2D profile grid, monotonic remapping, seams,
+  and disabled-output compatibility.
+- `redot --headless --path . --script res://tools/worldgen_elevated_hydrology_verify.gd`
+  checks v10 compatibility plus v11 downhill routes, lakes, waterfall steps,
+  highland water seams, supported beds/banks, decoration ownership, and
+  full/compact parity.
 - `redot --headless --path . --script res://tools/worldgen_mesh_benchmark.gd`
-  records full and LOD mesh CPU time for pinned chunks.
+  records full and LOD mesh CPU time for pinned chunks, then emits a paste-ready
+  Markdown table. Its light assembly, sky light, block light, padding, and face
+  emission columns describe the full mesh only.
 - `redot --headless --path . --script res://tools/worldgen_tree_verify.gd`
   checks spruce taper/tips and repeatable, bounded broadleaf/spruce geometry
   across chunk edges. The main verifier also checks nonzero local detail and
   its amplitude budget, to guard against both flattening and runaway roughness.
+- `redot --headless --path . --script res://tools/worldgen_cactus_verify.gd`
+  checks bounded cactus geometry and deterministic cross-chunk stamping.
 - `redot --headless --path . --script res://tools/worldgen_biome_verify.gd`
   checks biome-neighbor coherence, ecotone width and secondary ownership,
   contiguous forest/swamp/jungle/taiga territory radius, signature vegetation
@@ -313,11 +369,13 @@ to review it; an already-running world retains its configured sampler and chunks
   checks that the render distance really renders full chunks: no LOD inside
   the configured distance, collision only near the player, and collision added
   when approaching a distant chunk.
+- `redot --headless --path . --script res://tools/lod_mode_verify.gd`
+  checks Full Detail/Balanced policy transitions and streams an RD 10 mixed ring.
 - `redot --headless --path . --script res://tools/worldgen_stream_benchmark.gd`
   records ring-load wall time and throughput at render distances 10/16/32 and
   several job-concurrency levels.
 
-The pinned normal-generation sample currently averages about 44 ms for full
+The pinned normal-generation sample currently averages about 57 ms for full
 voxel generation and 15 ms for compact LOD data on the development machine.
 Full mesh CPU remains much more expensive because it builds a 3x3 light volume,
 floods sky and RGB light, computes AO, and emits collision triangles; keep that

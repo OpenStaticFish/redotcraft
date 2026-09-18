@@ -20,9 +20,20 @@ The interface uses a shared "Deepslate & Ember" design system built from native 
 
 ## Menu hierarchy
 
-- **Play** opens `play_panel` (world type, seed, clipboard import, Create Game). Its
-  **Advanced** button opens `world_gen_panel`, which owns only the detailed world
-  tunables; `build_config()` returns them and the play screen merges seed/type in.
+- **Play** opens `play_panel`, a landing hub: **Continue** (ember, when a last
+  saved world exists), **New World**, and **Load World** (disabled while the
+  library is empty). **New World** reveals the creation form (world type, seed,
+  clipboard import, Create Game); its **Advanced** button opens
+  `world_gen_panel`, which owns only the detailed world tunables;
+  `build_config()` returns them and the play screen merges seed/type in.
+  **Load World** lists every saved world (name, type, seed, created, last
+  played) via `WorldStorage.list_world_summaries()`, which does not rewrite the
+  "last world" pointer. Cards select on first
+  activation, load on the second (or double-click, or Load World); Delete
+  swaps the footer for an inline confirmation whose safe choice takes focus.
+  Incompatible worlds (newer metadata/worldgen format) list but cannot load.
+  `ui_cancel` unwinds one layer at a time: delete confirmation -> load list or
+  create form -> landing -> main menu, restoring focus to each layer's opener.
 - **Settings** opens `settings_menu`, a category hub. Categories are
   `settings_category_panel` instances (`category` property): Display (render
   distance + extreme toggle, FOV, fullscreen, UI scale, text size, V-Sync, FPS

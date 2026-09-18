@@ -59,13 +59,19 @@ func _run() -> void:
 		var chunk: VoxelWorld.Chunk = world._chunks[pos]
 		var distance := maxi(absi(pos.x), absi(pos.y))
 		if distance <= VoxelWorld.COLLISION_DISTANCE:
-			if chunk.shape.shape == null:
+			if chunk.shape == null or chunk.shape.shape == null or chunk.body == null:
 				_fail("near chunk missing collision at %s" % pos)
 			else:
 				near_shapes += 1
-		elif chunk.shape.shape != null:
-			_fail("distant chunk still holds a collision shape at %s" % pos)
+		elif chunk.shape != null or chunk.body != null:
+			_fail("distant chunk still holds collision nodes at %s" % pos)
 	print("STREAM FULL: near_shapes=%d" % near_shapes)
+	var safe_position := world.find_safe_spawn(Vector3.ZERO)
+	if not world.is_player_volume_clear(safe_position):
+		_fail("safe spawn was rejected by player-volume validation")
+	var buried_position := safe_position - Vector3(0.0, 1.0, 0.0)
+	if world.is_player_volume_clear(buried_position):
+		_fail("buried saved position was accepted by player-volume validation")
 
 	player.global_position = Vector3(RENDER_DISTANCE * 3 * VoxelDefs.CHUNK_SIZE, 0, 0)
 	var center := world._chunk_for_position(player.global_position)
@@ -82,14 +88,14 @@ func _run() -> void:
 				or world._commit_queue.size() > 0:
 			continue
 		var chunk: VoxelWorld.Chunk = world._chunks.get(center)
-		if chunk != null and chunk.shape.shape != null:
+		if chunk != null and chunk.shape != null and chunk.shape.shape != null:
 			break
 	var center_chunk: VoxelWorld.Chunk = world._chunks.get(center)
-	if center_chunk == null or center_chunk.shape.shape == null:
+	if center_chunk == null or center_chunk.shape == null or center_chunk.shape.shape == null:
 		_fail("approached chunk never gained collision at %s" % center)
 	for pos in world._chunks.keys():
 		var chunk: VoxelWorld.Chunk = world._chunks[pos]
-		if chunk.shape.shape != null \
+		if chunk.shape != null and chunk.shape.shape != null \
 				and maxi(absi(pos.x - center.x), absi(pos.y - center.y)) > VoxelWorld.COLLISION_DISTANCE + 1:
 			_fail("stale collision shape was not dropped at %s" % pos)
 

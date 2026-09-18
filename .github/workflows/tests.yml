@@ -98,7 +98,15 @@ jobs:
       - name: Run worldgen core checks
         env:
           CHECK_SHARD: Worldgen core
-        run: bash .github/scripts/run_checks.sh tools/worldgen_verify.gd
+        run: |
+          bash .github/scripts/run_checks.sh \
+            tools/worldgen_verify.gd \
+            tools/worldgen_water_verify.gd \
+            tools/worldgen_ore_verify.gd \
+            tools/worldgen_structure_verify.gd \
+            tools/worldgen_poi_verify.gd \
+            tools/worldgen_audit_verify.gd \
+            tools/worldgen_config_sweep_verify.gd
 
       - name: Upload check logs
         if: failure()
@@ -129,7 +137,9 @@ jobs:
             tools/worldgen_biome_verify.gd \
             tools/worldgen_island_verify.gd \
             tools/worldgen_river_verify.gd \
-            tools/worldgen_lod_verify.gd
+            tools/worldgen_lod_verify.gd \
+            tools/worldgen_spline_verify.gd \
+            tools/worldgen_elevated_hydrology_verify.gd
 
       - name: Upload check logs
         if: failure()
@@ -155,7 +165,14 @@ jobs:
         env:
           CHECK_SHARD: Streaming
           CHECK_TIMEOUT_SECONDS: "600"
-        run: bash .github/scripts/run_checks.sh tools/stream_full_verify.gd
+        run: |
+          bash .github/scripts/run_checks.sh \
+            tools/stream_full_verify.gd \
+            tools/stream_soak_verify.gd \
+            tools/lod_mode_verify.gd \
+            tools/chunk_data_compression_verify.gd \
+            tools/world_storage_verify.gd \
+            tools/light_invalidation_verify.gd
 
       - name: Upload check logs
         if: failure()

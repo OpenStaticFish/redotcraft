@@ -29,8 +29,18 @@ const FROZEN_OCEAN: int = 18
 ## selection; VoxelPopulator uses them only on exposed cave surfaces.
 const LUSH_CAVES: int = 19
 const DEEP_DARK: int = 20
+const DRIPSTONE_CAVES: int = 21
+## V11 surface variants selected by the third climate channel. Appending keeps
+## every persisted v1-v10 biome ID stable.
+const SNOWY_TAIGA: int = 22
+const WOODED_BADLANDS: int = 23
+const STONY_SHORE: int = 24
 const CAVE_BIOME_NONE: int = -1
+## V1-v10 used these horizontal cells directly. V11 keeps their fixed global
+## footprint, but samples their hashed corners as a continuous 3D field.
 const CAVE_REGION_SIZE: int = 96
+const CAVE_REGION_HEIGHT: int = 48
+const CAVE_HASH_MAX: float = 2147483647.0
 
 const DECORATION_NONE: int = 0
 const DECORATION_GRASSLAND: int = 1
@@ -87,6 +97,7 @@ const BLOCK_CORAL_SUBSTRATE: int = 52
 const BLOCK_MOSS: int = 62
 const BLOCK_DEEPSTONE: int = 64
 const BLOCK_SCULK: int = 65
+const BLOCK_CALCITE: int = 66
 
 var _names: PackedStringArray = PackedStringArray()
 var _temperature_centers: PackedFloat32Array = PackedFloat32Array()
@@ -122,6 +133,10 @@ func _init() -> void:
 	_add("frozen_sea", 0.08, 0.60, BLOCK_GRAVEL, BLOCK_STONE, BLOCK_GRAVEL, 2, Color("#9fc6d4"), DECORATION_FROZEN_SEA, TYPE_NONE)
 	_add("lush_caves", 0.52, 1.0, BLOCK_MOSS, BLOCK_STONE, BLOCK_STONE, 2, Color("#67a855"), DECORATION_NONE, TYPE_NONE)
 	_add("deep_dark", 0.18, 0.38, BLOCK_DEEPSTONE, BLOCK_SCULK, BLOCK_DEEPSTONE, 2, Color("#24525a"), DECORATION_NONE, TYPE_NONE)
+	_add("dripstone_caves", 0.42, 0.35, BLOCK_CALCITE, BLOCK_STONE, BLOCK_STONE, 2, Color("#8f765d"), DECORATION_NONE, TYPE_NONE)
+	_add("snowy_taiga", 0.22, 0.60, BLOCK_SNOW, BLOCK_DIRT, BLOCK_GRAVEL, 3, Color("#78958a"), DECORATION_TAIGA, TYPE_SPRUCE)
+	_add("wooded_badlands", 0.76, 0.38, BLOCK_RED_SAND, BLOCK_TERRACOTTA, BLOCK_RED_SAND, 5, Color("#9f7045"), DECORATION_SAVANNA, TYPE_ACACIA)
+	_add("stony_shore", 0.45, 0.48, BLOCK_GRAVEL, BLOCK_STONE, BLOCK_GRAVEL, 2, Color("#7d8978"), DECORATION_BEACH, TYPE_NONE)
 
 
 func biome_count() -> int:
@@ -154,7 +169,7 @@ func is_ocean_biome(biome: int) -> bool:
 ## can classify a biome id without constructing a catalog.
 static func is_cold_biome(biome: int) -> bool:
 	match biome:
-		SNOW, TAIGA, HIGHLANDS, FROZEN_OCEAN:
+		SNOW, TAIGA, SNOWY_TAIGA, HIGHLANDS, FROZEN_OCEAN:
 			return true
 	return false
 
@@ -167,28 +182,96 @@ static func is_wetland_biome(biome: int) -> bool:
 
 ## Coherent 3D cave-region identity. Surface biomes remain a 2D climate layer;
 ## callers must additionally verify that the queried voxel is underground air.
-## Broad global cells keep the result deterministic and worker-safe while the
-## depth gates reserve lush caves for the damp middle band and deep dark for
-## the lowest caverns.
-static func cave_biome_at(seed: int, world_x: int, y: int, world_z: int) -> int:
+## V1-v10 intentionally retain their exact column classifier for persisted
+## worlds. V11 samples a stateless, global value-noise field, so labels change
+## gradually across voxel and chunk boundaries rather than at cell edges.
+static func cave_biome_at(seed: int, world_x: int, y: int, world_z: int,
+		worldgen_version: int = 9) -> int:
 	if y < 5 or y > 78:
 		return CAVE_BIOME_NONE
+	if worldgen_version <= 10:
+		return _legacy_cave_biome_at(seed, world_x, y, world_z, worldgen_version)
+	var region_value := cave_region_value_at(seed, world_x, y, world_z)
+	var depth := clampf(float(78 - y) / 73.0, 0.0, 1.0)
+	# Deep dark progressively recedes before the middle cave band, avoiding a
+	# horizontal biome shelf while reserving the lowest caverns for sculk.
+	var deep_dark_threshold := 0.38 * _smooth_curve(clampf(float(42 - y) / 37.0, 0.0, 1.0))
+	# Damp lush regions are more common with depth. Dripstone occupies the
+	# higher-valued portion of the same smooth field, with its upper limit also
+	# varying by depth so it does not form a vertical column.
+	var lush_threshold := 0.68 + depth * 0.12
+	var dripstone_threshold := 0.87 + depth * 0.07
+	if region_value < deep_dark_threshold:
+		return DEEP_DARK
+	if region_value < lush_threshold:
+		return LUSH_CAVES
+	if region_value < dripstone_threshold:
+		return DRIPSTONE_CAVES
+	return CAVE_BIOME_NONE
+
+
+## Stateless 3D value noise used by v11+ cave classification. Exposing the
+## scalar lets verification assert continuity without coupling to thresholds.
+static func cave_region_value_at(seed: int, world_x: int, y: int, world_z: int) -> float:
+	var cell_x := floori(float(world_x) / float(CAVE_REGION_SIZE))
+	var cell_y := floori(float(y) / float(CAVE_REGION_HEIGHT))
+	var cell_z := floori(float(world_z) / float(CAVE_REGION_SIZE))
+	var x_fraction := float(world_x - cell_x * CAVE_REGION_SIZE) / float(CAVE_REGION_SIZE)
+	var y_fraction := float(y - cell_y * CAVE_REGION_HEIGHT) / float(CAVE_REGION_HEIGHT)
+	var z_fraction := float(world_z - cell_z * CAVE_REGION_SIZE) / float(CAVE_REGION_SIZE)
+	var x_weight := _smooth_curve(x_fraction)
+	var y_weight := _smooth_curve(y_fraction)
+	var z_weight := _smooth_curve(z_fraction)
+	var low_front := _lerp_cave_corners(seed, cell_x, cell_y, cell_z, x_weight, z_weight)
+	var high_front := _lerp_cave_corners(seed, cell_x, cell_y + 1, cell_z, x_weight, z_weight)
+	return lerpf(low_front, high_front, y_weight)
+
+
+static func _legacy_cave_biome_at(seed: int, world_x: int, y: int, world_z: int,
+		worldgen_version: int) -> int:
 	var cell_x := floori(float(world_x) / float(CAVE_REGION_SIZE))
 	var cell_z := floori(float(world_z) / float(CAVE_REGION_SIZE))
 	var hash_value := _cave_hash(seed, cell_x, cell_z)
 	var roll := hash_value % 100
+	if worldgen_version <= 8:
+		if y <= 34:
+			if roll < 45:
+				return DEEP_DARK
+			if roll < 90:
+				return LUSH_CAVES
+		elif roll < 90:
+			return LUSH_CAVES
+		return CAVE_BIOME_NONE
 	if y <= 34:
 		if roll < 45:
 			return DEEP_DARK
+		if roll < 65:
+			return DRIPSTONE_CAVES
 		if roll < 90:
 			return LUSH_CAVES
-	elif roll < 90:
-		return LUSH_CAVES
+	else:
+		if roll < 70:
+			return LUSH_CAVES
+		if roll < 90:
+			return DRIPSTONE_CAVES
 	return CAVE_BIOME_NONE
 
 
+static func _lerp_cave_corners(seed: int, cell_x: int, cell_y: int, cell_z: int,
+		x_weight: float, z_weight: float) -> float:
+	var front_low := float(_cave_hash_3d(seed, cell_x, cell_y, cell_z)) / CAVE_HASH_MAX
+	var front_high := float(_cave_hash_3d(seed, cell_x + 1, cell_y, cell_z)) / CAVE_HASH_MAX
+	var back_low := float(_cave_hash_3d(seed, cell_x, cell_y, cell_z + 1)) / CAVE_HASH_MAX
+	var back_high := float(_cave_hash_3d(seed, cell_x + 1, cell_y, cell_z + 1)) / CAVE_HASH_MAX
+	return lerpf(lerpf(front_low, front_high, x_weight), lerpf(back_low, back_high, x_weight), z_weight)
+
+
+static func _smooth_curve(value: float) -> float:
+	return value * value * (3.0 - 2.0 * value)
+
+
 static func is_cave_biome(biome: int) -> bool:
-	return biome == LUSH_CAVES or biome == DEEP_DARK
+	return biome == LUSH_CAVES or biome == DEEP_DARK or biome == DRIPSTONE_CAVES
 
 
 static func cave_surface_block(biome: int, selector: int = 0) -> int:
@@ -196,6 +279,8 @@ static func cave_surface_block(biome: int, selector: int = 0) -> int:
 		return BLOCK_MOSS
 	if biome == DEEP_DARK:
 		return BLOCK_SCULK if selector % 5 == 0 else BLOCK_DEEPSTONE
+	if biome == DRIPSTONE_CAVES:
+		return BLOCK_CALCITE
 	return BLOCK_STONE
 
 
@@ -204,6 +289,8 @@ static func cave_ambience_color(biome: int) -> Color:
 		return Color("#315c3e")
 	if biome == DEEP_DARK:
 		return Color("#102b35")
+	if biome == DRIPSTONE_CAVES:
+		return Color("#59483b")
 	return Color("#242936")
 
 
@@ -212,11 +299,20 @@ static func cave_display_name(biome: int) -> String:
 		return "LUSH CAVES"
 	if biome == DEEP_DARK:
 		return "DEEP DARK"
+	if biome == DRIPSTONE_CAVES:
+		return "DRIPSTONE CAVES"
 	return "CAVES"
 
 
 static func _cave_hash(seed: int, x: int, z: int) -> int:
 	var value: int = seed ^ (x * 73856093) ^ (z * 19349663) ^ 0x35A4D19
+	value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0x7fffffff
+	value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0x7fffffff
+	return (value ^ (value >> 16)) & 0x7fffffff
+
+
+static func _cave_hash_3d(seed: int, x: int, y: int, z: int) -> int:
+	var value: int = seed ^ (x * 73856093) ^ (y * 83492791) ^ (z * 19349663) ^ 0x51EAD5B
 	value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0x7fffffff
 	value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0x7fffffff
 	return (value ^ (value >> 16)) & 0x7fffffff
@@ -322,9 +418,9 @@ func water_tint(biome: int) -> Color:
 			return Color(0.68, 0.86, 0.62, 1.0)
 		RIVER:
 			return Color(0.82, 1.04, 1.08, 1.0)
-		SNOW, TAIGA:
+		SNOW, TAIGA, SNOWY_TAIGA:
 			return Color(0.82, 1.02, 1.12, 1.0)
-		DESERT, BADLANDS:
+		DESERT, BADLANDS, WOODED_BADLANDS:
 			return Color(1.08, 1.03, 0.84, 1.0)
 		_:
 			return Color.WHITE

@@ -5,16 +5,29 @@ const SPAWN_RADIUS := 1
 const SPAWN_SEARCH_RADIUS := 12
 ## Half the logical cores, capped at 8. Measured on a 16-thread desktop: 8
 ## concurrent chunk jobs stream ~40% faster than 4, while 16 adds only ~10%
-## more and risks starving the main thread on smaller machines.
+## more and risks starving the main thread on smaller machines. One additional
+## high-priority near-player job may be submitted when all normal slots are
+## occupied, preventing stale distant work from starving collision recovery.
 const MIN_ACTIVE_JOBS := 4
 const MAX_ACTIVE_JOBS := 8
-## Full-detail chunks run to the render distance. Only distances past this cap
-## (the Extreme toggle) fall back to compact LOD chunks.
-const MAX_FULL_DETAIL_DISTANCE := 32
 ## Collision shapes are only built for chunks near the player; approaching a
 ## distant full chunk rebuilds it to add collision instead of holding a shape
 ## for every loaded chunk.
 const COLLISION_DISTANCE := 6
+## Full-detail voxel arrays are immutable between edits. Once they are beyond
+## interaction range, retain their authoritative metadata but store voxel IDs
+## as a deterministic palette followed by little-endian RLE runs.
+const CHUNK_DATA_RLE_HEADER_BYTES := 6
+const LOD_MODE_FULL := 0
+const LOD_MODE_BALANCED := 1
+const BALANCED_FULL_DETAIL_DISTANCE := COLLISION_DISTANCE + 2
+const STREAM_BOUNDARY_MARGIN := 0.05
+## Palette/RLE cold storage is retained as a verified codec, but production
+## compaction is disabled. Live flight profiling showed repeated neighbor
+## decodes caused stream stutter, and a stale compressed snapshot could reach a
+## remesh as a short array. Balanced LOD provides the memory saving without
+## putting compression in the active meshing path.
+const ENABLE_COLD_CHUNK_COMPRESSION := false
 const COMMIT_BUDGET_MS := 2
 ## Diagnostic map rasters resolve one mode sample per pixel. The final-height
 ## family walks the erosion graph five times per sample, so map views request
@@ -43,6 +56,9 @@ const FIRE_SPREAD_PER_TICK := 1
 const FIRE_IGNITION_DELAY_TICKS := 4
 const FIRE_SPREAD_PERIOD_TICKS := 2
 const FIRE_SPREAD_INTERVAL_TICKS := 2
+## Light starts at MAX_LIGHT_LEVEL and attenuates at least one level per cell,
+## so its furthest possible affected cell is this many horizontal steps away.
+const LIGHT_MAX_PROPAGATION_DISTANCE := BlockRegistry.MAX_LIGHT_LEVEL - 1
 const FIRE_OFFSETS: Array[Vector3i] = [
 	Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
 	Vector3i(0, 1, 0), Vector3i(0, -1, 0),
@@ -57,6 +73,7 @@ const WATER_NEIGHBOR_OFFSETS := [
 
 var render_distance := 10
 var lod_distance := 5
+var lod_mode := LOD_MODE_FULL
 var unload_radius := 12
 
 var _blocks: BlockRegistry
@@ -75,6 +92,8 @@ var _dirty: Dictionary = {}
 var _desired: Dictionary = {}
 var _edited_blocks: Dictionary = {}
 var _edits_by_chunk: Dictionary = {}
+var _hydrated_edit_chunks: Dictionary = {}
+var _edit_store: WorldStorage
 var _chunk_edit_version: Dictionary = {}
 var _stream_center := Vector2i(999999, 999999)
 var _player: Node3D
@@ -109,6 +128,7 @@ var _debug_cache: Dictionary = {}
 
 class Chunk:
 	var data := PackedByteArray()
+	var compressed_data := PackedByteArray()
 	var heights := PackedInt32Array()
 	var foliage_tints := PackedColorArray()
 	var water_tints := PackedColorArray()
@@ -126,12 +146,78 @@ class Chunk:
 	var shape: CollisionShape3D
 
 
+## The palette uses first-seen ordering, making the representation stable for a
+## given voxel array. Runs are [palette_index, length_low, length_high]. The
+## raw length and palette count are little-endian uint32/uint16 header fields.
+static func compress_chunk_data(raw: PackedByteArray) -> PackedByteArray:
+	var palette := PackedByteArray()
+	var palette_indices: Dictionary = {}
+	for value in raw:
+		var block_id := int(value)
+		if not palette_indices.has(block_id):
+			palette_indices[block_id] = palette.size()
+			palette.append(block_id)
+	var out := PackedByteArray()
+	out.resize(CHUNK_DATA_RLE_HEADER_BYTES)
+	var raw_size := raw.size()
+	out[0] = raw_size & 0xff
+	out[1] = (raw_size >> 8) & 0xff
+	out[2] = (raw_size >> 16) & 0xff
+	out[3] = (raw_size >> 24) & 0xff
+	out[4] = palette.size() & 0xff
+	out[5] = (palette.size() >> 8) & 0xff
+	out.append_array(palette)
+	var start := 0
+	while start < raw_size:
+		var block_id := raw[start]
+		var run_length := 1
+		while start + run_length < raw_size and raw[start + run_length] == block_id \
+				and run_length < 65535:
+			run_length += 1
+		out.append(int(palette_indices[int(block_id)]))
+		out.append(run_length & 0xff)
+		out.append((run_length >> 8) & 0xff)
+		start += run_length
+	return out
+
+
+static func decompress_chunk_data(compressed: PackedByteArray) -> PackedByteArray:
+	if compressed.size() < CHUNK_DATA_RLE_HEADER_BYTES:
+		return PackedByteArray()
+	var raw_size := int(compressed[0]) | (int(compressed[1]) << 8) \
+			| (int(compressed[2]) << 16) | (int(compressed[3]) << 24)
+	var palette_size := int(compressed[4]) | (int(compressed[5]) << 8)
+	var offset := CHUNK_DATA_RLE_HEADER_BYTES
+	if raw_size == 0:
+		return PackedByteArray()
+	if raw_size < 0 or palette_size <= 0 or compressed.size() < offset + palette_size:
+		return PackedByteArray()
+	var palette := compressed.slice(offset, offset + palette_size)
+	offset += palette_size
+	var raw := PackedByteArray()
+	raw.resize(raw_size)
+	var written := 0
+	while offset + 2 < compressed.size():
+		var palette_index := int(compressed[offset])
+		var run_length := int(compressed[offset + 1]) | (int(compressed[offset + 2]) << 8)
+		offset += 3
+		if palette_index >= palette.size() or run_length <= 0 or written + run_length > raw_size:
+			return PackedByteArray()
+		for index in range(written, written + run_length):
+			raw[index] = palette[palette_index]
+		written += run_length
+	if offset != compressed.size() or written != raw_size:
+		return PackedByteArray()
+	return raw
+
+
 class PendingJob:
 	var task := -1
 	var kind := "generate"
 	var version := 0
 	var config_revision := 0
 	var lod := false
+	var want_collision := false
 	var slot: Dictionary = {}
 
 
@@ -183,24 +269,131 @@ func _exit_tree() -> void:
 	if _debug_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_debug_task)
 		_debug_task = -1
+	flush_edit_store()
 
 
 ## Must run before setup_player() and must not be called while chunk jobs are
 ## in flight: recreating the noise set invalidates running workers.
-func configure(world_config: Dictionary, render_distance_chunks: int) -> void:
+func configure(world_config: Dictionary, render_distance_chunks: int,
+		stream_lod_mode: int = LOD_MODE_FULL) -> void:
 	render_distance = maxi(render_distance_chunks, 1)
-	lod_distance = mini(render_distance, MAX_FULL_DETAIL_DISTANCE)
+	lod_mode = clampi(stream_lod_mode, LOD_MODE_FULL, LOD_MODE_BALANCED)
+	_update_lod_distance()
 	unload_radius = render_distance + 2
 	_generator.configure(world_config)
 	_worldgen_revision += 1
 
 
+## Attaches the main-thread persistence boundary. Region files are hydrated
+## before immutable edit snapshots enter worker jobs; workers never perform I/O.
+func set_edit_store(store: WorldStorage) -> void:
+	_edit_store = store
+	_hydrated_edit_chunks.clear()
+	_edited_blocks.clear()
+	_edits_by_chunk.clear()
+
+
+func flush_edit_store() -> Error:
+	if _edit_store == null:
+		return OK
+	return _edit_store.flush_dirty_regions()
+
+
 func set_render_distance(value: int) -> void:
 	render_distance = maxi(value, 1)
-	lod_distance = mini(render_distance, MAX_FULL_DETAIL_DISTANCE)
+	_update_lod_distance()
 	unload_radius = render_distance + 2
 	_rebuild_desired()
 	_unload_far()
+
+
+func set_lod_mode(value: int) -> void:
+	var normalized := clampi(value, LOD_MODE_FULL, LOD_MODE_BALANCED)
+	if lod_mode == normalized:
+		return
+	lod_mode = normalized
+	_update_lod_distance()
+	_rebuild_desired()
+
+
+func _update_lod_distance() -> void:
+	# Full Detail always means authoritative full chunks through the selected
+	# render distance, including Extreme values. Balanced is the explicit opt-in
+	# memory/performance mode and alone enables compact distance terrain.
+	lod_distance = mini(render_distance, BALANCED_FULL_DETAIL_DISTANCE) \
+		if lod_mode == LOD_MODE_BALANCED else render_distance
+
+
+## Physics uses this readiness boundary to suspend gravity while a teleported
+## or fast-flying player waits for the authoritative collision mesh beneath the
+## current horizontal position.
+func is_collision_ready_at(world_position: Vector3) -> bool:
+	return _is_chunk_collision_ready(_chunk_for_position(world_position))
+
+
+func _is_chunk_collision_ready(chunk_position: Vector2i) -> bool:
+	var chunk: Chunk = _chunks.get(chunk_position)
+	return chunk != null and not chunk.lod and chunk.shape != null and chunk.shape.shape != null
+
+
+## Sweeps horizontal movement through the chunk grid and returns the fraction
+## that remains inside resident, rendered chunks. Collision readiness is a
+## separate gravity guard: a visible LOD/full chunk must not behave like an
+## invisible wall while its nearby collision rebuild catches up.
+func loaded_motion_fraction(from: Vector3, to: Vector3) -> float:
+	var delta := Vector2(to.x - from.x, to.z - from.z)
+	var distance := delta.length()
+	if distance <= 0.000001:
+		return 1.0
+	var chunk := _chunk_for_position(from)
+	if not _chunks.has(chunk):
+		return 0.0
+	var target := _chunk_for_position(to)
+	if target == chunk:
+		return 1.0
+	var step_x := 1 if delta.x > 0.0 else (-1 if delta.x < 0.0 else 0)
+	var step_z := 1 if delta.y > 0.0 else (-1 if delta.y < 0.0 else 0)
+	var next_x := float((chunk.x + 1) * VoxelDefs.CHUNK_SIZE) if step_x > 0 \
+		else float(chunk.x * VoxelDefs.CHUNK_SIZE)
+	var next_z := float((chunk.y + 1) * VoxelDefs.CHUNK_SIZE) if step_z > 0 \
+		else float(chunk.y * VoxelDefs.CHUNK_SIZE)
+	var t_max_x := (next_x - from.x) / delta.x if step_x != 0 else INF
+	var t_max_z := (next_z - from.z) / delta.y if step_z != 0 else INF
+	var t_delta_x := float(VoxelDefs.CHUNK_SIZE) / absf(delta.x) if step_x != 0 else INF
+	var t_delta_z := float(VoxelDefs.CHUNK_SIZE) / absf(delta.y) if step_z != 0 else INF
+	while chunk != target:
+		var entry_t: float
+		if is_equal_approx(t_max_x, t_max_z):
+			entry_t = t_max_x
+			chunk += Vector2i(step_x, step_z)
+			t_max_x += t_delta_x
+			t_max_z += t_delta_z
+		elif t_max_x < t_max_z:
+			entry_t = t_max_x
+			chunk.x += step_x
+			t_max_x += t_delta_x
+		else:
+			entry_t = t_max_z
+			chunk.y += step_z
+			t_max_z += t_delta_z
+		if not _chunks.has(chunk):
+			return clampf(entry_t - STREAM_BOUNDARY_MARGIN / distance, 0.0, 1.0)
+	return 1.0
+
+
+## Saved positions can come from an interrupted run that previously fell into
+## unloaded terrain. Validate the two blocks occupied by the standing capsule
+## after the local spawn ring is available before accepting that position.
+func is_player_volume_clear(world_position: Vector3) -> bool:
+	var block_x := floori(world_position.x)
+	var block_z := floori(world_position.z)
+	for block_y in [floori(world_position.y + 0.05), floori(world_position.y + 1.7)]:
+		var block_id := get_block_world(Vector3i(block_x, block_y, block_z))
+		if block_id == BlockRegistry.BLOCK_AIR or _blocks.is_water_id(block_id) \
+				or _blocks.has_flag(block_id, BlockRegistry.FLAG_CROSS):
+			continue
+		return false
+	return true
 
 
 ## Points streaming at a new node. The initial setup and any caller that is
@@ -227,30 +420,55 @@ func _stream_tick() -> void:
 		_drop_far_collision()
 	_collect_jobs()
 	_process_commit_queue()
-	_schedule_jobs()
+	# Discover missing nearby collision before assigning newly-opened worker
+	# slots. Otherwise generation can refill every slot first while boosted
+	# flight waits on a floor remesh that was only queued afterward.
 	_ensure_near_collision()
+	_schedule_jobs()
 
 
 ## Distant full chunks are committed without a collision shape. Rebuilds are
 ## only requested as the player gets close, which keeps shape memory bounded to
 ## the local area while the world stays full-detail everywhere in range.
 func _ensure_near_collision() -> void:
+	var candidates: Array[Vector2i] = []
 	for dz in range(-COLLISION_DISTANCE, COLLISION_DISTANCE + 1):
 		for dx in range(-COLLISION_DISTANCE, COLLISION_DISTANCE + 1):
 			var pos := _stream_center + Vector2i(dx, dz)
 			var chunk: Chunk = _chunks.get(pos)
-			if chunk == null or chunk.lod or chunk.shape.shape != null:
+			if chunk == null or chunk.lod:
 				continue
-			_queue_rebuild(pos)
+			_restore_chunk_data(chunk)
+			if chunk.shape != null and chunk.shape.shape != null:
+				continue
+			var pending: PendingJob = _pending.get(pos)
+			if pending != null:
+				# A mesh submitted while this chunk was distant contains no collision.
+				# Mark it stale now so completion immediately requeues a collision build.
+				if pending.kind == "mesh" and not pending.lod and not pending.want_collision:
+					_dirty[pos] = true
+				continue
+			candidates.append(pos)
+	# `_queue_rebuild()` pushes normal work to the front. Queue far-to-near so
+	# the current chunk and its closest floor ring finish first, regardless of
+	# dictionary/scan order or older dirty work already in the mesh queue.
+	candidates.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return (a - _stream_center).length_squared() > (b - _stream_center).length_squared()
+	)
+	for pos in candidates:
+		_queue_rebuild(pos)
+		if _mesh_queued.has(pos):
+			_mesh_queue.erase(pos)
+			_mesh_queue.push_front(pos)
 
 
 func _drop_far_collision() -> void:
 	for pos in _chunks.keys():
 		var chunk: Chunk = _chunks[pos]
-		if chunk.shape.shape == null:
-			continue
-		if maxi(absi(pos.x - _stream_center.x), absi(pos.y - _stream_center.y)) > COLLISION_DISTANCE + 1:
-			chunk.shape.shape = null
+		if chunk.shape != null and not _within_collision_range(pos):
+			_remove_chunk_collision_nodes(chunk)
+	if ENABLE_COLD_CHUNK_COMPRESSION:
+		_compress_distant_chunks()
 
 
 func _generate_spawn_area() -> void:
@@ -274,23 +492,25 @@ func _rebuild_desired() -> void:
 	_mesh_queue.clear()
 	_mesh_queued.clear()
 	var wanted: Array[Vector2i] = []
-	for dx in range(-render_distance, render_distance + 1):
-		for dz in range(-render_distance, render_distance + 1):
-			var pos := _stream_center + Vector2i(dx, dz)
-			_desired[pos] = true
-			var want_lod := _chunk_uses_lod(pos)
-			if _chunks.has(pos) and (_chunks[pos] as Chunk).lod != want_lod:
-				_dirty[pos] = true
-			var staged: TerrainGenerator.GenResult = _generated.get(pos)
-			if staged != null and (staged.lod != want_lod \
-					or staged.config_revision != _worldgen_revision):
-				_generated.erase(pos)
-			if not _chunks.has(pos) and not _generated.has(pos) and not _pending.has(pos):
-				wanted.append(pos)
-	var center := _stream_center
-	wanted.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		return (a - center).length_squared() < (b - center).length_squared()
-	)
+	# Build in nearest-first Chebyshev rings instead of filling a square and
+	# sorting thousands of entries every time the player crosses a chunk edge.
+	# At extreme distances this removes a large main-thread O(n log n) hitch.
+	for ring in range(render_distance + 1):
+		for dx in range(-ring, ring + 1):
+			for dz in range(-ring, ring + 1):
+				if maxi(absi(dx), absi(dz)) != ring:
+					continue
+				var pos := _stream_center + Vector2i(dx, dz)
+				_desired[pos] = true
+				var want_lod := _chunk_uses_lod(pos)
+				if _chunks.has(pos) and (_chunks[pos] as Chunk).lod != want_lod:
+					_dirty[pos] = true
+				var staged: TerrainGenerator.GenResult = _generated.get(pos)
+				if staged != null and (staged.lod != want_lod \
+						or staged.config_revision != _worldgen_revision):
+					_generated.erase(pos)
+				if not _chunks.has(pos) and not _generated.has(pos) and not _pending.has(pos):
+					wanted.append(pos)
 	_gen_queue = wanted
 	_gen_queued.clear()
 	for pos in _gen_queue:
@@ -308,14 +528,36 @@ func _rebuild_desired() -> void:
 func _schedule_jobs() -> void:
 	if _gen_queue.is_empty() and _mesh_queue.is_empty():
 		return
-	while _pending.size() < _max_active_jobs and (not _mesh_queue.is_empty() or not _gen_queue.is_empty()):
-		var mesh_job := not _mesh_queue.is_empty()
+	while not _mesh_queue.is_empty() or not _gen_queue.is_empty():
+		var mesh_job := false
+		var queue_index := 0
+		if _pending.size() > _max_active_jobs:
+			break
+		var urgent_mesh_index := _urgent_queue_index(_mesh_queue)
+		var urgent_generation_index := _urgent_queue_index(_gen_queue)
+		if urgent_mesh_index >= 0:
+			mesh_job = true
+			queue_index = urgent_mesh_index
+		elif urgent_generation_index >= 0:
+			queue_index = urgent_generation_index
+		elif _pending.size() < _max_active_jobs:
+			# Away from the player, finish already-generated meshes before doing
+			# more terrain work. Near the player, the urgent branches above always
+			# fill real chunk holes before unrelated distance remeshes.
+			mesh_job = not _mesh_queue.is_empty()
+		else:
+			break
+		# At the normal cap, only the urgent branches can reach this point. This
+		# is the single bounded overflow slot; WorkerThreadPool high priority runs
+		# it as soon as stale distance work releases a worker.
 		var pos: Vector2i
 		if mesh_job:
-			pos = _mesh_queue.pop_front()
+			pos = _mesh_queue[queue_index]
+			_mesh_queue.remove_at(queue_index)
 			_mesh_queued.erase(pos)
 		else:
-			pos = _gen_queue.pop_front()
+			pos = _gen_queue[queue_index]
+			_gen_queue.remove_at(queue_index)
 			_gen_queued.erase(pos)
 		if _pending.has(pos):
 			continue
@@ -331,6 +573,7 @@ func _schedule_jobs() -> void:
 		job.lod = lod
 		job.slot = {}
 		var high_priority := not lod and _within_collision_range(pos)
+		job.want_collision = high_priority
 		var chunk: Chunk = _chunks.get(pos)
 		if mesh_job and chunk != null and chunk.lod == lod:
 			job.kind = "mesh"
@@ -344,7 +587,7 @@ func _schedule_jobs() -> void:
 					false, "voxel_lod_remesh")
 			else:
 				job.task = WorkerThreadPool.add_task(
-					_run_full_remesh_job.bind(chunk.data.duplicate(), chunk.foliage_tints.duplicate(),
+					_run_full_remesh_job.bind(_chunk_data_snapshot(chunk), chunk.foliage_tints.duplicate(),
 						chunk.water_tints.duplicate(), _gather_neighbors(pos), job.slot, high_priority),
 					high_priority, "voxel_full_remesh")
 		elif mesh_job:
@@ -365,11 +608,22 @@ func _schedule_jobs() -> void:
 		_pending[pos] = job
 
 
+func _urgent_queue_index(queue: Array[Vector2i]) -> int:
+	for index in queue.size():
+		var pos := queue[index]
+		if not _chunk_uses_lod(pos) and _within_collision_range(pos):
+			return index
+	return -1
+
+
 func _process_commit_queue() -> void:
 	var start := Time.get_ticks_msec()
 	while not _commit_queue.is_empty():
-		var item: CommitItem = _commit_queue.pop_front()
+		var commit_index := _next_commit_index()
+		var item: CommitItem = _commit_queue[commit_index]
+		_commit_queue.remove_at(commit_index)
 		if not _desired.has(item.pos):
+			_discard_unloaded_chunk_state(item.pos)
 			continue
 		var mode_stale := item.lod != _chunk_uses_lod(item.pos)
 		if item.version != _chunk_edit_version.get(item.pos, 0) or item.config_revision != _worldgen_revision or mode_stale:
@@ -380,6 +634,23 @@ func _process_commit_queue() -> void:
 			break
 
 
+func _next_commit_index() -> int:
+	var best_index := 0
+	var best_priority := 3
+	var best_distance := 1 << 30
+	for index in _commit_queue.size():
+		var item: CommitItem = _commit_queue[index]
+		var distance := (item.pos - _stream_center).length_squared()
+		var priority := 2
+		if not item.lod and _within_collision_range(item.pos):
+			priority = 0 if item.result.build_collision else 1
+		if priority < best_priority or (priority == best_priority and distance < best_distance):
+			best_index = index
+			best_priority = priority
+			best_distance = distance
+	return best_index
+
+
 func _collect_jobs() -> void:
 	for pos in _pending.keys():
 		var job: PendingJob = _pending[pos]
@@ -387,6 +658,11 @@ func _collect_jobs() -> void:
 			continue
 		WorkerThreadPool.wait_for_task_completion(job.task)
 		_pending.erase(pos)
+		if not _desired.has(pos):
+			# No off-screen result is useful. Purging only after the worker has
+			# completed preserves its edit-version stale check until this point.
+			_discard_unloaded_chunk_state(pos)
+			continue
 		if _dirty.has(pos):
 			# An edit invalidated this job's neighbor snapshot while it was running.
 			# Discard the stale result and immediately schedule a fresh build.
@@ -572,7 +848,7 @@ func _gather_generated_neighbors(pos: Vector2i, lod: bool):
 					chunk.lod_sub_id.duplicate(), chunk.lod_water_y.duplicate())
 			else:
 				out.samples[direction] = ChunkMesher.NeighborSample.new(
-					chunk.data.duplicate(), chunk.max_y, chunk.heights.duplicate())
+					_chunk_data_snapshot(chunk), chunk.max_y, chunk.heights.duplicate())
 		elif _generated.has(neighbor_pos):
 			var generated: TerrainGenerator.GenResult = _generated[neighbor_pos]
 			if generated.lod:
@@ -604,6 +880,7 @@ func _build_lod_edge(chunk: Chunk, direction: Vector2i) -> ChunkMesher.LodEdge:
 	var edge := ChunkMesher.LodEdge.new()
 	edge.solid.resize(VoxelDefs.CHUNK_SIZE)
 	edge.water.resize(VoxelDefs.CHUNK_SIZE)
+	var data := _chunk_data_snapshot(chunk) if not chunk.lod else PackedByteArray()
 	for index in VoxelDefs.CHUNK_SIZE:
 		var local_x := index if direction.y != 0 else (0 if direction.x > 0 else VoxelDefs.CHUNK_SIZE - 1)
 		var local_z := index if direction.x != 0 else (0 if direction.y > 0 else VoxelDefs.CHUNK_SIZE - 1)
@@ -615,7 +892,7 @@ func _build_lod_edge(chunk: Chunk, direction: Vector2i) -> ChunkMesher.LodEdge:
 		var solid := ChunkMesher.LOD_NONE
 		var water := ChunkMesher.LOD_NONE
 		for y in range(chunk.max_y, -1, -1):
-			var id: int = chunk.data[column + y * VoxelDefs.DATA_STRIDE_Y]
+			var id: int = data[column + y * VoxelDefs.DATA_STRIDE_Y]
 			if id == BlockRegistry.BLOCK_AIR:
 				continue
 			if _blocks.is_water_id(id):
@@ -672,9 +949,40 @@ func _gather_neighbors(pos: Vector2i) -> ChunkMesher.NeighborSet:
 				chunk.lod_solid_y.duplicate(), chunk.lod_solid_id.duplicate(),
 				chunk.lod_sub_id.duplicate(), chunk.lod_water_y.duplicate())
 		else:
-			out.samples[direction] = ChunkMesher.NeighborSample.new(chunk.data.duplicate(), chunk.max_y, chunk.heights.duplicate())
+			out.samples[direction] = ChunkMesher.NeighborSample.new(
+				_chunk_data_snapshot(chunk), chunk.max_y, chunk.heights.duplicate())
 		out.mask |= (1 << index)
 	return out
+
+
+## Worker jobs own their snapshots. Decoding here never exposes the compressed
+## backing array to a worker and does not make a distant chunk mutable.
+func _chunk_data_snapshot(chunk: Chunk) -> PackedByteArray:
+	if not chunk.data.is_empty():
+		return chunk.data.duplicate()
+	return decompress_chunk_data(chunk.compressed_data)
+
+
+func _restore_chunk_data(chunk: Chunk) -> void:
+	if chunk.lod or not chunk.data.is_empty() or chunk.compressed_data.is_empty():
+		return
+	var restored := decompress_chunk_data(chunk.compressed_data)
+	if restored.size() != VoxelDefs.CHUNK_AREA * VoxelDefs.WORLD_HEIGHT:
+		push_error("voxel_world: invalid compressed full-detail chunk data")
+		return
+	chunk.data = restored
+	chunk.compressed_data.clear()
+
+
+func _compress_distant_chunks() -> void:
+	for pos in _chunks:
+		var chunk: Chunk = _chunks[pos]
+		if chunk.lod or _within_collision_range(pos) or chunk.data.is_empty():
+			continue
+		var compressed := compress_chunk_data(chunk.data)
+		if compressed.size() < chunk.data.size():
+			chunk.compressed_data = compressed
+			chunk.data.clear()
 
 
 func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> void:
@@ -686,6 +994,7 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> voi
 		_chunks[pos] = chunk
 	chunk.lod = lod
 	chunk.data = res.data
+	chunk.compressed_data.clear()
 	chunk.heights = res.heights
 	chunk.foliage_tints = res.foliage_tints
 	chunk.water_tints = res.water_tints
@@ -701,15 +1010,18 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> voi
 	chunk.mesh.mesh = ChunkMesher.arrays_to_mesh(res.verts, res.normals, res.uvs, res.colors, res.indices, _blocks.material, res.light, res.layers)
 	chunk.water.mesh = ChunkMesher.arrays_to_mesh(res.water_verts, res.water_normals, res.water_uvs, res.water_colors, res.water_indices, _blocks.water_material, res.water_light)
 	if not lod and _within_collision_range(pos) and not res.collision.is_empty():
+		_ensure_chunk_collision_nodes(chunk, pos)
 		var shape := ConcavePolygonShape3D.new()
 		shape.set_faces(res.collision)
 		shape.backface_collision = true
 		chunk.shape.shape = shape
 	else:
-		chunk.shape.shape = null
+		_remove_chunk_collision_nodes(chunk)
 	_remesh_on_commit_neighbors(pos)
 	if mode_changed:
 		_invalidate_mode_change_neighbors(pos)
+	if ENABLE_COLD_CHUNK_COMPRESSION:
+		_compress_distant_chunks()
 
 
 func _invalidate_mode_change_neighbors(pos: Vector2i) -> void:
@@ -736,15 +1048,31 @@ func _create_chunk_nodes(pos: Vector2i) -> Chunk:
 	chunk.water.position = chunk_origin
 	chunk.water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(chunk.water)
+	return chunk
+
+
+func _ensure_chunk_collision_nodes(chunk: Chunk, pos: Vector2i) -> void:
+	if chunk.body != null and is_instance_valid(chunk.body) and chunk.shape != null \
+			and is_instance_valid(chunk.shape):
+		return
 	chunk.body = StaticBody3D.new()
 	chunk.body.name = "Body_%d_%d" % [pos.x, pos.y]
-	chunk.body.position = chunk_origin
+	chunk.body.position = Vector3(pos.x * VoxelDefs.CHUNK_SIZE, 0.0,
+		pos.y * VoxelDefs.CHUNK_SIZE)
 	chunk.body.collision_layer = VoxelDefs.COLLISION_LAYER_WORLD
 	chunk.body.collision_mask = 0
 	add_child(chunk.body)
 	chunk.shape = CollisionShape3D.new()
 	chunk.body.add_child(chunk.shape)
-	return chunk
+
+
+func _remove_chunk_collision_nodes(chunk: Chunk) -> void:
+	if chunk.shape != null and is_instance_valid(chunk.shape):
+		chunk.shape.shape = null
+	if chunk.body != null and is_instance_valid(chunk.body):
+		chunk.body.queue_free()
+	chunk.shape = null
+	chunk.body = null
 
 
 func _remesh_on_commit_neighbors(pos: Vector2i) -> void:
@@ -803,16 +1131,62 @@ func _unload_far() -> void:
 	for pos in _chunks.keys():
 		if maxi(absi(pos.x - _stream_center.x), absi(pos.y - _stream_center.y)) > unload_radius:
 			_free_chunk(pos)
+	_discard_unloaded_stream_state()
 
 
 func _free_chunk(pos: Vector2i) -> void:
 	var chunk: Chunk = _chunks.get(pos)
 	if chunk == null:
 		return
+	# queue_free() is deferred. Remove physics immediately so a large render-
+	# distance contraction cannot leave one-frame ghost walls from old bodies.
+	_remove_chunk_collision_nodes(chunk)
 	chunk.mesh.queue_free()
 	chunk.water.queue_free()
-	chunk.body.queue_free()
 	_chunks.erase(pos)
+	_discard_unloaded_chunk_state(pos)
+
+
+## A disk-backed chunk can drop its hydrated edit snapshot once its scene nodes
+## are gone: WorldStorage remains the authoritative copy. Keep versions while a
+## worker or commit item still refers to them, otherwise a late stale result
+## could look current after a fast return to the same stream center. In-memory
+## worlds intentionally retain their edit buckets so procedural reloads still
+## replay unsaved edits.
+func _discard_unloaded_stream_state() -> void:
+	var candidates: Dictionary = {}
+	for pos in _dirty:
+		candidates[pos] = true
+	for pos in _generated:
+		candidates[pos] = true
+	for pos in _chunk_edit_version:
+		candidates[pos] = true
+	if _edit_store != null:
+		for pos in _hydrated_edit_chunks:
+			candidates[pos] = true
+		for pos in _edits_by_chunk:
+			candidates[pos] = true
+	for pos in candidates:
+		_discard_unloaded_chunk_state(pos)
+
+
+func _discard_unloaded_chunk_state(pos: Vector2i) -> void:
+	if _chunks.has(pos) or _desired.has(pos) or _pending.has(pos):
+		return
+	for queued_item in _commit_queue:
+		var item: CommitItem = queued_item
+		if item.pos == pos:
+			return
+	_generated.erase(pos)
+	_dirty.erase(pos)
+	_chunk_edit_version.erase(pos)
+	if _edit_store == null:
+		return
+	var edits: Dictionary = _edits_by_chunk.get(pos, {})
+	for position in edits:
+		_edited_blocks.erase(position)
+	_edits_by_chunk.erase(pos)
+	_hydrated_edit_chunks.erase(pos)
 
 
 func _chunk_for_position(world_position: Vector3) -> Vector2i:
@@ -846,6 +1220,7 @@ func get_block_world(block_position: Vector3i) -> int:
 	var chunk := _loaded_chunk_for(block_position)
 	if chunk == null or chunk.lod:
 		return BlockRegistry.BLOCK_AIR
+	_restore_chunk_data(chunk)
 	return chunk.data[_data_index(block_position)]
 
 
@@ -930,13 +1305,14 @@ func break_block(block_position: Vector3i) -> int:
 	var chunk: Chunk = _chunks.get(chunk_position)
 	if chunk == null or chunk.lod:
 		return BlockRegistry.BLOCK_AIR
+	_restore_chunk_data(chunk)
 	var index := _data_index(block_position)
 	var block_id: int = chunk.data[index]
 	if not _blocks.is_breakable(block_id):
 		return BlockRegistry.BLOCK_AIR
 	chunk.data[index] = BlockRegistry.BLOCK_AIR
 	_record_edit(block_position, BlockRegistry.BLOCK_AIR)
-	_touch_chunk(chunk_position, block_position)
+	_touch_chunk(chunk_position, block_position, block_id, BlockRegistry.BLOCK_AIR)
 	_seed_water(block_position)
 	return block_id
 
@@ -950,13 +1326,14 @@ func place_block(block_position: Vector3i, block_id: int) -> bool:
 	var chunk: Chunk = _chunks.get(chunk_position)
 	if chunk == null or chunk.lod:
 		return false
+	_restore_chunk_data(chunk)
 	var index := _data_index(block_position)
 	var existing: int = chunk.data[index]
 	if existing != BlockRegistry.BLOCK_AIR and not _blocks.is_water_id(existing):
 		return false
 	chunk.data[index] = block_id
 	_record_edit(block_position, block_id)
-	_touch_chunk(chunk_position, block_position)
+	_touch_chunk(chunk_position, block_position, existing, block_id)
 	_seed_water(block_position)
 	return true
 
@@ -1008,6 +1385,7 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 			var chunk: Chunk = _chunks.get(chunk_position)
 			if chunk == null or chunk.lod:
 				continue
+			_restore_chunk_data(chunk)
 			var local_x := x - chunk_position.x * VoxelDefs.CHUNK_SIZE
 			var local_z := z - chunk_position.y * VoxelDefs.CHUNK_SIZE
 			var column_index := local_x + local_z * VoxelDefs.DATA_STRIDE_Z
@@ -1035,6 +1413,7 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 				changed_chunks[chunk_position] = true
 	for chunk_position in changed_chunks:
 		_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
+		_stage_chunk_edits(chunk_position)
 		rebuild_chunks[chunk_position] = true
 		_add_loaded_light_ring(rebuild_chunks, chunk_position)
 	for chunk_position in rebuild_chunks:
@@ -1110,6 +1489,7 @@ func _ignite_fire_cell(block_position: Vector3i, life: int, changed_chunks: Dict
 	var chunk := _loaded_chunk_for(block_position)
 	if chunk == null or chunk.lod:
 		return false
+	_restore_chunk_data(chunk)
 	var existing := get_block_world(block_position)
 	if existing == BlockRegistry.BLOCK_FIRE:
 		_fire_life[block_position] = maxi(int(_fire_life.get(block_position, 0)), life)
@@ -1315,6 +1695,7 @@ func _extinguish_fire(position: Vector3i, changed_chunks: Dictionary) -> void:
 	var chunk := _loaded_chunk_for(position)
 	if chunk == null or chunk.lod:
 		return
+	_restore_chunk_data(chunk)
 	if get_block_world(position) != BlockRegistry.BLOCK_FIRE:
 		return
 	chunk.data[_data_index(position)] = BlockRegistry.BLOCK_AIR
@@ -1330,6 +1711,7 @@ func _destroy_burnt_block(position: Vector3i, changed_chunks: Dictionary) -> voi
 	var chunk := _loaded_chunk_for(position)
 	if chunk == null or chunk.lod:
 		return
+	_restore_chunk_data(chunk)
 	chunk.data[_data_index(position)] = BlockRegistry.BLOCK_AIR
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
 	_seed_water(position)
@@ -1344,6 +1726,7 @@ func _flush_fire_changes(changed_chunks: Dictionary) -> void:
 	var rebuild_chunks := {}
 	for chunk_position in changed_chunks:
 		_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
+		_stage_chunk_edits(chunk_position)
 		rebuild_chunks[chunk_position] = true
 		_add_loaded_light_ring(rebuild_chunks, chunk_position)
 	for chunk_position in rebuild_chunks:
@@ -1364,10 +1747,32 @@ func _record_edit_in_chunk(block_position: Vector3i, block_id: int, chunk_positi
 
 
 func _chunk_edits_for(pos: Vector2i) -> Dictionary:
+	_hydrate_chunk_edits(pos)
 	var bucket = _edits_by_chunk.get(pos)
 	if bucket == null:
 		return {}
 	return bucket.duplicate()
+
+
+func _hydrate_chunk_edits(pos: Vector2i) -> void:
+	if _hydrated_edit_chunks.has(pos):
+		return
+	_hydrated_edit_chunks[pos] = true
+	if _edit_store == null:
+		return
+	var edits := _edit_store.load_chunk_edits(pos)
+	if edits.is_empty():
+		return
+	_edits_by_chunk[pos] = edits
+	for position in edits:
+		_edited_blocks[position] = edits[position]
+
+
+func _stage_chunk_edits(pos: Vector2i) -> void:
+	if _edit_store == null:
+		return
+	var bucket: Dictionary = _edits_by_chunk.get(pos, {})
+	_edit_store.stage_chunk_edits(pos, bucket)
 
 
 ## A regenerated chunk can bring persisted fire back from `_edited_blocks`.
@@ -1416,6 +1821,7 @@ func _water_tick() -> void:
 		var rebuild_chunks := {}
 		for chunk_position in changed_chunks:
 			_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
+			_stage_chunk_edits(chunk_position)
 			rebuild_chunks[chunk_position] = true
 			_add_loaded_light_ring(rebuild_chunks, chunk_position)
 		for chunk_position in rebuild_chunks:
@@ -1468,6 +1874,7 @@ func _water_place(position: Vector3i, block_id: int, changed_chunks: Dictionary)
 	var chunk := _loaded_chunk_for(position)
 	if chunk == null or chunk.lod:
 		return
+	_restore_chunk_data(chunk)
 	var index := _data_index(position)
 	if chunk.data[index] == block_id:
 		return
@@ -1478,15 +1885,160 @@ func _water_place(position: Vector3i, block_id: int, changed_chunks: Dictionary)
 		_queue_water(position + offset)
 
 
-func _touch_chunk(chunk_position: Vector2i, _block_position: Vector3i) -> void:
+## Single-cell edits always remesh their owner. Neighbor snapshots only need
+## invalidating when light can actually change, except at the edited chunk's
+## boundary where equal-attenuation blocks can still change emitted faces/AO.
+## Batch edits intentionally retain `_add_loaded_light_ring()` because keeping
+## every changed position to make this decision would defeat their batching.
+func _touch_chunk(chunk_position: Vector2i, block_position: Vector3i,
+		old_block_id: int, new_block_id: int) -> void:
 	_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
-	var rebuild_chunks := {chunk_position: true}
-	# A full light volume consumes all eight neighboring chunks. Sky and block
-	# light can travel MAX_LIGHT_LEVEL - 1 cells, so even a non-edge edit can
-	# alter baked light in an adjacent chunk; invalidate the complete 3x3 ring.
-	_add_loaded_light_ring(rebuild_chunks, chunk_position)
-	for rebuild_position in rebuild_chunks:
-		_queue_rebuild(rebuild_position, true)
+	_stage_chunk_edits(chunk_position)
+	var rebuild_neighbors: Array[Vector2i] = []
+	for direction in VoxelDefs.DIRS_8:
+		var neighbor_position: Vector2i = chunk_position + direction
+		if _chunks.has(neighbor_position) \
+				and _single_edit_can_invalidate_neighbor(old_block_id, new_block_id,
+					block_position, neighbor_position):
+			rebuild_neighbors.append(neighbor_position)
+	# Neighbor light/seam updates remain required, but the edited owner controls
+	# interaction feedback and collision. Queue neighbors at the back and the
+	# owner last at the front so mining/placing cannot sit behind several heavy
+	# light-volume remeshes while extreme-distance streaming is active.
+	for neighbor_position in rebuild_neighbors:
+		_queue_rebuild(neighbor_position, true, true)
+	_queue_rebuild(chunk_position, true)
+
+
+## Light volumes are identical outside the owner unless a cell's attenuation
+## or emission changes. Comparing the actual emission color also catches two
+## different colored emitters (for example, torch -> glowstone).
+static func _single_edit_requires_light_neighbor_rebuild(old_block_id: int,
+		new_block_id: int) -> bool:
+	return _light_attenuation_for_id(old_block_id) != _light_attenuation_for_id(new_block_id) \
+		or _is_emissive_id(old_block_id) != _is_emissive_id(new_block_id) \
+		or _emission_color_for_id(old_block_id) != _emission_color_for_id(new_block_id)
+
+
+## Equal attenuation does not imply equal boundary mesh topology. Transparent
+## cube faces are culled against an equal neighbour, while water levels alter
+## water-face culling. Opaque swaps and like-for-like foliage remain stable.
+static func _single_edit_can_change_boundary_visibility(old_block_id: int,
+		new_block_id: int) -> bool:
+	if old_block_id == new_block_id \
+			or _light_attenuation_for_id(old_block_id) != _light_attenuation_for_id(new_block_id):
+		return false
+	if _water_level_for_id(old_block_id) != _water_level_for_id(new_block_id):
+		return true
+	if _is_cross_id(old_block_id) != _is_cross_id(new_block_id):
+		return true
+	return _is_nonopaque_cube_id(old_block_id) or _is_nonopaque_cube_id(new_block_id)
+
+
+## Selects one loaded neighbour for a one-cell edit. Lighting may reach into a
+## nearby chunk within its finite Manhattan range; equal-attenuation geometry
+## only reaches chunks sharing the edited cell's edge or corner.
+static func _single_edit_can_invalidate_neighbor(old_block_id: int, new_block_id: int,
+		block_position: Vector3i, neighbor_position: Vector2i) -> bool:
+	if _single_edit_requires_light_neighbor_rebuild(old_block_id, new_block_id):
+		return _light_can_reach_chunk_horizontally(block_position, neighbor_position)
+	return _single_edit_can_change_boundary_visibility(old_block_id, new_block_id) \
+		and _block_touches_chunk_boundary(block_position, neighbor_position)
+
+
+static func _light_attenuation_for_id(block_id: int) -> int:
+	if _is_opaque_id(block_id):
+		return BlockRegistry.MAX_LIGHT_LEVEL
+	if _is_water_id(block_id):
+		return BlockRegistry.ATTENUATION_WATER
+	if (_block_flags_for_id(block_id) & BlockRegistry.FLAG_LEAVES) != 0:
+		return BlockRegistry.ATTENUATION_LEAVES
+	return 0
+
+
+static func _is_opaque_id(block_id: int) -> bool:
+	return (_block_flags_for_id(block_id) & BlockRegistry.FLAG_OPAQUE) != 0
+
+
+static func _is_nonopaque_cube_id(block_id: int) -> bool:
+	return block_id != BlockRegistry.BLOCK_AIR and not _is_opaque_id(block_id) \
+		and not _is_water_id(block_id) \
+		and (_block_flags_for_id(block_id) & (BlockRegistry.FLAG_CROSS | BlockRegistry.FLAG_LEAVES)) == 0
+
+
+static func _is_cross_id(block_id: int) -> bool:
+	return (_block_flags_for_id(block_id) & BlockRegistry.FLAG_CROSS) != 0
+
+
+static func _is_water_id(block_id: int) -> bool:
+	return block_id == BlockRegistry.BLOCK_WATER \
+		or (block_id >= BlockRegistry.BLOCK_WATER_FLOW_7 and block_id <= BlockRegistry.BLOCK_WATER_FLOW_1)
+
+
+static func _water_level_for_id(block_id: int) -> int:
+	if block_id == BlockRegistry.BLOCK_WATER:
+		return 8
+	if block_id >= BlockRegistry.BLOCK_WATER_FLOW_7 and block_id <= BlockRegistry.BLOCK_WATER_FLOW_1:
+		return BlockRegistry.BLOCK_WATER_FLOW_1 - block_id + 1
+	return 0
+
+
+static func _is_emissive_id(block_id: int) -> bool:
+	return ((_block_flags_for_id(block_id) & BlockRegistry.FLAG_EMISSIVE) != 0 \
+		or BlockRegistry.EMISSIVE_COLORS.has(block_id)) and block_id > BlockRegistry.BLOCK_AIR
+
+
+static func _emission_color_for_id(block_id: int) -> Color:
+	return BlockRegistry.EMISSIVE_COLORS.get(block_id, Color.BLACK)
+
+
+static func _block_flags_for_id(block_id: int) -> int:
+	if block_id < BlockRegistry.BLOCK_AIR or block_id >= BlockRegistry.BLOCK_DEFS.size():
+		return 0
+	return int(BlockRegistry.BLOCK_DEFS[block_id][5])
+
+
+static func _block_touches_chunk_boundary(block_position: Vector3i,
+		neighbor_position: Vector2i) -> bool:
+	var owner := Vector2i(
+		floori(float(block_position.x) / float(VoxelDefs.CHUNK_SIZE)),
+		floori(float(block_position.z) / float(VoxelDefs.CHUNK_SIZE))
+	)
+	var direction := neighbor_position - owner
+	if absi(direction.x) > 1 or absi(direction.y) > 1 or direction == Vector2i.ZERO:
+		return false
+	var local_x := block_position.x - owner.x * VoxelDefs.CHUNK_SIZE
+	var local_z := block_position.z - owner.y * VoxelDefs.CHUNK_SIZE
+	var touches_x := direction.x == 0 \
+		or (direction.x < 0 and local_x == 0) \
+		or (direction.x > 0 and local_x == VoxelDefs.CHUNK_SIZE - 1)
+	var touches_z := direction.y == 0 \
+		or (direction.y < 0 and local_z == 0) \
+		or (direction.y > 0 and local_z == VoxelDefs.CHUNK_SIZE - 1)
+	return touches_x and touches_z
+
+
+## Returns whether any horizontal cell in `chunk_position` lies within the
+## bounded baked-light propagation range of `block_position`. The interval
+## calculation is valid for negative world/chunk coordinates and naturally
+## handles diagonals through Manhattan distance.
+static func _light_can_reach_chunk_horizontally(block_position: Vector3i,
+		chunk_position: Vector2i) -> bool:
+	var min_x := chunk_position.x * VoxelDefs.CHUNK_SIZE
+	var min_z := chunk_position.y * VoxelDefs.CHUNK_SIZE
+	var max_x := min_x + VoxelDefs.CHUNK_SIZE - 1
+	var max_z := min_z + VoxelDefs.CHUNK_SIZE - 1
+	var x_distance := _distance_to_closed_interval(block_position.x, min_x, max_x)
+	var z_distance := _distance_to_closed_interval(block_position.z, min_z, max_z)
+	return x_distance + z_distance <= LIGHT_MAX_PROPAGATION_DISTANCE
+
+
+static func _distance_to_closed_interval(value: int, minimum: int, maximum: int) -> int:
+	if value < minimum:
+		return minimum - value
+	if value > maximum:
+		return value - maximum
+	return 0
 
 
 func _add_loaded_light_ring(rebuilds: Dictionary, chunk_position: Vector2i) -> void:

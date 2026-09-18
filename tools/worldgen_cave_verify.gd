@@ -5,6 +5,7 @@ const TEST_CONFIG := {
 	"world_type": 0,
 	"terrain_scale": 1.0,
 	"tree_density": 0.0,
+	"worldgen_version": 9,
 	"macro_scale": 384.0,
 	"river_density": 1.0,
 	"erosion_strength": 0.55,
@@ -22,6 +23,8 @@ func _initialize() -> void:
 	_registry = BlockRegistry.new()
 	_mesher = ChunkMesher.new(_registry)
 	_verify_cave_catalog()
+	_verify_v10_cave_compatibility()
+	_verify_v11_cave_regions()
 	_verify_endless_cave_network()
 	_verify_cave_dressing()
 	_verify_surface_exclusion()
@@ -41,24 +44,109 @@ func _verify_cave_catalog() -> void:
 	var catalog := BiomeCatalog.new()
 	_expect(catalog.name_for(BiomeCatalog.LUSH_CAVES) == "lush_caves", "lush cave biome was not appended to BiomeCatalog")
 	_expect(catalog.name_for(BiomeCatalog.DEEP_DARK) == "deep_dark", "deep-dark biome was not appended to BiomeCatalog")
+	_expect(catalog.name_for(BiomeCatalog.DRIPSTONE_CAVES) == "dripstone_caves", "dripstone cave biome was not appended to BiomeCatalog")
 	var found_lush := false
 	var found_deep := false
+	var found_dripstone := false
 	var middle_regions := 0
 	var middle_lush := 0
+	var middle_dripstone := 0
 	for cell_z in range(-8, 9):
 		for cell_x in range(-8, 9):
 			var x := cell_x * BiomeCatalog.CAVE_REGION_SIZE + 16
 			var z := cell_z * BiomeCatalog.CAVE_REGION_SIZE + 16
-			var middle_biome := BiomeCatalog.cave_biome_at(int(TEST_CONFIG.seed), x, 50, z)
+			var middle_biome := BiomeCatalog.cave_biome_at(
+				int(TEST_CONFIG.seed), x, 50, z, int(TEST_CONFIG.worldgen_version))
 			found_lush = found_lush or middle_biome == BiomeCatalog.LUSH_CAVES
-			found_deep = found_deep or BiomeCatalog.cave_biome_at(int(TEST_CONFIG.seed), x, 24, z) == BiomeCatalog.DEEP_DARK
+			found_dripstone = found_dripstone or middle_biome == BiomeCatalog.DRIPSTONE_CAVES
+			found_deep = found_deep or BiomeCatalog.cave_biome_at(
+				int(TEST_CONFIG.seed), x, 24, z, int(TEST_CONFIG.worldgen_version)) == BiomeCatalog.DEEP_DARK
 			middle_regions += 1
 			if middle_biome == BiomeCatalog.LUSH_CAVES:
 				middle_lush += 1
+			elif middle_biome == BiomeCatalog.DRIPSTONE_CAVES:
+				middle_dripstone += 1
 	_expect(found_lush, "cave classifier produced no lush regions")
 	_expect(found_deep, "cave classifier produced no deep-dark regions")
-	_expect(float(middle_lush) / float(middle_regions) >= 0.65, "lush cave regions are too sparse to discover reliably")
+	_expect(found_dripstone, "cave classifier produced no dripstone regions")
+	_expect(float(middle_lush) / float(middle_regions) >= 0.62, "lush cave regions are too sparse to discover reliably")
+	var dripstone_share := float(middle_dripstone) / float(middle_regions)
+	_expect(dripstone_share >= 0.12 and dripstone_share <= 0.28,
+		"dripstone cave share left its 12-28% guardrail")
+	_expect(BiomeCatalog.cave_surface_block(BiomeCatalog.DRIPSTONE_CAVES) == BlockRegistry.BLOCK_CALCITE,
+		"dripstone caves do not expose calcite floors")
+	# Version 8 retains the original two-region classifier for persisted worlds.
+	for cell_x in range(-8, 9):
+		var x := cell_x * BiomeCatalog.CAVE_REGION_SIZE + 16
+		_expect(BiomeCatalog.cave_biome_at(int(TEST_CONFIG.seed), x, 50, 16, 8) != BiomeCatalog.DRIPSTONE_CAVES,
+			"version 8 unexpectedly classified a dripstone cave")
 	_expect(not BiomeCatalog.is_cave_biome(BiomeCatalog.PLAINS), "surface biome was classified as a cave biome")
+
+
+## Fixed legacy outputs guard save compatibility independently of the current
+## implementation: v10 worlds must keep their original column identities.
+func _verify_v10_cave_compatibility() -> void:
+	var fixtures: Array[Dictionary] = [
+		{"position": Vector3i(16, 24, 16), "biome": BiomeCatalog.DEEP_DARK},
+		{"position": Vector3i(16, 50, 16), "biome": BiomeCatalog.LUSH_CAVES},
+		{"position": Vector3i(304, 24, -464), "biome": BiomeCatalog.DRIPSTONE_CAVES},
+		{"position": Vector3i(304, 50, -464), "biome": BiomeCatalog.LUSH_CAVES},
+		{"position": Vector3i(-368, 24, -272), "biome": BiomeCatalog.LUSH_CAVES},
+		{"position": Vector3i(-368, 50, -272), "biome": BiomeCatalog.DRIPSTONE_CAVES},
+		{"position": Vector3i(-80, 24, -464), "biome": BiomeCatalog.CAVE_BIOME_NONE},
+	]
+	for fixture in fixtures:
+		var position: Vector3i = fixture.position
+		_expect(BiomeCatalog.cave_biome_at(int(TEST_CONFIG.seed), position.x, position.y, position.z, 10) == int(fixture.biome),
+			"v10 cave compatibility fixture changed at %s" % position)
+	# V8 predates dripstone but otherwise keeps its original two-region result.
+	_expect(BiomeCatalog.cave_biome_at(int(TEST_CONFIG.seed), 304, 24, -464, 8) == BiomeCatalog.LUSH_CAVES,
+		"v8 cave compatibility fixture changed")
+
+
+func _verify_v11_cave_regions() -> void:
+	const version := 11
+	var found := {
+		BiomeCatalog.LUSH_CAVES: false,
+		BiomeCatalog.DEEP_DARK: false,
+		BiomeCatalog.DRIPSTONE_CAVES: false,
+	}
+	for world_z in range(-384, 385, 24):
+		for world_x in range(-384, 385, 24):
+			for y in range(6, 79, 6):
+				var first := BiomeCatalog.cave_biome_at(int(TEST_CONFIG.seed), world_x, y, world_z, version)
+				var repeated := BiomeCatalog.cave_biome_at(int(TEST_CONFIG.seed), world_x, y, world_z, version)
+				_expect(first == repeated, "v11 cave classifier is not deterministic")
+				_expect(first == BiomeCatalog.CAVE_BIOME_NONE or BiomeCatalog.is_cave_biome(first),
+					"v11 cave classifier returned a surface biome ID")
+				if found.has(first):
+					found[first] = true
+	for biome in found:
+		_expect(bool(found[biome]), "v11 cave classifier produced no biome %d" % biome)
+
+	# A one-voxel step has a bounded value delta on every axis, including fixed
+	# global-cell boundaries. This rejects the old column checkerboard behavior.
+	for world_z in range(-192, 193, 24):
+		for world_x in range(-192, 193, 24):
+			for y in range(6, 78, 6):
+				var center := BiomeCatalog.cave_region_value_at(int(TEST_CONFIG.seed), world_x, y, world_z)
+				var x_delta := absf(center - BiomeCatalog.cave_region_value_at(int(TEST_CONFIG.seed), world_x + 1, y, world_z))
+				var y_delta := absf(center - BiomeCatalog.cave_region_value_at(int(TEST_CONFIG.seed), world_x, y + 1, world_z))
+				var z_delta := absf(center - BiomeCatalog.cave_region_value_at(int(TEST_CONFIG.seed), world_x, y, world_z + 1))
+				_expect(x_delta <= 0.021 and y_delta <= 0.041 and z_delta <= 0.021,
+					"v11 cave value field is discontinuous across a voxel or chunk boundary")
+
+	var catalog := BiomeCatalog.new()
+	var surface_names := PackedStringArray([
+		"plains", "forest", "desert", "snow", "swamp", "shelf_sea", "deep_sea", "beach", "river",
+		"jungle", "savanna", "taiga", "badlands", "meadow", "highlands", "kelp_forest", "seagrass_meadow",
+		"coral_reef", "frozen_sea",
+	])
+	for biome in surface_names.size():
+		_expect(catalog.name_for(biome) == surface_names[biome], "surface biome ID %d changed in v11" % biome)
+	_expect(BiomeCatalog.cave_biome_at(int(TEST_CONFIG.seed), 0, 4, 0, version) == BiomeCatalog.CAVE_BIOME_NONE
+		and BiomeCatalog.cave_biome_at(int(TEST_CONFIG.seed), 0, 79, 0, version) == BiomeCatalog.CAVE_BIOME_NONE,
+		"v11 cave classifier escaped its underground range")
 
 
 func _verify_endless_cave_network() -> void:
@@ -116,20 +204,31 @@ func _verify_cave_dressing() -> void:
 	var setup := _worldgen_services()
 	var populator: VoxelPopulator = setup.populator
 	var sampler: TerrainSampler = setup.sampler
-	for cave_biome in [BiomeCatalog.LUSH_CAVES, BiomeCatalog.DEEP_DARK]:
+	for cave_biome in [BiomeCatalog.LUSH_CAVES, BiomeCatalog.DEEP_DARK, BiomeCatalog.DRIPSTONE_CAVES]:
 		var chunk_pos := _find_cave_chunk(cave_biome)
 		var field := sampler.build_field(chunk_pos)
 		_set_field_height(field, 100.0)
-		var data := _room_fixture(68, 9, 59)
+		var floor_y := 18 if cave_biome == BiomeCatalog.DEEP_DARK else 44
+		var ceiling_y := 34 if cave_biome == BiomeCatalog.DEEP_DARK else 60
+		var data := _room_fixture(68, floor_y, ceiling_y)
 		populator._decorate_caves(data, field, chunk_pos.x * VoxelDefs.CHUNK_SIZE, chunk_pos.y * VoxelDefs.CHUNK_SIZE)
 		if cave_biome == BiomeCatalog.LUSH_CAVES:
 			var lush_surface_blocks := data.count(BlockRegistry.BLOCK_MOSS) + data.count(BlockRegistry.BLOCK_CAVE_MOSS)
 			_expect(lush_surface_blocks >= 24, "lush cave material patches are too sparse to read visually")
 			_expect(data.count(BlockRegistry.BLOCK_CAVE_MOSS) > 0, "lush cave dressing placed no vegetation")
-		else:
+		elif cave_biome == BiomeCatalog.DEEP_DARK:
 			var deep_surface_blocks := data.count(BlockRegistry.BLOCK_DEEPSTONE) + data.count(BlockRegistry.BLOCK_SCULK)
 			_expect(deep_surface_blocks >= 24, "deep-dark material patches are too sparse to read visually")
 			_expect(data.count(BlockRegistry.BLOCK_SCULK) > 0, "deep-dark dressing placed no sculk")
+		else:
+			_expect(data.count(BlockRegistry.BLOCK_CALCITE) >= 24,
+				"dripstone cave calcite patches are too sparse to read visually")
+			_expect(data.count(BlockRegistry.BLOCK_DRIPSTONE) > 0,
+				"dripstone cave dressing placed no formations")
+		var duplicate := _room_fixture(68, floor_y, ceiling_y)
+		populator._decorate_caves(duplicate, field,
+			chunk_pos.x * VoxelDefs.CHUNK_SIZE, chunk_pos.y * VoxelDefs.CHUNK_SIZE)
+		_expect(data == duplicate, "cave dressing is not deterministic for biome %d" % cave_biome)
 	var normal_chunk := Vector2i.ZERO
 	var normal_field := sampler.build_field(normal_chunk)
 	_set_field_height(normal_field, 100.0)
@@ -246,12 +345,13 @@ func _worldgen_services() -> Dictionary:
 
 
 func _find_cave_chunk(target: int) -> Vector2i:
-	var y := 50 if target == BiomeCatalog.LUSH_CAVES else 24
+	var y := 24 if target == BiomeCatalog.DEEP_DARK else 50
 	for cell_z in range(-10, 11):
 		for cell_x in range(-10, 11):
 			var world_x := cell_x * BiomeCatalog.CAVE_REGION_SIZE + 16
 			var world_z := cell_z * BiomeCatalog.CAVE_REGION_SIZE + 16
-			if BiomeCatalog.cave_biome_at(int(TEST_CONFIG.seed), world_x, y, world_z) == target:
+			if BiomeCatalog.cave_biome_at(
+				int(TEST_CONFIG.seed), world_x, y, world_z, int(TEST_CONFIG.worldgen_version)) == target:
 				return Vector2i(WorldGenHash.floor_div(world_x, VoxelDefs.CHUNK_SIZE), WorldGenHash.floor_div(world_z, VoxelDefs.CHUNK_SIZE))
 	_failures.append("could not find cave biome %d fixture region" % target)
 	return Vector2i.ZERO
