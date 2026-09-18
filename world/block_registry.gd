@@ -394,7 +394,7 @@ static func canonical_id(block_id: int) -> int:
 
 ## State IDs remain valid world blocks but must never appear as inventory items.
 static func is_inventory_block(block_id: int) -> bool:
-	return block_id > BLOCK_AIR and block_id <= BLOCK_WOOD_BED_LAST and canonical_id(block_id) == block_id
+	return block_id > BLOCK_AIR and block_id < BLOCK_DEFS.size() and canonical_id(block_id) == block_id
 
 
 ## Selects the state written to voxel bytes for a placement. `normal` is the

@@ -947,12 +947,11 @@ func _attempt_sleep(bed_position: Vector3i) -> void:
 	if world.is_threatened(player.global_position):
 		set_status("You cannot sleep while threatened")
 		return
-	var requested_spawn := Vector3(bed_position) + Vector3(0.5, 2.0, 0.5)
-	var safe_spawn := world.find_safe_spawn(requested_spawn)
-	if safe_spawn.is_equal_approx(requested_spawn):
+	var bed_spawn := world.find_bed_spawn(bed_position)
+	if not bool(bed_spawn.get("found", false)):
 		set_status("No safe respawn point near this bed")
 		return
-	player.spawn_position = safe_spawn
+	player.spawn_position = bed_spawn.position
 	_day_night.skip_to_morning()
 	set_status("Slept until morning · respawn point set")
 	_flush_world_save()

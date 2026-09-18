@@ -2202,6 +2202,28 @@ func find_safe_spawn(desired: Vector3) -> Vector3:
 	return desired
 
 
+## Beds need a same-floor search rather than the surface spawn scanner above.
+## A roof is often the topmost opaque block in an indoor column, so using
+## find_safe_spawn() would incorrectly move the saved respawn onto the roof.
+func find_bed_spawn(bed_position: Vector3i, radius: int = 3) -> Dictionary:
+	var safe_radius := clampi(radius, 1, 8)
+	for ring in range(1, safe_radius + 1):
+		for dx in range(-ring, ring + 1):
+			for dz in range(-ring, ring + 1):
+				if maxi(absi(dx), absi(dz)) != ring:
+					continue
+				var feet_cell := bed_position + Vector3i(dx, 0, dz)
+				if get_block_world(feet_cell) != BlockRegistry.BLOCK_AIR \
+						or get_block_world(feet_cell + Vector3i.UP) != BlockRegistry.BLOCK_AIR:
+					continue
+				var below := get_block_world(feet_cell + Vector3i.DOWN)
+				if below == BlockRegistry.BLOCK_AIR or _blocks.is_water_id(below) \
+						or _blocks.has_flag(below, BlockRegistry.FLAG_CROSS):
+					continue
+				return {"found": true, "position": Vector3(feet_cell) + Vector3(0.5, 0.5, 0.5)}
+	return {"found": false}
+
+
 func _find_column_spawn(block_x: int, block_z: int, scan_top: int) -> int:
 	for y in range(scan_top, 0, -1):
 		var id := get_block_world(Vector3i(block_x, y, block_z))

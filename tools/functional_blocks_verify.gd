@@ -8,6 +8,7 @@ func _init() -> void:
 	_verify_shape_meshes()
 	_verify_recipes_and_drops()
 	_verify_sleep_clock_and_threat_hook()
+	_verify_indoor_bed_spawn()
 	if failures == 0:
 		print("functional_blocks_verify: PASS")
 		quit(0)
@@ -110,6 +111,34 @@ func _verify_sleep_clock_and_threat_hook() -> void:
 	_check(not world.is_threatened(Vector3.ZERO), "no entity system means no default threat")
 	world.threat_check = func(_position: Vector3, radius: float) -> bool: return radius >= 8.0
 	_check(world.is_threatened(Vector3.ZERO), "installed hostile query blocks sleep")
+
+
+func _verify_indoor_bed_spawn() -> void:
+	var world := VoxelWorld.new()
+	world._blocks = BlockRegistry.new()
+	var chunk := VoxelWorld.Chunk.new()
+	chunk.data.resize(VoxelDefs.CHUNK_AREA * VoxelDefs.WORLD_HEIGHT)
+	world._chunks[Vector2i.ZERO] = chunk
+	var bed := Vector3i(8, 5, 8)
+	# Solid floor, occupied bed cell, and a roof that the general surface-spawn
+	# search would prefer. The dedicated search must stay beside the bed.
+	for z in range(5, 12):
+		for x in range(5, 12):
+			_set_fixture_block(chunk.data, Vector3i(x, 4, z), BlockRegistry.BLOCK_STONE)
+			_set_fixture_block(chunk.data, Vector3i(x, 8, z), BlockRegistry.BLOCK_STONE)
+	_set_fixture_block(chunk.data, bed, BlockRegistry.BLOCK_WOOD_BED)
+	var result := world.find_bed_spawn(bed)
+	_check(bool(result.get("found", false)), "indoor bed finds a same-floor respawn")
+	if bool(result.get("found", false)):
+		var position: Vector3 = result.position
+		_check(position.y < 7.0, "indoor bed respawn stays below the roof")
+		_check(absi(floori(position.x) - bed.x) <= 3 and absi(floori(position.z) - bed.z) <= 3,
+			"bed respawn stays nearby")
+
+
+func _set_fixture_block(data: PackedByteArray, position: Vector3i, block_id: int) -> void:
+	data[position.x + position.z * VoxelDefs.DATA_STRIDE_Z \
+		+ position.y * VoxelDefs.DATA_STRIDE_Y] = block_id
 
 
 func _check(condition: bool, label: String) -> void:
