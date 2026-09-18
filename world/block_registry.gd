@@ -77,6 +77,37 @@ const BLOCK_CHEST := 72
 const BLOCK_FURNACE := 73
 const BLOCK_PLANKS := 74
 
+## State-backed wooden building blocks. IDs 0..74 are part of the persistent
+## world format and must never move. The first ID in each group is the item and
+## canonical block ID; the remaining IDs are voxel-only placement states.
+const BLOCK_WOOD_STAIRS := 75
+const BLOCK_WOOD_STAIRS_EAST := 76
+const BLOCK_WOOD_STAIRS_SOUTH := 77
+const BLOCK_WOOD_STAIRS_WEST := 78
+const BLOCK_WOOD_SLAB := 79
+const BLOCK_WOOD_SLAB_TOP := 80
+const BLOCK_WOOD_DOOR := 81
+const BLOCK_WOOD_DOOR_LAST := 96
+const BLOCK_WOOD_LADDER := 97
+const BLOCK_WOOD_LADDER_LAST := 100
+const BLOCK_WOOD_SIGN := 101
+const BLOCK_WOOD_SIGN_LAST := 104
+const BLOCK_WOOD_BED := 105
+const BLOCK_WOOD_BED_LAST := 108
+
+const FACING_NORTH := 0
+const FACING_EAST := 1
+const FACING_SOUTH := 2
+const FACING_WEST := 3
+
+const SHAPE_CUBE := 0
+const SHAPE_STAIRS := 1
+const SHAPE_SLAB := 2
+const SHAPE_DOOR := 3
+const SHAPE_LADDER := 4
+const SHAPE_SIGN := 5
+const SHAPE_BED := 6
+
 const FLAG_OPAQUE := 1
 const FLAG_CUTOUT := 2
 const FLAG_UNBREAKABLE := 4
@@ -162,10 +193,44 @@ const BLOCK_DEFS := [
 	[68, "AMETHYST", "amethyst.png", "amethyst.png", "amethyst.png", FLAG_OPAQUE | FLAG_EMISSIVE, 1.5, "pickaxe", 1],
 	[69, "CRYSTAL BUD", "crystal_bud.png", "crystal_bud.png", "crystal_bud.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE, 1.5, "pickaxe", 1],
 	[70, "FIRE", "fire.png", "fire.png", "fire.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE, 0.0, "", 0],
-	[71, "CRAFTING TABLE", "wood_top.png", "wood_side.png", "wood_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.5, "axe", 0],
-	[72, "CHEST", "wood_top.png", "wood_side.png", "wood_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.5, "axe", 0],
-	[73, "FURNACE", "stone.png", "cobblestone.png", "stone.png", FLAG_OPAQUE, 3.5, "pickaxe", 1],
+	[71, "CRAFTING TABLE", "crafting_top.png", "crafting_side.png", "crafting_bottom.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.5, "axe", 0],
+	[72, "CHEST", "chest_top.png", "chest_side.png", "chest_bottom.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.5, "axe", 0],
+	[73, "FURNACE", "furnace_top.png", "furnace_side.png", "furnace_bottom.png", FLAG_OPAQUE, 3.5, "pickaxe", 1],
 	[74, "PLANKS", "planks.png", "planks.png", "planks.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[75, "WOOD STAIRS", "planks.png", "planks.png", "planks.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[76, "WOOD STAIRS EAST", "planks.png", "planks.png", "planks.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[77, "WOOD STAIRS SOUTH", "planks.png", "planks.png", "planks.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[78, "WOOD STAIRS WEST", "planks.png", "planks.png", "planks.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[79, "WOOD SLAB", "planks.png", "planks.png", "planks.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[80, "WOOD SLAB TOP", "planks.png", "planks.png", "planks.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[81, "WOOD DOOR", "door_lower.png", "door_lower.png", "door_lower.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[82, "WOOD DOOR EAST", "door_lower.png", "door_lower.png", "door_lower.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[83, "WOOD DOOR SOUTH", "door_lower.png", "door_lower.png", "door_lower.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[84, "WOOD DOOR WEST", "door_lower.png", "door_lower.png", "door_lower.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[85, "WOOD DOOR OPEN", "door_lower.png", "door_lower.png", "door_lower.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[86, "WOOD DOOR EAST OPEN", "door_lower.png", "door_lower.png", "door_lower.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[87, "WOOD DOOR SOUTH OPEN", "door_lower.png", "door_lower.png", "door_lower.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[88, "WOOD DOOR WEST OPEN", "door_lower.png", "door_lower.png", "door_lower.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[89, "WOOD DOOR UPPER", "door_upper.png", "door_upper.png", "door_upper.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[90, "WOOD DOOR EAST UPPER", "door_upper.png", "door_upper.png", "door_upper.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[91, "WOOD DOOR SOUTH UPPER", "door_upper.png", "door_upper.png", "door_upper.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[92, "WOOD DOOR WEST UPPER", "door_upper.png", "door_upper.png", "door_upper.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[93, "WOOD DOOR OPEN UPPER", "door_upper.png", "door_upper.png", "door_upper.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[94, "WOOD DOOR EAST OPEN UPPER", "door_upper.png", "door_upper.png", "door_upper.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[95, "WOOD DOOR SOUTH OPEN UPPER", "door_upper.png", "door_upper.png", "door_upper.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[96, "WOOD DOOR WEST OPEN UPPER", "door_upper.png", "door_upper.png", "door_upper.png", FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[97, "WOOD LADDER", "ladder.png", "ladder.png", "ladder.png", FLAG_FLAMMABLE, 1.0, "axe", 0],
+	[98, "WOOD LADDER EAST", "ladder.png", "ladder.png", "ladder.png", FLAG_FLAMMABLE, 1.0, "axe", 0],
+	[99, "WOOD LADDER SOUTH", "ladder.png", "ladder.png", "ladder.png", FLAG_FLAMMABLE, 1.0, "axe", 0],
+	[100, "WOOD LADDER WEST", "ladder.png", "ladder.png", "ladder.png", FLAG_FLAMMABLE, 1.0, "axe", 0],
+	[101, "WOOD SIGN", "sign.png", "sign.png", "sign.png", FLAG_FLAMMABLE, 1.0, "axe", 0],
+	[102, "WOOD SIGN EAST", "sign.png", "sign.png", "sign.png", FLAG_FLAMMABLE, 1.0, "axe", 0],
+	[103, "WOOD SIGN SOUTH", "sign.png", "sign.png", "sign.png", FLAG_FLAMMABLE, 1.0, "axe", 0],
+	[104, "WOOD SIGN WEST", "sign.png", "sign.png", "sign.png", FLAG_FLAMMABLE, 1.0, "axe", 0],
+	[105, "WOOD BED", "bed_top.png", "bed_side.png", "bed_bottom.png", FLAG_FLAMMABLE, 0.2, "axe", 0],
+	[106, "WOOD BED EAST", "bed_top.png", "bed_side.png", "bed_bottom.png", FLAG_FLAMMABLE, 0.2, "axe", 0],
+	[107, "WOOD BED SOUTH", "bed_top.png", "bed_side.png", "bed_bottom.png", FLAG_FLAMMABLE, 0.2, "axe", 0],
+	[108, "WOOD BED WEST", "bed_top.png", "bed_side.png", "bed_bottom.png", FLAG_FLAMMABLE, 0.2, "axe", 0],
 ]
 
 const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
@@ -175,7 +240,24 @@ const UNDERWATER_TEXTURE_ROOT := "res://assets/placeholders/underwater/"
 const EXPLOSIVE_TEXTURE_ROOT := "res://assets/placeholders/explosives/"
 const CAVE_TEXTURE_ROOT := "res://assets/placeholders/caves/"
 const FIRE_TEXTURE_ROOT := "res://assets/placeholders/fire/"
+const FUNCTIONAL_TEXTURE_ROOT := "res://assets/placeholders/functional/"
 const EXTRA_TEXTURE_PATHS := {
+	"crafting_top.png": FUNCTIONAL_TEXTURE_ROOT + "crafting_top.png",
+	"crafting_side.png": FUNCTIONAL_TEXTURE_ROOT + "crafting_side.png",
+	"crafting_bottom.png": FUNCTIONAL_TEXTURE_ROOT + "crafting_bottom.png",
+	"chest_top.png": FUNCTIONAL_TEXTURE_ROOT + "chest_top.png",
+	"chest_side.png": FUNCTIONAL_TEXTURE_ROOT + "chest_side.png",
+	"chest_bottom.png": FUNCTIONAL_TEXTURE_ROOT + "chest_bottom.png",
+	"furnace_top.png": FUNCTIONAL_TEXTURE_ROOT + "furnace_top.png",
+	"furnace_side.png": FUNCTIONAL_TEXTURE_ROOT + "furnace_side.png",
+	"furnace_bottom.png": FUNCTIONAL_TEXTURE_ROOT + "furnace_bottom.png",
+	"door_lower.png": FUNCTIONAL_TEXTURE_ROOT + "door_lower.png",
+	"door_upper.png": FUNCTIONAL_TEXTURE_ROOT + "door_upper.png",
+	"ladder.png": FUNCTIONAL_TEXTURE_ROOT + "ladder.png",
+	"sign.png": FUNCTIONAL_TEXTURE_ROOT + "sign.png",
+	"bed_top.png": FUNCTIONAL_TEXTURE_ROOT + "bed_top.png",
+	"bed_side.png": FUNCTIONAL_TEXTURE_ROOT + "bed_side.png",
+	"bed_bottom.png": FUNCTIONAL_TEXTURE_ROOT + "bed_bottom.png",
 	"coral_substrate.png": UNDERWATER_TEXTURE_ROOT + "coral_substrate.png",
 	"seagrass.png": UNDERWATER_TEXTURE_ROOT + "seagrass.png",
 	"kelp.png": UNDERWATER_TEXTURE_ROOT + "kelp.png",
@@ -258,6 +340,127 @@ func _init() -> void:
 	var tile_lookup := _build_texture_array()
 	_build_block_tables(tile_lookup)
 	_load_water_material()
+
+
+static func shape_type(block_id: int) -> int:
+	if block_id >= BLOCK_WOOD_STAIRS and block_id <= BLOCK_WOOD_STAIRS_WEST:
+		return SHAPE_STAIRS
+	if block_id >= BLOCK_WOOD_SLAB and block_id <= BLOCK_WOOD_SLAB_TOP:
+		return SHAPE_SLAB
+	if is_door(block_id):
+		return SHAPE_DOOR
+	if is_ladder(block_id):
+		return SHAPE_LADDER
+	if is_sign(block_id):
+		return SHAPE_SIGN
+	if is_bed(block_id):
+		return SHAPE_BED
+	return SHAPE_CUBE
+
+
+## Horizontal state direction. Non-directional blocks deliberately resolve to
+## north so callers can use one helper for every placeable block.
+static func facing(block_id: int) -> int:
+	if block_id >= BLOCK_WOOD_STAIRS and block_id <= BLOCK_WOOD_STAIRS_WEST:
+		return block_id - BLOCK_WOOD_STAIRS
+	if is_door(block_id):
+		return (block_id - BLOCK_WOOD_DOOR) % 4
+	if is_ladder(block_id):
+		return block_id - BLOCK_WOOD_LADDER
+	if is_sign(block_id):
+		return block_id - BLOCK_WOOD_SIGN
+	if is_bed(block_id):
+		return block_id - BLOCK_WOOD_BED
+	return FACING_NORTH
+
+
+## Maps every persisted state to its inventory/crafting ID.
+static func canonical_id(block_id: int) -> int:
+	match shape_type(block_id):
+		SHAPE_STAIRS:
+			return BLOCK_WOOD_STAIRS
+		SHAPE_SLAB:
+			return BLOCK_WOOD_SLAB
+		SHAPE_DOOR:
+			return BLOCK_WOOD_DOOR
+		SHAPE_LADDER:
+			return BLOCK_WOOD_LADDER
+		SHAPE_SIGN:
+			return BLOCK_WOOD_SIGN
+		SHAPE_BED:
+			return BLOCK_WOOD_BED
+	return block_id
+
+
+## State IDs remain valid world blocks but must never appear as inventory items.
+static func is_inventory_block(block_id: int) -> bool:
+	return block_id > BLOCK_AIR and block_id <= BLOCK_WOOD_BED_LAST and canonical_id(block_id) == block_id
+
+
+## Selects the state written to voxel bytes for a placement. `normal` is the
+## face normal that was clicked; only slabs distinguish upper/lower placement.
+static func placement_variant(canonical: int, direction: int, normal: Vector3i = Vector3i.UP) -> int:
+	var state_facing := posmod(direction, 4)
+	match canonical_id(canonical):
+		BLOCK_WOOD_STAIRS:
+			return BLOCK_WOOD_STAIRS + state_facing
+		BLOCK_WOOD_SLAB:
+			return BLOCK_WOOD_SLAB_TOP if normal.y < 0 else BLOCK_WOOD_SLAB
+		BLOCK_WOOD_DOOR:
+			return door_state(state_facing, false, false)
+		BLOCK_WOOD_LADDER:
+			if normal.x > 0:
+				state_facing = FACING_WEST
+			elif normal.x < 0:
+				state_facing = FACING_EAST
+			elif normal.z > 0:
+				state_facing = FACING_NORTH
+			elif normal.z < 0:
+				state_facing = FACING_SOUTH
+			return BLOCK_WOOD_LADDER + state_facing
+		BLOCK_WOOD_SIGN:
+			return BLOCK_WOOD_SIGN + state_facing
+		BLOCK_WOOD_BED:
+			return BLOCK_WOOD_BED + state_facing
+	return canonical
+
+
+static func is_door(block_id: int) -> bool:
+	return block_id >= BLOCK_WOOD_DOOR and block_id <= BLOCK_WOOD_DOOR_LAST
+
+
+static func door_upper(block_id: int) -> bool:
+	return is_door(block_id) and block_id - BLOCK_WOOD_DOOR >= 8
+
+
+static func door_open(block_id: int) -> bool:
+	return is_door(block_id) and (int((block_id - BLOCK_WOOD_DOOR) / 4) % 2) == 1
+
+
+## Converts door state fields to the compact voxel ID. The order is facing,
+## open, upper: 4 facings x closed/open x lower/upper.
+static func door_state(direction: int, opened: bool = false, upper: bool = false) -> int:
+	return BLOCK_WOOD_DOOR + posmod(direction, 4) + (4 if opened else 0) + (8 if upper else 0)
+
+
+static func door_with_upper(block_id: int, upper: bool) -> int:
+	return door_state(facing(block_id), door_open(block_id), upper)
+
+
+static func door_with_open(block_id: int, opened: bool) -> int:
+	return door_state(facing(block_id), opened, door_upper(block_id))
+
+
+static func is_ladder(block_id: int) -> bool:
+	return block_id >= BLOCK_WOOD_LADDER and block_id <= BLOCK_WOOD_LADDER_LAST
+
+
+static func is_sign(block_id: int) -> bool:
+	return block_id >= BLOCK_WOOD_SIGN and block_id <= BLOCK_WOOD_SIGN_LAST
+
+
+static func is_bed(block_id: int) -> bool:
+	return block_id >= BLOCK_WOOD_BED and block_id <= BLOCK_WOOD_BED_LAST
 
 
 ## Wrong or under-tier tools can destroy a block, but cannot harvest its drops.
@@ -353,6 +556,8 @@ func is_emissive(block_id: int) -> bool:
 
 
 func layer_for(block_id: int, face: int) -> int:
+	if block_id < 0 or block_id >= _layer_top.size():
+		return 0
 	if face == 0:
 		return _layer_top[block_id]
 	if face == 1:

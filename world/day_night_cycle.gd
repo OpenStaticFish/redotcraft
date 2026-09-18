@@ -152,6 +152,16 @@ func set_time(hours: float) -> void:
 	_apply()
 
 
+func is_night() -> bool:
+	return time_hours >= 18.0 or time_hours < SUNRISE_HOUR
+
+
+func skip_to_morning() -> void:
+	var skipped_hours := fposmod(SUNRISE_HOUR - time_hours, 24.0)
+	_moon_phase = fposmod(_moon_phase + skipped_hours / 24.0 / LUNAR_CYCLE_DAYS, 1.0)
+	set_time(SUNRISE_HOUR)
+
+
 func persistent_state() -> Dictionary:
 	return {"hours": time_hours, "moon_phase": _moon_phase}
 

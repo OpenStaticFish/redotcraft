@@ -214,6 +214,8 @@ func _build_catalog() -> void:
 	var ids: Array[int] = []
 	for definition in BlockRegistry.BLOCK_DEFS:
 		var id := int(definition[0])
+		if not BlockRegistry.is_inventory_block(id):
+			continue
 		if id in [BlockRegistry.BLOCK_AIR, BlockRegistry.BLOCK_WATER, BlockRegistry.BLOCK_LAVA, BlockRegistry.BLOCK_FIRE]:
 			continue
 		if id >= BlockRegistry.BLOCK_WATER_FLOW_7 and id <= BlockRegistry.BLOCK_WATER_FLOW_1:

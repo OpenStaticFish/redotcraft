@@ -27,6 +27,9 @@ var _emissive: PackedByteArray = PackedByteArray()
 var _emission_r: PackedByteArray = PackedByteArray()
 var _emission_g: PackedByteArray = PackedByteArray()
 var _emission_b: PackedByteArray = PackedByteArray()
+## Immutable state-shape lookup. It is populated once in the constructor, then
+## only read by concurrent worker jobs.
+var _shape: PackedByteArray = PackedByteArray()
 
 
 class MeshTimings:
@@ -248,6 +251,9 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, fo
 							float(volume.block_g[light_index]) / float(MAX_LEVEL),
 							float(volume.block_b[light_index]) / float(MAX_LEVEL))
 					_append_cross_block(Vector3(local_x, y, local_z), id, block_light, sky_light, _tint_for(id, column, foliage_tints), result)
+					continue
+				if _shape[id] != BlockRegistry.SHAPE_CUBE:
+					_append_custom_block(Vector3(local_x, y, local_z), id, _tint_for(id, column, foliage_tints), result)
 					continue
 				var is_opaque := _opacity[id] >= MAX_LEVEL
 				var tint := _tint_for(id, column, foliage_tints)
@@ -488,6 +494,10 @@ func make_block_mesh(block_id: int) -> ArrayMesh:
 		var cross := MeshResult.new()
 		_append_cross_block(Vector3(-0.5, -0.5, -0.5), block_id, Color.BLACK, 1.0, Color.WHITE, cross)
 		return arrays_to_mesh(cross.verts, cross.normals, cross.uvs, cross.colors, cross.indices, _blocks.material, cross.light, cross.layers)
+	if _shape[block_id] != BlockRegistry.SHAPE_CUBE:
+		var custom := MeshResult.new()
+		_append_custom_block(Vector3(-0.5, -0.5, -0.5), block_id, Color.WHITE, custom)
+		return arrays_to_mesh(custom.verts, custom.normals, custom.uvs, custom.colors, custom.indices, _blocks.material, custom.light, custom.layers)
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var uvs := PackedVector2Array()
@@ -551,6 +561,7 @@ func _build_light_tables() -> void:
 	_emission_r.resize(256)
 	_emission_g.resize(256)
 	_emission_b.resize(256)
+	_shape.resize(256)
 	for id in 256:
 		_opacity[id] = _blocks.light_attenuation(id)
 		_cross[id] = 1 if _blocks.has_flag(id, BlockRegistry.FLAG_CROSS) else 0
@@ -563,6 +574,7 @@ func _build_light_tables() -> void:
 		else:
 			_wind[id] = 0.0
 		_water_level[id] = _blocks.water_level(id)
+		_shape[id] = BlockRegistry.shape_type(id)
 		if id == BlockRegistry.BLOCK_AIR or _blocks.is_valid_id(id):
 			_layer_top[id] = _blocks.layer_for(id, 0)
 			_layer_bottom[id] = _blocks.layer_for(id, 1)
@@ -1044,6 +1056,144 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 	result.indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
 	if result.build_collision:
 		result.collision.append_array(PackedVector3Array([p0, p2, p1, p0, p3, p2]))
+
+
+## Stateful blocks deliberately do not participate in cube face culling: their
+## partial volume cannot occlude a neighboring full cube, and emitting every
+## box face keeps the simple shapes correct at chunk boundaries.
+func _append_custom_block(origin: Vector3, block_id: int, tint: Color, result: MeshResult) -> void:
+	var facing := BlockRegistry.facing(block_id)
+	match _shape[block_id]:
+		BlockRegistry.SHAPE_STAIRS:
+			_append_custom_box(origin, Vector3.ZERO, Vector3(1.0, 0.5, 1.0), block_id, tint, result, true)
+			match facing:
+				BlockRegistry.FACING_NORTH:
+					_append_custom_box(origin, Vector3(0.0, 0.5, 0.5), Vector3(1.0, 1.0, 1.0), block_id, tint, result, true)
+				BlockRegistry.FACING_EAST:
+					_append_custom_box(origin, Vector3(0.0, 0.5, 0.0), Vector3(0.5, 1.0, 1.0), block_id, tint, result, true)
+				BlockRegistry.FACING_SOUTH:
+					_append_custom_box(origin, Vector3(0.0, 0.5, 0.0), Vector3(1.0, 1.0, 0.5), block_id, tint, result, true)
+				_:
+					_append_custom_box(origin, Vector3(0.5, 0.5, 0.0), Vector3(1.0, 1.0, 1.0), block_id, tint, result, true)
+		BlockRegistry.SHAPE_SLAB:
+			var min_y := 0.5 if block_id == BlockRegistry.BLOCK_WOOD_SLAB_TOP else 0.0
+			_append_custom_box(origin, Vector3(0.0, min_y, 0.0), Vector3(1.0, min_y + 0.5, 1.0), block_id, tint, result, true)
+		BlockRegistry.SHAPE_DOOR:
+			_append_door(origin, block_id, facing, tint, result)
+		BlockRegistry.SHAPE_LADDER:
+			_append_wall_panel(origin, facing, 0.0625, 0.0, 1.0, block_id, tint, result, false)
+		BlockRegistry.SHAPE_SIGN:
+			_append_sign(origin, block_id, facing, tint, result)
+		BlockRegistry.SHAPE_BED:
+			_append_bed(origin, block_id, facing, tint, result)
+
+
+func _append_door(origin: Vector3, block_id: int, facing: int, tint: Color, result: MeshResult) -> void:
+	const THICKNESS := 0.125
+	if not BlockRegistry.door_open(block_id):
+		if facing == BlockRegistry.FACING_NORTH or facing == BlockRegistry.FACING_SOUTH:
+			_append_custom_box(origin, Vector3(0.0, 0.0, 0.5 - THICKNESS * 0.5), Vector3(1.0, 1.0, 0.5 + THICKNESS * 0.5), block_id, tint, result, true)
+		else:
+			_append_custom_box(origin, Vector3(0.5 - THICKNESS * 0.5, 0.0, 0.0), Vector3(0.5 + THICKNESS * 0.5, 1.0, 1.0), block_id, tint, result, true)
+		return
+	# Each facing has one deterministic hinge side. Door state stores only facing,
+	# open, and upper, so this keeps lower/upper halves geometrically identical.
+	match facing:
+		BlockRegistry.FACING_NORTH:
+			_append_custom_box(origin, Vector3(0.0, 0.0, 0.0), Vector3(THICKNESS, 1.0, 1.0), block_id, tint, result, true)
+		BlockRegistry.FACING_EAST:
+			_append_custom_box(origin, Vector3(0.0, 0.0, 0.0), Vector3(1.0, 1.0, THICKNESS), block_id, tint, result, true)
+		BlockRegistry.FACING_SOUTH:
+			_append_custom_box(origin, Vector3(1.0 - THICKNESS, 0.0, 0.0), Vector3(1.0, 1.0, 1.0), block_id, tint, result, true)
+		_:
+			_append_custom_box(origin, Vector3(0.0, 0.0, 1.0 - THICKNESS), Vector3(1.0, 1.0, 1.0), block_id, tint, result, true)
+
+
+func _append_wall_panel(origin: Vector3, facing: int, thickness: float, min_y: float, max_y: float, block_id: int, tint: Color, result: MeshResult, collision: bool) -> void:
+	match facing:
+		BlockRegistry.FACING_NORTH:
+			_append_custom_box(origin, Vector3(0.0, min_y, 0.0), Vector3(1.0, max_y, thickness), block_id, tint, result, collision)
+		BlockRegistry.FACING_EAST:
+			_append_custom_box(origin, Vector3(1.0 - thickness, min_y, 0.0), Vector3(1.0, max_y, 1.0), block_id, tint, result, collision)
+		BlockRegistry.FACING_SOUTH:
+			_append_custom_box(origin, Vector3(0.0, min_y, 1.0 - thickness), Vector3(1.0, max_y, 1.0), block_id, tint, result, collision)
+		_:
+			_append_custom_box(origin, Vector3(0.0, min_y, 0.0), Vector3(thickness, max_y, 1.0), block_id, tint, result, collision)
+
+
+func _append_sign(origin: Vector3, block_id: int, facing: int, tint: Color, result: MeshResult) -> void:
+	const THICKNESS := 0.0625
+	# The board is freestanding on a short central post; facing chooses its broad
+	# side, rather than making all four state IDs visually identical.
+	if facing == BlockRegistry.FACING_NORTH or facing == BlockRegistry.FACING_SOUTH:
+		_append_custom_box(origin, Vector3(0.0, 0.35, 0.5 - THICKNESS * 0.5), Vector3(1.0, 0.95, 0.5 + THICKNESS * 0.5), block_id, tint, result, true)
+	else:
+		_append_custom_box(origin, Vector3(0.5 - THICKNESS * 0.5, 0.35, 0.0), Vector3(0.5 + THICKNESS * 0.5, 0.95, 1.0), block_id, tint, result, true)
+	_append_custom_box(origin, Vector3(0.4375, 0.0, 0.4375), Vector3(0.5625, 0.4, 0.5625), block_id, tint, result, true)
+
+
+func _append_bed(origin: Vector3, block_id: int, facing: int, tint: Color, result: MeshResult) -> void:
+	const HEADBOARD := 0.125
+	_append_custom_box(origin, Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.5625, 1.0), block_id, tint, result, true)
+	match facing:
+		BlockRegistry.FACING_NORTH:
+			_append_custom_box(origin, Vector3(0.0, 0.5625, 0.0), Vector3(1.0, 0.8125, HEADBOARD), block_id, tint, result, true)
+		BlockRegistry.FACING_EAST:
+			_append_custom_box(origin, Vector3(1.0 - HEADBOARD, 0.5625, 0.0), Vector3(1.0, 0.8125, 1.0), block_id, tint, result, true)
+		BlockRegistry.FACING_SOUTH:
+			_append_custom_box(origin, Vector3(0.0, 0.5625, 1.0 - HEADBOARD), Vector3(1.0, 0.8125, 1.0), block_id, tint, result, true)
+		_:
+			_append_custom_box(origin, Vector3(0.0, 0.5625, 0.0), Vector3(HEADBOARD, 0.8125, 1.0), block_id, tint, result, true)
+
+
+## Box emission is intentionally call-local. Partial shapes are not suitable
+## for the padded cube AO lookup, so they use their cell's baked light while
+## preserving the shader's custom light/layer attribute layout.
+func _append_custom_box(origin: Vector3, minimum: Vector3, maximum: Vector3, block_id: int, tint: Color, result: MeshResult, collision: bool) -> void:
+	for face in 6:
+		var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
+		var base := result.verts.size()
+		var layer := _layer_for(block_id, face)
+		var sampled_light := _custom_box_light(result.light_volume, origin, normal)
+		var shade: float = VoxelDefs.FACE_SHADE[face]
+		for corner in 4:
+			var corner_offset: Vector3i = VoxelDefs.FACE_VERTS[face][corner]
+			var position := origin + Vector3(
+				minimum.x if corner_offset.x == 0 else maximum.x,
+				minimum.y if corner_offset.y == 0 else maximum.y,
+				minimum.z if corner_offset.z == 0 else maximum.z)
+			result.verts.append(position)
+			result.normals.append(Vector3(normal))
+			result.uvs.append(VoxelDefs.FACE_UVS[face][corner])
+			result.colors.append(Color(shade * tint.r, shade * tint.g, shade * tint.b, _wind[block_id]))
+			result.layers.push_back(float(layer))
+			result.light.push_back(sampled_light.r)
+			result.light.push_back(sampled_light.g)
+			result.light.push_back(sampled_light.b)
+			result.light.push_back(sampled_light.a)
+		result.indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
+		if collision and result.build_collision:
+			result.collision.append_array(PackedVector3Array([
+				result.verts[base], result.verts[base + 2], result.verts[base + 1],
+				result.verts[base], result.verts[base + 3], result.verts[base + 2],
+			]))
+
+
+func _custom_box_light(volume: LightVolume, origin: Vector3, normal: Vector3i) -> Color:
+	if volume == null:
+		return Color(0.0, 0.0, 0.0, 1.0)
+	var local_x := clampi(floori(origin.x) + LIGHT_PAD + normal.x, 0, volume.w - 1)
+	var local_y := clampi(floori(origin.y) + normal.y, 0, volume.h - 1)
+	var local_z := clampi(floori(origin.z) + LIGHT_PAD + normal.z, 0, volume.d - 1)
+	var index := (local_y * volume.d + local_z) * volume.w + local_x
+	var sky := float(volume.sky[index]) / float(MAX_LEVEL)
+	if volume.block_r.is_empty():
+		return Color(0.0, 0.0, 0.0, sky)
+	return Color(
+		float(volume.block_r[index]) / float(MAX_LEVEL),
+		float(volume.block_g[index]) / float(MAX_LEVEL),
+		float(volume.block_b[index]) / float(MAX_LEVEL),
+		sky)
 
 
 func _append_cross_block(origin: Vector3, block_id: int, block_light: Color, sky_light: float, tint: Color, result: MeshResult) -> void:

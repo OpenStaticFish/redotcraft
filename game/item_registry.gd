@@ -43,7 +43,7 @@ static func is_item(item_id: int) -> bool:
 
 
 static func is_valid(item_id: int) -> bool:
-	return is_item(item_id) or (item_id > BlockRegistry.BLOCK_AIR and item_id < BlockRegistry.BLOCK_DEFS.size())
+	return is_item(item_id) or BlockRegistry.is_inventory_block(item_id)
 
 
 static func tool_kind(item_id: int) -> String:
@@ -106,7 +106,7 @@ static func harvest_drop(block_id: int) -> Dictionary:
 			return {"id": BlockRegistry.BLOCK_COBBLESTONE, "count": 1}
 		BlockRegistry.BLOCK_COAL_ORE:
 			return {"id": ITEM_COAL, "count": 1}
-	return {"id": block_id, "count": 1}
+	return {"id": BlockRegistry.canonical_id(block_id), "count": 1}
 
 
 static func get_item_name(item_id: int) -> String:

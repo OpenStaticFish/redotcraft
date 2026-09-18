@@ -525,7 +525,9 @@ func _connect_player() -> void:
 	player.pause_requested.connect(activate_pause)
 	player.can_place_check = can_place_selected
 	player.interact_check = func(position: Vector3i) -> bool:
-		return world.get_block_world(position) in [BlockRegistry.BLOCK_CRAFTING_TABLE, BlockRegistry.BLOCK_CHEST, BlockRegistry.BLOCK_FURNACE]
+		var block_id := world.get_block_world(position)
+		return block_id in [BlockRegistry.BLOCK_CRAFTING_TABLE, BlockRegistry.BLOCK_CHEST, BlockRegistry.BLOCK_FURNACE] \
+			or BlockRegistry.is_door(block_id) or BlockRegistry.is_bed(block_id)
 
 
 func _build_pause_menu() -> void:
@@ -922,8 +924,38 @@ func _on_block_picked(block_id: int) -> void:
 
 
 func _on_block_interacted(position: Vector3i) -> void:
-	if not player.dead:
-		_inventory_overlay.open_station(position, world.get_block_world(position), containers)
+	if player.dead:
+		return
+	var block_id := world.get_block_world(position)
+	if BlockRegistry.is_door(block_id):
+		if world.toggle_door(position):
+			set_status("Door opened" if BlockRegistry.door_open(world.get_block_world(position)) else "Door closed")
+		return
+	if BlockRegistry.is_bed(block_id):
+		_attempt_sleep(position)
+		return
+	_inventory_overlay.open_station(position, block_id, containers)
+
+
+func _attempt_sleep(bed_position: Vector3i) -> void:
+	if not _day_night.is_night():
+		set_status("You can only sleep at night")
+		return
+	if _weather.is_raining():
+		set_status("You cannot sleep while it is raining")
+		return
+	if world.is_threatened(player.global_position):
+		set_status("You cannot sleep while threatened")
+		return
+	var requested_spawn := Vector3(bed_position) + Vector3(0.5, 2.0, 0.5)
+	var safe_spawn := world.find_safe_spawn(requested_spawn)
+	if safe_spawn.is_equal_approx(requested_spawn):
+		set_status("No safe respawn point near this bed")
+		return
+	player.spawn_position = safe_spawn
+	_day_night.skip_to_morning()
+	set_status("Slept until morning · respawn point set")
+	_flush_world_save()
 
 
 func _drop_container_contents(position: Vector3i) -> void:
