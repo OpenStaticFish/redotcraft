@@ -9,6 +9,7 @@ func _init() -> void:
 	_verify_recipes_and_drops()
 	_verify_sleep_clock_and_threat_hook()
 	_verify_indoor_bed_spawn()
+	_verify_world_block_lifecycle()
 	if failures == 0:
 		print("functional_blocks_verify: PASS")
 		quit(0)
@@ -114,11 +115,9 @@ func _verify_sleep_clock_and_threat_hook() -> void:
 
 
 func _verify_indoor_bed_spawn() -> void:
-	var world := VoxelWorld.new()
-	world._blocks = BlockRegistry.new()
-	var chunk := VoxelWorld.Chunk.new()
-	chunk.data.resize(VoxelDefs.CHUNK_AREA * VoxelDefs.WORLD_HEIGHT)
-	world._chunks[Vector2i.ZERO] = chunk
+	var fixture := _world_fixture()
+	var world: VoxelWorld = fixture.world
+	var chunk: VoxelWorld.Chunk = fixture.chunk
 	var bed := Vector3i(8, 5, 8)
 	# Solid floor, occupied bed cell, and a roof that the general surface-spawn
 	# search would prefer. The dedicated search must stay beside the bed.
@@ -135,6 +134,81 @@ func _verify_indoor_bed_spawn() -> void:
 		_check(absi(floori(position.x) - bed.x) <= 3 and absi(floori(position.z) - bed.z) <= 3,
 			"bed respawn stays nearby")
 		_check(world.is_standable_spawn(position), "stored indoor bed respawn remains directly usable")
+
+
+func _verify_world_block_lifecycle() -> void:
+	var fixture := _world_fixture()
+	var world: VoxelWorld = fixture.world
+	var chunk: VoxelWorld.Chunk = fixture.chunk
+	var chunk_position := Vector2i.ZERO
+	var door := Vector3i(4, 5, 4)
+	_check(world.place_block(door, BlockRegistry.BLOCK_WOOD_DOOR, BlockRegistry.FACING_EAST),
+		"door placement succeeds in two empty cells")
+	var lower := world.get_block_world(door)
+	var upper := world.get_block_world(door + Vector3i.UP)
+	_check(BlockRegistry.is_door(lower) and not BlockRegistry.door_upper(lower)
+		and BlockRegistry.facing(lower) == BlockRegistry.FACING_EAST,
+		"door placement writes the oriented lower half")
+	_check(BlockRegistry.is_door(upper) and BlockRegistry.door_upper(upper)
+		and BlockRegistry.facing(upper) == BlockRegistry.FACING_EAST,
+		"door placement writes the matching upper half")
+	var edits: Dictionary = world._edits_by_chunk.get(chunk_position, {})
+	_check(edits.get(door, -1) == lower and edits.get(door + Vector3i.UP, -1) == upper,
+		"door placement persists both halves")
+	_check(world.toggle_door(door + Vector3i.UP), "door toggles from either half")
+	lower = world.get_block_world(door)
+	upper = world.get_block_world(door + Vector3i.UP)
+	_check(BlockRegistry.door_open(lower) and BlockRegistry.door_open(upper),
+		"door toggle opens both halves")
+	edits = world._edits_by_chunk.get(chunk_position, {})
+	_check(edits.get(door, -1) == lower and edits.get(door + Vector3i.UP, -1) == upper,
+		"door toggle persists both states")
+	_check(world.break_block(door + Vector3i.UP) == BlockRegistry.BLOCK_WOOD_DOOR,
+		"breaking either door half returns the canonical item")
+	_check(world.get_block_world(door) == BlockRegistry.BLOCK_AIR
+		and world.get_block_world(door + Vector3i.UP) == BlockRegistry.BLOCK_AIR,
+		"breaking a door clears both halves")
+	edits = world._edits_by_chunk.get(chunk_position, {})
+	_check(edits.get(door, -1) == BlockRegistry.BLOCK_AIR
+		and edits.get(door + Vector3i.UP, -1) == BlockRegistry.BLOCK_AIR,
+		"door removal persists both cleared cells")
+
+	var blocked_door := Vector3i(6, 5, 6)
+	_set_fixture_block(chunk.data, blocked_door + Vector3i.UP, BlockRegistry.BLOCK_STONE)
+	_check(not world.place_block(blocked_door, BlockRegistry.BLOCK_WOOD_DOOR),
+		"door placement refuses an occupied upper cell")
+	var ladder := Vector3i(8, 5, 8)
+	_check(not world.place_block(ladder, BlockRegistry.BLOCK_WOOD_LADDER,
+		BlockRegistry.FACING_NORTH, Vector3i.RIGHT), "ladder placement requires solid support")
+	_set_fixture_block(chunk.data, ladder - Vector3i.RIGHT, BlockRegistry.BLOCK_STONE)
+	_check(world.place_block(ladder, BlockRegistry.BLOCK_WOOD_LADDER,
+		BlockRegistry.FACING_NORTH, Vector3i.RIGHT), "ladder places against solid support")
+
+	var blast_door := Vector3i(10, 5, 10)
+	_check(world.place_block(blast_door, BlockRegistry.BLOCK_WOOD_DOOR),
+		"explosion fixture door places")
+	world.carve_sphere(blast_door, 1)
+	_check(world.get_block_world(blast_door) == BlockRegistry.BLOCK_AIR
+		and world.get_block_world(blast_door + Vector3i.UP) == BlockRegistry.BLOCK_AIR,
+		"explosion removes both door halves")
+	var burnt_door := Vector3i(12, 5, 12)
+	_check(world.place_block(burnt_door, BlockRegistry.BLOCK_WOOD_DOOR),
+		"fire fixture door places")
+	var changed_chunks := {}
+	world._destroy_burnt_block(burnt_door + Vector3i.UP, changed_chunks)
+	_check(world.get_block_world(burnt_door) == BlockRegistry.BLOCK_AIR
+		and world.get_block_world(burnt_door + Vector3i.UP) == BlockRegistry.BLOCK_AIR,
+		"burning either half removes the whole door")
+	_check(changed_chunks.has(chunk_position), "burnt door marks its chunk changed")
+
+
+func _world_fixture() -> Dictionary:
+	var world := VoxelWorld.new()
+	world._blocks = BlockRegistry.new()
+	var chunk := VoxelWorld.Chunk.new()
+	chunk.data.resize(VoxelDefs.CHUNK_AREA * VoxelDefs.WORLD_HEIGHT)
+	world._chunks[Vector2i.ZERO] = chunk
+	return {"world": world, "chunk": chunk}
 
 
 func _set_fixture_block(data: PackedByteArray, position: Vector3i, block_id: int) -> void:
