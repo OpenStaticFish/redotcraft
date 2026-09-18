@@ -16,6 +16,7 @@ const MAX_REGION_EDITS := 2_000_000
 const MAX_PALETTE_ENTRIES := 256
 const MAX_CACHED_REGIONS := 16
 const DEFAULT_ROOT := "user://worlds"
+const DEFAULT_BACKUP_ROOT := "user://world_backups"
 const LAST_WORLD_FILE := "last_world.txt"
 
 var root_path := DEFAULT_ROOT
@@ -29,22 +30,29 @@ var _region_access: Dictionary = {}
 var _access_tick := 0
 var _regions_loaded_from_backup: Dictionary = {}
 var _metadata_loaded_from_backup := false
+var _unreadable_regions: Dictionary = {}
 
 
 func _init(p_root_path: String = DEFAULT_ROOT) -> void:
 	root_path = p_root_path.trim_suffix("/")
 
 
-func create_world(world_config: Dictionary, initial_state: Dictionary = {}, requested_id: String = "") -> Dictionary:
+func create_world(world_config: Dictionary, initial_state: Dictionary = {}, requested_id: String = "",
+		activate: bool = true) -> Dictionary:
 	_reset_cache()
+	metadata = {}
 	var normalized_config := WorldGenConfig.new(world_config).to_dictionary()
 	world_id = _safe_id(requested_id)
+	if not requested_id.is_empty() and world_id != requested_id:
+		return {}
 	if world_id.is_empty():
 		world_id = "%d-%d-%d" % [
 			int(Time.get_unix_time_from_system()),
 			abs(int(normalized_config.get("seed", 0))),
 			Time.get_ticks_usec(),
 		]
+	if DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(_world_path())):
+		return {}
 	var now := int(Time.get_unix_time_from_system())
 	metadata = {
 		"magic": METADATA_MAGIC,
@@ -68,17 +76,19 @@ func create_world(world_config: Dictionary, initial_state: Dictionary = {}, requ
 	if _write_metadata() != OK:
 		metadata = {}
 		return {}
-	_write_last_world_id()
+	if activate:
+		_write_last_world_id()
 	return metadata.duplicate(true)
 
 
 func open_world(p_world_id: String) -> Dictionary:
 	_reset_cache()
 	world_id = _safe_id(p_world_id)
-	if world_id.is_empty():
+	if world_id.is_empty() or world_id != p_world_id:
 		return {}
 	metadata = _read_metadata_file(_metadata_path())
-	if metadata.is_empty() or not _validate_metadata(metadata):
+	if metadata.is_empty() or not _validate_metadata(metadata) \
+			or String(metadata.get("id", "")) != world_id:
 		metadata = {}
 		return {}
 	_write_last_world_id()
@@ -96,6 +106,8 @@ func load_chunk_edits(chunk_pos: Vector2i) -> Dictionary:
 func stage_chunk_edits(chunk_pos: Vector2i, edits: Dictionary) -> void:
 	var region_pos := _chunk_region(chunk_pos)
 	_load_region(region_pos)
+	if _unreadable_regions.has(region_pos):
+		return
 	var region: Dictionary = _regions.get(region_pos, {})
 	if edits.is_empty():
 		region.erase(chunk_pos)
@@ -134,6 +146,10 @@ func flush_dirty_regions() -> Error:
 
 func has_dirty_regions() -> bool:
 	return not _dirty_regions.is_empty()
+
+
+func unreadable_region_count() -> int:
+	return _unreadable_regions.size()
 
 
 static func latest_world_metadata(p_root_path: String = DEFAULT_ROOT) -> Dictionary:
@@ -193,8 +209,72 @@ static func delete_world(p_world_id: String, p_root_path: String = DEFAULT_ROOT)
 	return true
 
 
+static func rename_world(p_world_id: String, new_name: String, p_root_path: String = DEFAULT_ROOT) -> bool:
+	var name := new_name.strip_edges()
+	if name.is_empty() or name.length() > 64:
+		return false
+	var storage := WorldStorage.new(p_root_path)
+	if storage._read_world_for_management(p_world_id).is_empty():
+		return false
+	storage.metadata["name"] = name
+	return storage._write_metadata() == OK
+
+
+static func duplicate_world(p_world_id: String, p_root_path: String = DEFAULT_ROOT) -> Dictionary:
+	var source := WorldStorage.new(p_root_path)
+	var source_metadata := source._read_world_for_management(p_world_id)
+	if source_metadata.is_empty():
+		return {}
+	var copy := WorldStorage.new(p_root_path)
+	var created := copy.create_world(
+		source_metadata.get("worldgen", {}), source_metadata.get("state", {}), "", false)
+	if created.is_empty():
+		return {}
+	var source_name := String(source_metadata.get("name", "World"))
+	copy.metadata["name"] = "%s Copy" % source_name.substr(0, 59)
+	var source_regions := p_root_path.trim_suffix("/") + "/" + p_world_id + "/regions"
+	var destination_regions := p_root_path.trim_suffix("/") + "/" + copy.world_id + "/regions"
+	if not _copy_directory_contents(source_regions, destination_regions) or copy._write_metadata() != OK:
+		_remove_directory_tree(ProjectSettings.globalize_path(copy._world_path()))
+		return {}
+	return copy.metadata.duplicate(true)
+
+
+static func backup_world(p_world_id: String, p_root_path: String = DEFAULT_ROOT,
+		p_backup_root: String = DEFAULT_BACKUP_ROOT) -> String:
+	var source := WorldStorage.new(p_root_path)
+	if source._read_world_for_management(p_world_id).is_empty():
+		return ""
+	var backup_root := p_backup_root.trim_suffix("/")
+	var backup_id := "%s-%d-%d" % [p_world_id, int(Time.get_unix_time_from_system()), Time.get_ticks_usec()]
+	var destination := backup_root + "/" + backup_id
+	if DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(destination)) != OK:
+		return ""
+	var source_path := p_root_path.trim_suffix("/") + "/" + p_world_id
+	if not _copy_directory_contents(source_path, destination):
+		_remove_directory_tree(ProjectSettings.globalize_path(destination))
+		return ""
+	return destination
+
+
+func _read_world_for_management(p_world_id: String) -> Dictionary:
+	_reset_cache()
+	world_id = _safe_id(p_world_id)
+	if world_id.is_empty() or world_id != p_world_id:
+		return {}
+	metadata = _read_metadata_file(_metadata_path())
+	if metadata.is_empty() or String(metadata.get("id", "")) != world_id:
+		metadata = {}
+	return metadata.duplicate(true)
+
+
 static func _read_world_summary(root: String, id: String) -> Dictionary:
 	var path := root + "/" + id + "/metadata.json"
+	var storage := WorldStorage.new(root)
+	storage.world_id = id
+	var validated := storage._read_metadata_file(path)
+	if not validated.is_empty() and String(validated.get("id", "")) == id:
+		return _summary_from_metadata(validated, id)
 	for candidate in [path, path + ".bak"]:
 		if not FileAccess.file_exists(candidate):
 			continue
@@ -251,6 +331,33 @@ static func _remove_directory_tree(path: String) -> bool:
 	return DirAccess.remove_absolute(path) == OK
 
 
+static func _copy_directory_contents(source_path: String, destination_path: String) -> bool:
+	var source_abs := ProjectSettings.globalize_path(source_path)
+	var destination_abs := ProjectSettings.globalize_path(destination_path)
+	var source := DirAccess.open(source_abs)
+	if source == null:
+		return false
+	var make_error := DirAccess.make_dir_recursive_absolute(destination_abs)
+	if make_error != OK and make_error != ERR_ALREADY_EXISTS:
+		return false
+	source.list_dir_begin()
+	var entry := source.get_next()
+	while not entry.is_empty():
+		if entry != "." and entry != ".." and not entry.ends_with(".tmp"):
+			var source_entry := source_abs.path_join(entry)
+			var destination_entry := destination_abs.path_join(entry)
+			if source.current_is_dir():
+				if not _copy_directory_contents(source_entry, destination_entry):
+					source.list_dir_end()
+					return false
+			elif DirAccess.copy_absolute(source_entry, destination_entry) != OK:
+				source.list_dir_end()
+				return false
+		entry = source.get_next()
+	source.list_dir_end()
+	return true
+
+
 func _load_region(region_pos: Vector2i) -> void:
 	if _loaded_regions.has(region_pos):
 		_touch_region(region_pos)
@@ -261,7 +368,14 @@ func _load_region(region_pos: Vector2i) -> void:
 		loaded = _read_region_file(_region_backup_path(region_pos))
 		if bool(loaded.get("valid", false)):
 			_regions_loaded_from_backup[region_pos] = true
-	_regions[region_pos] = loaded.get("region", {}) if bool(loaded.get("valid", false)) else {}
+	var valid := bool(loaded.get("valid", false))
+	_regions[region_pos] = loaded.get("region", {}) if valid else {}
+	if not valid and (FileAccess.file_exists(_region_path(region_pos)) \
+			or FileAccess.file_exists(_region_backup_path(region_pos))):
+		var first_warning := not _unreadable_regions.has(region_pos)
+		_unreadable_regions[region_pos] = true
+		if first_warning:
+			push_warning("World region %s is corrupt or from an unsupported version; edits to this region are blocked to preserve it." % region_pos)
 	_touch_region(region_pos)
 	_evict_clean_regions()
 
@@ -547,6 +661,7 @@ func _reset_cache() -> void:
 	_region_access.clear()
 	_regions_loaded_from_backup.clear()
 	_metadata_loaded_from_backup = false
+	_unreadable_regions.clear()
 	_access_tick = 0
 
 

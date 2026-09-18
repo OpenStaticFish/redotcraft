@@ -17,6 +17,7 @@ func _initialize() -> void:
 func _verify() -> void:
 	_check_biome_classification()
 	_check_particles()
+	_check_persistence()
 	_check_lightning_schedule()
 	_check_lightning_flash()
 	_check_wind_wiring()
@@ -74,6 +75,20 @@ func _check_particles() -> void:
 	weather._covered = false
 
 	weather.free()
+
+
+func _check_persistence() -> void:
+	var source := WeatherSystemScript.new()
+	source.state = WeatherSystemScript.State.RAIN
+	source.rain_amount = 0.42
+	var restored := WeatherSystemScript.new()
+	restored.restore_persistent_state(source.persistent_state())
+	_expect(restored.state == WeatherSystemScript.State.RAIN,
+		"weather target state did not round-trip")
+	_expect(is_equal_approx(restored.rain_amount, 0.42),
+		"weather transition progress did not round-trip")
+	source.free()
+	restored.free()
 
 
 func _check_lightning_schedule() -> void:

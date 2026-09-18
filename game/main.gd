@@ -22,7 +22,8 @@ const UNDERWATER_DEEP_COLOR := Color(0.02, 0.08, 0.16)
 const CAVE_FADE_SECONDS := 0.65
 const DYNAMIC_RESOLUTION_INTERVAL := 0.5
 const DYNAMIC_RESOLUTION_SMOOTHING := 0.2
-const AUTOSAVE_INTERVAL := 30.0
+const SESSION_STATE_VERSION := 1
+const AUTOSAVE_RETRY_SECONDS := 30.0
 
 @onready var world: VoxelWorld = $World
 @onready var player: Player = $Player
@@ -70,6 +71,7 @@ var _dynamic_resolution_timer := 0.0
 var _dynamic_resolution_active := false
 var _world_storage: WorldStorage
 var _autosave_time := 0.0
+var _storage_warning_shown := false
 
 
 func _ready() -> void:
@@ -86,7 +88,9 @@ func _ready() -> void:
 	_inventory_overlay.opened.connect(_on_inventory_opened)
 	_inventory_overlay.closed.connect(_on_inventory_closed)
 	_inventory_overlay.time_selected.connect(_on_inventory_time_selected)
-	var resumed := not saved_state.is_empty() and player.restore_persistent_state(saved_state.get("player", {}))
+	var player_state: Variant = saved_state.get("player", {})
+	var resumed := typeof(player_state) == TYPE_DICTIONARY \
+		and player.restore_persistent_state(player_state)
 	if resumed:
 		world.setup_player(player, true)
 		# Recover saves written after the player had already entered unloaded or
@@ -95,7 +99,6 @@ func _ready() -> void:
 		if not world.is_player_volume_clear(player.global_position):
 			var recovered_spawn := world.find_safe_spawn(player.global_position)
 			player.global_position = recovered_spawn
-			player.spawn_position = recovered_spawn
 			player.velocity = Vector3.ZERO
 	else:
 		var spawn := world.get_spawn_position()
@@ -228,9 +231,12 @@ func _unhandled_input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	if not get_tree().paused:
 		_autosave_time += delta
-		if _autosave_time >= AUTOSAVE_INTERVAL:
-			_autosave_time = 0.0
-			_flush_world_save()
+		var autosave_interval := GameConfig.get_autosave_interval()
+		if autosave_interval > 0.0 and _autosave_time >= autosave_interval:
+			if _flush_world_save():
+				_autosave_time = 0.0
+			else:
+				_autosave_time = maxf(autosave_interval - minf(AUTOSAVE_RETRY_SECONDS, autosave_interval), 0.0)
 	if status_time > 0.0:
 		status_time -= delta
 		if status_time <= 0.0:
@@ -339,14 +345,27 @@ func _prepare_world_storage() -> Dictionary:
 		GameConfig.clear_active_world()
 		return {}
 	GameConfig.activate_world(metadata)
-	return (metadata.get("state", {}) as Dictionary).duplicate(true)
+	return _migrate_session_state(metadata.get("state", {}))
+
+
+func _migrate_session_state(value: Variant) -> Dictionary:
+	if typeof(value) != TYPE_DICTIONARY:
+		return {}
+	var state: Dictionary = value.duplicate(true)
+	var version := int(state.get("state_version", 0))
+	if version > SESSION_STATE_VERSION:
+		push_warning("Save uses unsupported session state version %d" % version)
+		return {}
+	# Version 0 saves used the same fields but did not carry an explicit tag.
+	state["state_version"] = SESSION_STATE_VERSION
+	return state
 
 
 func _restore_session_state(state: Dictionary) -> void:
 	if state.is_empty():
 		return
-	var saved_inventory: Variant = state.get("inventory", [])
-	if typeof(saved_inventory) == TYPE_ARRAY:
+	var saved_inventory: Variant = state.get("inventory", null)
+	if state.has("inventory") and typeof(saved_inventory) == TYPE_ARRAY:
 		var restored_inventory: Dictionary = {}
 		for entry in saved_inventory:
 			if typeof(entry) != TYPE_ARRAY or entry.size() != 2:
@@ -363,6 +382,8 @@ func _restore_session_state(state: Dictionary) -> void:
 	var weather_state: Variant = state.get("weather", {})
 	if typeof(weather_state) == TYPE_DICTIONARY:
 		_weather.restore_persistent_state(weather_state)
+		_day_night.set_time(_day_night.time_hours)
+		_on_weather_changed(_weather.state)
 
 
 func _build_persistent_state() -> Dictionary:
@@ -374,6 +395,7 @@ func _build_persistent_state() -> Dictionary:
 	for item_id in item_ids:
 		inventory_rows.append([item_id, int(inventory[item_id])])
 	return {
+		"state_version": SESSION_STATE_VERSION,
 		"player": player.persistent_state(),
 		"inventory": inventory_rows,
 		"selected_slot": selected_slot,
@@ -382,17 +404,22 @@ func _build_persistent_state() -> Dictionary:
 	}
 
 
-func _flush_world_save() -> void:
+func _flush_world_save() -> bool:
 	if _world_storage == null or player == null:
-		return
+		return false
 	var save_error := world.flush_edit_store()
 	if save_error == OK:
 		save_error = _world_storage.flush(_build_persistent_state())
 	if save_error == OK:
 		GameConfig.active_world_metadata = _world_storage.metadata.duplicate(true)
+		if not _storage_warning_shown and _world_storage.unreadable_region_count() > 0:
+			_storage_warning_shown = true
+			set_status("A damaged world region is read-only; edits there cannot be saved")
+		return true
 	else:
 		push_warning("World save failed with error %d" % save_error)
 		set_status("Save failed - progress remains in memory")
+		return false
 
 
 func _apply_graphics() -> void:

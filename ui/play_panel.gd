@@ -4,7 +4,7 @@ extends Control
 ## Play hub. The landing offers Continue / New World / Load World; New World
 ## reveals the creation form (world type, seed, clipboard import, and the
 ## Advanced world-gen screen), Load World lists every saved world with
-## metadata and supports select-to-load plus delete-with-confirmation.
+## metadata and supports loading, renaming, duplication, backup, and deletion.
 ## `ui_cancel` unwinds one layer at a time: delete confirmation -> load list
 ## or create form -> landing -> closed. The world-gen screen handles its own
 ## cancel first because it sits above this panel in the tree.
@@ -74,10 +74,21 @@ var _continue_world_id := ""
 var _cards: Dictionary = {}
 var _world_names: Dictionary = {}
 var _landing_return: Control = null
+var _manage_row: HBoxContainer
+var _rename_button: Button
+var _duplicate_button: Button
+var _backup_button: Button
+var _rename_row: HBoxContainer
+var _rename_field: LineEdit
+var _rename_cancel_button: Button
+var _rename_confirm_button: Button
+var _operation_status: Label
+var _editing_rename := false
 
 
 func _ready() -> void:
 	UITheme.apply(self)
+	_build_management_controls()
 	_style_static()
 	_load_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	for type_name in WORLD_TYPES:
@@ -117,12 +128,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		if _confirming_delete:
 			_cancel_delete()
+		elif _editing_rename:
+			_cancel_rename()
 		elif _view == View.LANDING:
 			close_panel()
 		else:
 			_back_to_landing(_new_world_button if _view == View.CREATE else _load_world_button)
 		return
-	if _view == View.LOAD and not _confirming_delete and not _selected_world_id.is_empty() \
+	if _view == View.LOAD and not _confirming_delete and not _editing_rename \
+			and not _selected_world_id.is_empty() \
 			and event is InputEventKey and event.pressed and not event.echo:
 		if (event as InputEventKey).keycode == KEY_DELETE:
 			get_viewport().set_input_as_handled()
@@ -133,6 +147,7 @@ func open_panel() -> void:
 	_landing_return = null
 	_confirming_delete = false
 	_confirming_delete_all = false
+	_editing_rename = false
 	visible = true
 	_show_view(View.LANDING)
 	Motion.dim_in(_dim)
@@ -144,6 +159,7 @@ func close_panel() -> void:
 		return
 	_confirming_delete = false
 	_confirming_delete_all = false
+	_editing_rename = false
 	visible = false
 	closed.emit()
 
@@ -247,7 +263,10 @@ func _refresh_load_view() -> void:
 	_selected_world_id = ""
 	_confirming_delete = false
 	_confirming_delete_all = false
+	_editing_rename = false
 	_confirm_row.visible = false
+	_rename_row.visible = false
+	_manage_row.visible = true
 	_load_footer.visible = true
 	_confirm_delete_button.text = "Delete"
 	var worlds := WorldStorage.list_world_summaries(_library_root)
@@ -270,6 +289,8 @@ func _refresh_load_view() -> void:
 		else "No saved worlds to delete"
 	_load_button.disabled = true
 	_load_button.tooltip_text = "Select a world to load"
+	_set_management_enabled(false)
+	_operation_status.text = ""
 	_apply_view_metrics()
 	if has_worlds:
 		(_cards.values()[0] as Button).grab_focus()
@@ -403,7 +424,7 @@ func _style_card(card: Button, selected: bool) -> void:
 
 
 func _on_card_activated(id: String) -> void:
-	if _confirming_delete:
+	if _confirming_delete or _editing_rename:
 		return
 	if id == _selected_world_id:
 		_load_selected()
@@ -412,7 +433,7 @@ func _on_card_activated(id: String) -> void:
 
 
 func _on_card_gui_input(event: InputEvent, id: String) -> void:
-	if _confirming_delete:
+	if _confirming_delete or _editing_rename:
 		return
 	if event is InputEventMouseButton and (event as InputEventMouseButton).double_click:
 		_select_world(id)
@@ -430,10 +451,11 @@ func _select_world(id: String) -> void:
 	_load_button.disabled = not compatible
 	_load_button.tooltip_text = "Load the selected world" if compatible \
 		else "The selected world was saved by a newer version"
+	_set_management_enabled(compatible)
 
 
 func _load_selected() -> void:
-	if _confirming_delete or _selected_world_id.is_empty():
+	if _confirming_delete or _editing_rename or _selected_world_id.is_empty():
 		return
 	var card := _cards.get(_selected_world_id) as Button
 	if card == null or not bool(card.get_meta("compatible", true)):
@@ -442,20 +464,21 @@ func _load_selected() -> void:
 
 
 func _begin_delete_confirmation() -> void:
-	if _confirming_delete or _selected_world_id.is_empty():
+	if _confirming_delete or _editing_rename or _selected_world_id.is_empty():
 		return
 	_confirming_delete = true
 	_confirming_delete_all = false
 	var world_name := String(_world_names.get(_selected_world_id, "this world"))
 	_confirm_label.text = "Delete \"%s\"? Its blocks and progress are removed permanently." % world_name
 	_load_footer.visible = false
+	_manage_row.visible = false
 	_confirm_row.visible = true
 	# The safe choice takes focus first; the destructive one is one Tab away.
 	_cancel_delete_button.grab_focus()
 
 
 func _begin_delete_all_confirmation() -> void:
-	if _confirming_delete:
+	if _confirming_delete or _editing_rename:
 		return
 	var world_count := WorldStorage.list_world_summaries(_library_root).size()
 	if world_count == 0:
@@ -468,6 +491,7 @@ func _begin_delete_all_confirmation() -> void:
 	]
 	_confirm_delete_button.text = "Delete All"
 	_load_footer.visible = false
+	_manage_row.visible = false
 	_confirm_row.visible = true
 	_cancel_delete_button.grab_focus()
 
@@ -479,6 +503,7 @@ func _cancel_delete() -> void:
 	_confirming_delete = false
 	_confirming_delete_all = false
 	_confirm_row.visible = false
+	_manage_row.visible = true
 	_load_footer.visible = true
 	_confirm_delete_button.text = "Delete"
 	focus_target.grab_focus()
@@ -494,6 +519,7 @@ func _confirm_delete() -> void:
 	_confirming_delete = false
 	_confirming_delete_all = false
 	_confirm_row.visible = false
+	_manage_row.visible = true
 	_load_footer.visible = true
 	_confirm_delete_button.text = "Delete"
 	if WorldStorage.delete_world(id, _library_root) and GameConfig.active_world_id == id:
@@ -513,9 +539,73 @@ func _confirm_delete_all() -> void:
 	_confirming_delete = false
 	_confirming_delete_all = false
 	_confirm_row.visible = false
+	_manage_row.visible = true
 	_load_footer.visible = true
 	_confirm_delete_button.text = "Delete"
 	_refresh_load_view()
+
+
+func _begin_rename() -> void:
+	if _confirming_delete or _editing_rename or _selected_world_id.is_empty():
+		return
+	_editing_rename = true
+	_rename_field.text = String(_world_names.get(_selected_world_id, ""))
+	_rename_field.select_all()
+	_manage_row.visible = false
+	_load_footer.visible = false
+	_rename_row.visible = true
+	_rename_field.grab_focus()
+
+
+func _cancel_rename() -> void:
+	if not _editing_rename:
+		return
+	_editing_rename = false
+	_rename_row.visible = false
+	_manage_row.visible = true
+	_load_footer.visible = true
+	_rename_button.grab_focus()
+
+
+func _confirm_rename() -> void:
+	if not _editing_rename:
+		return
+	var id := _selected_world_id
+	var name := _rename_field.text.strip_edges()
+	if not WorldStorage.rename_world(id, name, _library_root):
+		_set_operation_status("Rename failed. Use 1-64 visible characters.", true)
+		_rename_field.grab_focus()
+		return
+	if GameConfig.active_world_id == id:
+		GameConfig.active_world_metadata["name"] = name
+	_editing_rename = false
+	_refresh_load_view()
+	_select_world(id)
+	_set_operation_status("Renamed to %s." % name)
+
+
+func _duplicate_selected() -> void:
+	if _confirming_delete or _editing_rename or _selected_world_id.is_empty():
+		return
+	var duplicated := WorldStorage.duplicate_world(_selected_world_id, _library_root)
+	if duplicated.is_empty():
+		_set_operation_status("Could not duplicate this world.", true)
+		return
+	var copy_id := String(duplicated.get("id", ""))
+	_refresh_load_view()
+	_select_world(copy_id)
+	_set_operation_status("Created %s." % _display_name(duplicated))
+
+
+func _backup_selected() -> void:
+	if _confirming_delete or _editing_rename or _selected_world_id.is_empty():
+		return
+	var backup_path := WorldStorage.backup_world(_selected_world_id, _library_root)
+	if backup_path.is_empty():
+		_set_operation_status("Could not back up this world.", true)
+	else:
+		_set_operation_status("Backup saved to %s." % backup_path)
+	_backup_button.grab_focus()
 
 
 # ------------------------------------------------------------- create view --
@@ -582,6 +672,11 @@ func _style_static() -> void:
 	UITheme.style_button_ghost(_cancel_delete_button)
 	UITheme.style_button_primary(_confirm_delete_button)
 	UITheme.style_button_ghost(_empty_create_button)
+	UITheme.style_button_ghost(_rename_button)
+	UITheme.style_button_ghost(_duplicate_button)
+	UITheme.style_button_ghost(_backup_button)
+	UITheme.style_button_ghost(_rename_cancel_button)
+	UITheme.style_button_primary(_rename_confirm_button)
 	_landing_hint.add_theme_color_override("font_color", UITheme.MUTED)
 	UITheme.apply_font_size(_landing_hint, 13)
 	_confirm_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -597,6 +692,70 @@ func _style_static() -> void:
 	_empty_body.add_theme_color_override("font_color", UITheme.MUTED)
 	UITheme.apply_font_size(_empty_body, 13)
 	_empty_state.custom_minimum_size = Vector2(0.0, 240.0)
+	_operation_status.add_theme_color_override("font_color", UITheme.CYAN)
+	UITheme.apply_font_size(_operation_status, 13)
+
+
+func _build_management_controls() -> void:
+	_manage_row = HBoxContainer.new()
+	_manage_row.name = "ManageRow"
+	_manage_row.alignment = BoxContainer.ALIGNMENT_END
+	_manage_row.add_theme_constant_override("separation", 10)
+	_rename_button = Button.new()
+	_rename_button.text = "Rename..."
+	_duplicate_button = Button.new()
+	_duplicate_button.text = "Duplicate"
+	_backup_button = Button.new()
+	_backup_button.text = "Back Up"
+	for button in [_rename_button, _duplicate_button, _backup_button]:
+		_manage_row.add_child(button)
+	_load_box.add_child(_manage_row)
+	_load_box.move_child(_manage_row, _confirm_row.get_index())
+	_rename_button.pressed.connect(_begin_rename)
+	_duplicate_button.pressed.connect(_duplicate_selected)
+	_backup_button.pressed.connect(_backup_selected)
+
+	_rename_row = HBoxContainer.new()
+	_rename_row.name = "RenameRow"
+	_rename_row.visible = false
+	_rename_row.add_theme_constant_override("separation", 10)
+	_rename_field = LineEdit.new()
+	_rename_field.max_length = 64
+	_rename_field.placeholder_text = "World name"
+	_rename_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_rename_cancel_button = Button.new()
+	_rename_cancel_button.text = "Cancel"
+	_rename_confirm_button = Button.new()
+	_rename_confirm_button.text = "Rename"
+	_rename_row.add_child(_rename_field)
+	_rename_row.add_child(_rename_cancel_button)
+	_rename_row.add_child(_rename_confirm_button)
+	_load_box.add_child(_rename_row)
+	_load_box.move_child(_rename_row, _confirm_row.get_index())
+	_rename_cancel_button.pressed.connect(_cancel_rename)
+	_rename_confirm_button.pressed.connect(_confirm_rename)
+	_rename_field.text_submitted.connect(func(_text: String) -> void: _confirm_rename())
+
+	_operation_status = Label.new()
+	_operation_status.name = "OperationStatus"
+	_operation_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_load_box.add_child(_operation_status)
+	_load_box.move_child(_operation_status, _load_footer.get_index())
+
+
+func _set_management_enabled(enabled: bool) -> void:
+	_rename_button.disabled = not enabled
+	_duplicate_button.disabled = not enabled
+	_backup_button.disabled = not enabled
+	var hint := "Select a compatible world first"
+	_rename_button.tooltip_text = "Rename the selected world" if enabled else hint
+	_duplicate_button.tooltip_text = "Create an independent copy" if enabled else hint
+	_backup_button.tooltip_text = "Copy the save to user://world_backups" if enabled else hint
+
+
+func _set_operation_status(text: String, failed: bool = false) -> void:
+	_operation_status.text = text
+	_operation_status.add_theme_color_override("font_color", UITheme.WARN if failed else UITheme.CYAN)
 
 
 func _style_row_label(label: Label, text: String) -> void:

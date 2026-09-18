@@ -20,6 +20,7 @@ const DEFAULT_SETTINGS := {
 	"input_bindings": {},
 	"ui_scale": 1.0,
 	"text_scale": 1.0,
+	"autosave_interval": 30,
 }
 
 # Interface scale. UI scale drives the window's canvas-item content scale, so
@@ -48,6 +49,8 @@ const DYNAMIC_RESOLUTION_UP_MARGIN := 0.85
 const LOD_MODE_FULL := 0
 const LOD_MODE_BALANCED := 1
 const LOD_MODE_NAMES := ["Full Detail", "Balanced LOD"]
+const AUTOSAVE_INTERVAL_VALUES := [0, 30, 60, 120, 300, 600]
+const AUTOSAVE_INTERVAL_NAMES := ["Off", "30 Seconds", "1 Minute", "2 Minutes", "5 Minutes", "10 Minutes"]
 
 # Rebindable input actions in menu order. The InputMap's non-`ui_*` actions are
 # the source of truth: anything missing from this table still gets a row with a
@@ -228,6 +231,9 @@ func set_setting(key: String, value: Variant) -> void:
 		apply_frame_pacing()
 	elif key == "ui_scale" or key == "text_scale":
 		apply_ui_scale()
+	elif key == "autosave_interval":
+		settings[key] = nearest_option(value, AUTOSAVE_INTERVAL_VALUES)
+		save_settings()
 
 
 ## Applies the interface scale. The window's canvas-item content scale resizes
@@ -484,6 +490,11 @@ func get_mouse_sensitivity() -> float:
 	return float(settings.get("mouse_sensitivity", DEFAULT_SETTINGS["mouse_sensitivity"]))
 
 
+func get_autosave_interval() -> float:
+	return float(nearest_option(settings.get("autosave_interval", DEFAULT_SETTINGS["autosave_interval"]),
+		AUTOSAVE_INTERVAL_VALUES))
+
+
 func is_fullscreen() -> bool:
 	return bool(settings.get("fullscreen", DEFAULT_SETTINGS["fullscreen"]))
 
@@ -531,6 +542,7 @@ func load_settings() -> void:
 	settings["dynamic_resolution_target"] = nearest_option(settings.get("dynamic_resolution_target", DEFAULT_SETTINGS["dynamic_resolution_target"]), DYNAMIC_RESOLUTION_TARGET_VALUES)
 	settings["ui_scale"] = nearest_option(settings.get("ui_scale", DEFAULT_SETTINGS["ui_scale"]), UI_SCALE_VALUES)
 	settings["text_scale"] = nearest_option(settings.get("text_scale", DEFAULT_SETTINGS["text_scale"]), TEXT_SCALE_VALUES)
+	settings["autosave_interval"] = nearest_option(settings.get("autosave_interval", DEFAULT_SETTINGS["autosave_interval"]), AUTOSAVE_INTERVAL_VALUES)
 	_sanitize_input_bindings()
 	apply_window_mode()
 	apply_frame_pacing()

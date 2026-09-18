@@ -9,6 +9,7 @@ func _initialize() -> void:
 	_verify_round_trip_and_regions()
 	_verify_future_metadata_rejection()
 	_verify_library_listing_and_delete()
+	_verify_world_management()
 	_verify_v2_compression_round_trip_and_corruption()
 	_verify_generation_edit_priority()
 	if _failures.is_empty():
@@ -144,6 +145,15 @@ func _verify_round_trip_and_regions() -> void:
 	var rejected := WorldStorage.new(_root)
 	rejected.open_world("verify-world")
 	_expect(rejected.load_chunk_edits(chunk_a).is_empty(), "future region version was not rejected")
+	var unreadable_bytes := FileAccess.get_file_as_bytes(negative_region_path)
+	_expect(rejected.unreadable_region_count() == 1,
+		"unreadable region was not exposed for one-time player feedback")
+	rejected.stage_chunk_edits(chunk_a, edits_a)
+	rejected.stage_chunk_edits(chunk_c, edits_c)
+	_expect(rejected.flush_dirty_regions() == OK,
+		"an unreadable region blocked unrelated region saves")
+	_expect(FileAccess.get_file_as_bytes(negative_region_path) == unreadable_bytes,
+		"an unreadable region was overwritten after staging an edit")
 
 	# Metadata also recovers from a syntactically valid but structurally corrupt primary.
 	var metadata_path := _root + "/verify-world/metadata.json"
@@ -198,6 +208,45 @@ func _verify_library_listing_and_delete() -> void:
 		"deleted world directory remains on disk")
 	_expect(not FileAccess.file_exists(_root + "/" + WorldStorage.LAST_WORLD_FILE),
 		"deleting the last-played world left a stale pointer")
+
+
+func _verify_world_management() -> void:
+	var storage := WorldStorage.new(_root)
+	var metadata := storage.create_world({"seed": 2468}, {"inventory": [[1, 7]]}, "manage-world")
+	_expect(not metadata.is_empty(), "could not create world-management fixture")
+	storage.stage_chunk_edits(Vector2i.ZERO, {Vector3i(1, 2, 3): BlockRegistry.BLOCK_STONE})
+	_expect(storage.flush(metadata.get("state", {})) == OK, "could not flush world-management fixture")
+	_expect(WorldStorage.rename_world("manage-world", "Managed World", _root), "world rename failed")
+	var renamed := WorldStorage.new(_root).open_world("manage-world")
+	_expect(String(renamed.get("name", "")) == "Managed World", "renamed title did not persist")
+	_expect(not WorldStorage.rename_world("manage-world", "", _root), "empty world name was accepted")
+	var maximum_name := "W".repeat(64)
+	_expect(WorldStorage.rename_world("manage-world", maximum_name, _root),
+		"maximum-length world name was rejected")
+	_expect(WorldStorage.new(_root).create_world({"seed": 1}, {}, "manage-world").is_empty(),
+		"world creation overwrote an existing requested id")
+
+	var duplicated := WorldStorage.duplicate_world("manage-world", _root)
+	var duplicate_id := String(duplicated.get("id", ""))
+	_expect(not duplicate_id.is_empty() and duplicate_id != "manage-world", "world duplication did not create a new id")
+	_expect(String(WorldStorage.latest_world_metadata(_root).get("id", "")) == "manage-world",
+		"management operation changed Continue Last World to an unplayed duplicate")
+	var duplicate_storage := WorldStorage.new(_root)
+	_expect(not duplicate_storage.open_world(duplicate_id).is_empty(), "duplicated world could not be opened")
+	_expect(duplicate_storage.load_chunk_edits(Vector2i.ZERO) == {
+		Vector3i(1, 2, 3): BlockRegistry.BLOCK_STONE,
+	}, "duplicated world lost region edits")
+	_expect(String(duplicated.get("name", "")) == "%s Copy" % maximum_name.substr(0, 59),
+		"duplicated world name did not stay within the rename limit")
+
+	var backup_root := _root + "_backups"
+	var backup_path := WorldStorage.backup_world("manage-world", _root, backup_root)
+	_expect(not backup_path.is_empty() and FileAccess.file_exists(backup_path + "/metadata.json"),
+		"manual world backup did not copy metadata")
+	_expect(FileAccess.file_exists(backup_path + "/regions/r.0.0.rcregion"),
+		"manual world backup did not copy region data")
+	_expect(WorldStorage.new(_root).open_world("../manage-world").is_empty(),
+		"world opening accepted a traversal id")
 
 
 func _verify_v2_compression_round_trip_and_corruption() -> void:
