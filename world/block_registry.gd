@@ -72,6 +72,10 @@ const BLOCK_GEODE_SHELL := 67
 const BLOCK_AMETHYST := 68
 const BLOCK_CRYSTAL_BUD := 69
 const BLOCK_FIRE := 70
+const BLOCK_CRAFTING_TABLE := 71
+const BLOCK_CHEST := 72
+const BLOCK_FURNACE := 73
+const BLOCK_PLANKS := 74
 
 const FLAG_OPAQUE := 1
 const FLAG_CUTOUT := 2
@@ -85,78 +89,83 @@ const FLAG_TINTED := 64
 ## both its trunk and its canopy.
 const FLAG_FLAMMABLE := 128
 
+## Rows: id, name, top, side, bottom, flags, hardness, preferred tool, required tier.
 const BLOCK_DEFS := [
-	[0, "AIR", "", "", "", 0],
-	[1, "GRASS", "grass_top.png", "grass_side.png", "dirt.png", FLAG_OPAQUE | FLAG_TINTED],
-	[2, "DIRT", "dirt.png", "dirt.png", "dirt.png", FLAG_OPAQUE],
-	[3, "STONE", "stone.png", "stone.png", "stone.png", FLAG_OPAQUE],
-	[4, "COBBLESTONE", "cobblestone.png", "cobblestone.png", "cobblestone.png", FLAG_OPAQUE],
-	[5, "OAK LOG", "wood_top.png", "wood_side.png", "wood_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
-	[6, "OAK LEAVES", "leaves.png", "leaves.png", "leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
-	[7, "SAND", "sand.png", "sand.png", "sand.png", FLAG_OPAQUE],
-	[8, "GLASS", "glass.png", "glass.png", "glass.png", FLAG_CUTOUT],
-	[9, "GLOWSTONE", "glowstone.png", "glowstone.png", "glowstone.png", FLAG_OPAQUE | FLAG_EMISSIVE],
-	[10, "SNOW", "snow_block.png", "snow_block.png", "snow_block.png", FLAG_OPAQUE],
-	[11, "BEDROCK", "bedrock.png", "bedrock.png", "bedrock.png", FLAG_OPAQUE | FLAG_UNBREAKABLE],
-	[12, "GRAVEL", "gravel.png", "gravel.png", "gravel.png", FLAG_OPAQUE],
-	[13, "COAL ORE", "coal_ore.png", "coal_ore.png", "coal_ore.png", FLAG_OPAQUE],
-	[14, "IRON ORE", "iron_ore.png", "iron_ore.png", "iron_ore.png", FLAG_OPAQUE],
-	[15, "GOLD ORE", "gold_ore.png", "gold_ore.png", "gold_ore.png", FLAG_OPAQUE],
-	[16, "WATER", "water.png", "water.png", "water.png", 0],
-	[17, "CLAY", "clay.png", "clay.png", "clay.png", FLAG_OPAQUE],
-	[18, "MUD", "mud.png", "mud.png", "mud.png", FLAG_OPAQUE],
-	[19, "RED SAND", "red_sand.png", "red_sand.png", "red_sand.png", FLAG_OPAQUE],
-	[20, "CACTUS", "cactus_top.png", "cactus_side.png", "cactus_top.png", FLAG_OPAQUE],
-	[21, "SPRUCE LOG", "spruce_log_top.png", "spruce_log_side.png", "spruce_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
-	[22, "SPRUCE LEAVES", "spruce_leaves.png", "spruce_leaves.png", "spruce_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
-	[23, "BIRCH LOG", "birch_log_top.png", "birch_log_side.png", "birch_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
-	[24, "BIRCH LEAVES", "birch_leaves.png", "birch_leaves.png", "birch_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
-	[25, "TERRACOTTA", "terracotta.png", "terracotta.png", "terracotta.png", FLAG_OPAQUE],
-	[26, "MYCELIUM", "mycelium_top.png", "mycelium_side.png", "dirt.png", FLAG_OPAQUE],
-	[27, "TORCH", "torch.png", "torch.png", "torch.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE],
-	[28, "WATER FLOW 7", "water.png", "water.png", "water.png", 0],
-	[29, "WATER FLOW 6", "water.png", "water.png", "water.png", 0],
-	[30, "WATER FLOW 5", "water.png", "water.png", "water.png", 0],
-	[31, "WATER FLOW 4", "water.png", "water.png", "water.png", 0],
-	[32, "WATER FLOW 3", "water.png", "water.png", "water.png", 0],
-	[33, "WATER FLOW 2", "water.png", "water.png", "water.png", 0],
-	[34, "WATER FLOW 1", "water.png", "water.png", "water.png", 0],
-	[35, "TALL GRASS", "tall_grass.png", "tall_grass.png", "tall_grass.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED | FLAG_FLAMMABLE],
-	[36, "YELLOW FLOWER", "flower_yellow.png", "flower_yellow.png", "flower_yellow.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE],
-	[37, "RED FLOWER", "flower_red.png", "flower_red.png", "flower_red.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE],
-	[38, "DEAD BUSH", "dead_bush.png", "dead_bush.png", "dead_bush.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE],
-	[39, "BAMBOO", "bamboo.png", "bamboo.png", "bamboo.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED | FLAG_FLAMMABLE],
-	[40, "VINE", "vine.png", "vine.png", "vine.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED | FLAG_FLAMMABLE],
-	[41, "ACACIA LOG", "acacia_log_top.png", "acacia_log_side.png", "acacia_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
-	[42, "ACACIA LEAVES", "acacia_leaves.png", "acacia_leaves.png", "acacia_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
-	[43, "JUNGLE LOG", "jungle_log_top.png", "jungle_log_side.png", "jungle_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
-	[44, "JUNGLE LEAVES", "jungle_leaves.png", "jungle_leaves.png", "jungle_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
-	[45, "MANGROVE LOG", "mangrove_log_top.png", "mangrove_log_side.png", "mangrove_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
-	[46, "MANGROVE LEAVES", "mangrove_leaves.png", "mangrove_leaves.png", "mangrove_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE],
-	[47, "MANGROVE ROOTS", "mangrove_roots.png", "mangrove_roots.png", "mangrove_roots.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
-	[48, "LAVA", "lava.png", "lava.png", "lava.png", FLAG_OPAQUE | FLAG_EMISSIVE],
-	[49, "BROWN MUSHROOM", "brown_mushroom_block.png", "brown_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE],
-	[50, "RED MUSHROOM", "red_mushroom_block.png", "red_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE],
-	[51, "MELON", "melon_top.png", "melon_side.png", "melon_side.png", FLAG_OPAQUE | FLAG_FLAMMABLE],
-	[52, "CORAL SUBSTRATE", "coral_substrate.png", "coral_substrate.png", "coral_substrate.png", FLAG_OPAQUE],
-	[53, "SEAGRASS", "seagrass.png", "seagrass.png", "seagrass.png", FLAG_CUTOUT | FLAG_CROSS],
-	[54, "KELP", "kelp.png", "kelp.png", "kelp.png", FLAG_CUTOUT | FLAG_CROSS],
-	[55, "CORAL FAN", "coral_fan.png", "coral_fan.png", "coral_fan.png", FLAG_CUTOUT | FLAG_CROSS],
-	[56, "CORAL BRANCH", "coral_branch.png", "coral_branch.png", "coral_branch.png", FLAG_CUTOUT | FLAG_CROSS],
-	[57, "SPONGE", "sponge.png", "sponge.png", "sponge.png", FLAG_OPAQUE],
-	[58, "ANEMONE", "anemone.png", "anemone.png", "anemone.png", FLAG_CUTOUT | FLAG_CROSS],
-	[59, "TNT", "tnt_top.png", "tnt_side.png", "tnt_bottom.png", FLAG_OPAQUE],
-	[60, "NUKE", "nuke_top.png", "nuke_side.png", "nuke_bottom.png", FLAG_OPAQUE],
-	[61, "DRIPSTONE", "dripstone.png", "dripstone.png", "dripstone.png", FLAG_OPAQUE],
-	[62, "MOSS", "moss.png", "moss.png", "moss.png", FLAG_OPAQUE],
-	[63, "CAVE MOSS", "cave_moss.png", "cave_moss.png", "cave_moss.png", FLAG_CUTOUT | FLAG_CROSS],
-	[64, "DEEPSTONE", "deepstone.png", "deepstone.png", "deepstone.png", FLAG_OPAQUE],
-	[65, "SCULK", "sculk.png", "sculk.png", "sculk.png", FLAG_OPAQUE | FLAG_EMISSIVE],
-	[66, "CALCITE", "calcite.png", "calcite.png", "calcite.png", FLAG_OPAQUE],
-	[67, "GEODE SHELL", "geode_shell.png", "geode_shell.png", "geode_shell.png", FLAG_OPAQUE],
-	[68, "AMETHYST", "amethyst.png", "amethyst.png", "amethyst.png", FLAG_OPAQUE | FLAG_EMISSIVE],
-	[69, "CRYSTAL BUD", "crystal_bud.png", "crystal_bud.png", "crystal_bud.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE],
-	[70, "FIRE", "fire.png", "fire.png", "fire.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE],
+	[0, "AIR", "", "", "", 0, -1.0, "", 0],
+	[1, "GRASS", "grass_top.png", "grass_side.png", "dirt.png", FLAG_OPAQUE | FLAG_TINTED, 0.6, "shovel", 0],
+	[2, "DIRT", "dirt.png", "dirt.png", "dirt.png", FLAG_OPAQUE, 0.5, "shovel", 0],
+	[3, "STONE", "stone.png", "stone.png", "stone.png", FLAG_OPAQUE, 1.5, "pickaxe", 1],
+	[4, "COBBLESTONE", "cobblestone.png", "cobblestone.png", "cobblestone.png", FLAG_OPAQUE, 2.0, "pickaxe", 1],
+	[5, "OAK LOG", "wood_top.png", "wood_side.png", "wood_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[6, "OAK LEAVES", "leaves.png", "leaves.png", "leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE, 0.2, "axe", 0],
+	[7, "SAND", "sand.png", "sand.png", "sand.png", FLAG_OPAQUE, 0.5, "shovel", 0],
+	[8, "GLASS", "glass.png", "glass.png", "glass.png", FLAG_CUTOUT, 0.3, "", 0],
+	[9, "GLOWSTONE", "glowstone.png", "glowstone.png", "glowstone.png", FLAG_OPAQUE | FLAG_EMISSIVE, 0.3, "pickaxe", 0],
+	[10, "SNOW", "snow_block.png", "snow_block.png", "snow_block.png", FLAG_OPAQUE, 0.2, "shovel", 0],
+	[11, "BEDROCK", "bedrock.png", "bedrock.png", "bedrock.png", FLAG_OPAQUE | FLAG_UNBREAKABLE, -1.0, "", 0],
+	[12, "GRAVEL", "gravel.png", "gravel.png", "gravel.png", FLAG_OPAQUE, 0.6, "shovel", 0],
+	[13, "COAL ORE", "coal_ore.png", "coal_ore.png", "coal_ore.png", FLAG_OPAQUE, 3.0, "pickaxe", 1],
+	[14, "IRON ORE", "iron_ore.png", "iron_ore.png", "iron_ore.png", FLAG_OPAQUE, 3.0, "pickaxe", 2],
+	[15, "GOLD ORE", "gold_ore.png", "gold_ore.png", "gold_ore.png", FLAG_OPAQUE, 3.0, "pickaxe", 3],
+	[16, "WATER", "water.png", "water.png", "water.png", 0, -1.0, "", 0],
+	[17, "CLAY", "clay.png", "clay.png", "clay.png", FLAG_OPAQUE, 0.6, "shovel", 0],
+	[18, "MUD", "mud.png", "mud.png", "mud.png", FLAG_OPAQUE, 0.5, "shovel", 0],
+	[19, "RED SAND", "red_sand.png", "red_sand.png", "red_sand.png", FLAG_OPAQUE, 0.5, "shovel", 0],
+	[20, "CACTUS", "cactus_top.png", "cactus_side.png", "cactus_top.png", FLAG_OPAQUE, 0.4, "axe", 0],
+	[21, "SPRUCE LOG", "spruce_log_top.png", "spruce_log_side.png", "spruce_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[22, "SPRUCE LEAVES", "spruce_leaves.png", "spruce_leaves.png", "spruce_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE, 0.2, "axe", 0],
+	[23, "BIRCH LOG", "birch_log_top.png", "birch_log_side.png", "birch_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[24, "BIRCH LEAVES", "birch_leaves.png", "birch_leaves.png", "birch_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE, 0.2, "axe", 0],
+	[25, "TERRACOTTA", "terracotta.png", "terracotta.png", "terracotta.png", FLAG_OPAQUE, 1.25, "pickaxe", 1],
+	[26, "MYCELIUM", "mycelium_top.png", "mycelium_side.png", "dirt.png", FLAG_OPAQUE, 0.6, "shovel", 0],
+	[27, "TORCH", "torch.png", "torch.png", "torch.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE, 0.0, "", 0],
+	[28, "WATER FLOW 7", "water.png", "water.png", "water.png", 0, -1.0, "", 0],
+	[29, "WATER FLOW 6", "water.png", "water.png", "water.png", 0, -1.0, "", 0],
+	[30, "WATER FLOW 5", "water.png", "water.png", "water.png", 0, -1.0, "", 0],
+	[31, "WATER FLOW 4", "water.png", "water.png", "water.png", 0, -1.0, "", 0],
+	[32, "WATER FLOW 3", "water.png", "water.png", "water.png", 0, -1.0, "", 0],
+	[33, "WATER FLOW 2", "water.png", "water.png", "water.png", 0, -1.0, "", 0],
+	[34, "WATER FLOW 1", "water.png", "water.png", "water.png", 0, -1.0, "", 0],
+	[35, "TALL GRASS", "tall_grass.png", "tall_grass.png", "tall_grass.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED | FLAG_FLAMMABLE, 0.0, "", 0],
+	[36, "YELLOW FLOWER", "flower_yellow.png", "flower_yellow.png", "flower_yellow.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE, 0.0, "", 0],
+	[37, "RED FLOWER", "flower_red.png", "flower_red.png", "flower_red.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE, 0.0, "", 0],
+	[38, "DEAD BUSH", "dead_bush.png", "dead_bush.png", "dead_bush.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE, 0.0, "", 0],
+	[39, "BAMBOO", "bamboo.png", "bamboo.png", "bamboo.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED | FLAG_FLAMMABLE, 1.0, "axe", 0],
+	[40, "VINE", "vine.png", "vine.png", "vine.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_TINTED | FLAG_FLAMMABLE, 0.2, "axe", 0],
+	[41, "ACACIA LOG", "acacia_log_top.png", "acacia_log_side.png", "acacia_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[42, "ACACIA LEAVES", "acacia_leaves.png", "acacia_leaves.png", "acacia_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE, 0.2, "axe", 0],
+	[43, "JUNGLE LOG", "jungle_log_top.png", "jungle_log_side.png", "jungle_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[44, "JUNGLE LEAVES", "jungle_leaves.png", "jungle_leaves.png", "jungle_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE, 0.2, "axe", 0],
+	[45, "MANGROVE LOG", "mangrove_log_top.png", "mangrove_log_side.png", "mangrove_log_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.0, "axe", 0],
+	[46, "MANGROVE LEAVES", "mangrove_leaves.png", "mangrove_leaves.png", "mangrove_leaves.png", FLAG_CUTOUT | FLAG_LEAVES | FLAG_TINTED | FLAG_FLAMMABLE, 0.2, "axe", 0],
+	[47, "MANGROVE ROOTS", "mangrove_roots.png", "mangrove_roots.png", "mangrove_roots.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 0.7, "axe", 0],
+	[48, "LAVA", "lava.png", "lava.png", "lava.png", FLAG_OPAQUE | FLAG_EMISSIVE, 1.0, "pickaxe", 0],
+	[49, "BROWN MUSHROOM", "brown_mushroom_block.png", "brown_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE, 0.0, "", 0],
+	[50, "RED MUSHROOM", "red_mushroom_block.png", "red_mushroom_block.png", "mushroom_stem.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_FLAMMABLE, 0.0, "", 0],
+	[51, "MELON", "melon_top.png", "melon_side.png", "melon_side.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 1.0, "axe", 0],
+	[52, "CORAL SUBSTRATE", "coral_substrate.png", "coral_substrate.png", "coral_substrate.png", FLAG_OPAQUE, 1.5, "pickaxe", 1],
+	[53, "SEAGRASS", "seagrass.png", "seagrass.png", "seagrass.png", FLAG_CUTOUT | FLAG_CROSS, 0.0, "", 0],
+	[54, "KELP", "kelp.png", "kelp.png", "kelp.png", FLAG_CUTOUT | FLAG_CROSS, 0.0, "", 0],
+	[55, "CORAL FAN", "coral_fan.png", "coral_fan.png", "coral_fan.png", FLAG_CUTOUT | FLAG_CROSS, 0.0, "", 0],
+	[56, "CORAL BRANCH", "coral_branch.png", "coral_branch.png", "coral_branch.png", FLAG_CUTOUT | FLAG_CROSS, 0.0, "", 0],
+	[57, "SPONGE", "sponge.png", "sponge.png", "sponge.png", FLAG_OPAQUE, 0.6, "", 0],
+	[58, "ANEMONE", "anemone.png", "anemone.png", "anemone.png", FLAG_CUTOUT | FLAG_CROSS, 0.0, "", 0],
+	[59, "TNT", "tnt_top.png", "tnt_side.png", "tnt_bottom.png", FLAG_OPAQUE, 0.0, "", 0],
+	[60, "NUKE", "nuke_top.png", "nuke_side.png", "nuke_bottom.png", FLAG_OPAQUE, 0.0, "", 0],
+	[61, "DRIPSTONE", "dripstone.png", "dripstone.png", "dripstone.png", FLAG_OPAQUE, 1.5, "pickaxe", 1],
+	[62, "MOSS", "moss.png", "moss.png", "moss.png", FLAG_OPAQUE, 0.1, "shovel", 0],
+	[63, "CAVE MOSS", "cave_moss.png", "cave_moss.png", "cave_moss.png", FLAG_CUTOUT | FLAG_CROSS, 0.0, "", 0],
+	[64, "DEEPSTONE", "deepstone.png", "deepstone.png", "deepstone.png", FLAG_OPAQUE, 3.0, "pickaxe", 1],
+	[65, "SCULK", "sculk.png", "sculk.png", "sculk.png", FLAG_OPAQUE | FLAG_EMISSIVE, 0.2, "", 0],
+	[66, "CALCITE", "calcite.png", "calcite.png", "calcite.png", FLAG_OPAQUE, 0.75, "pickaxe", 1],
+	[67, "GEODE SHELL", "geode_shell.png", "geode_shell.png", "geode_shell.png", FLAG_OPAQUE, 1.5, "pickaxe", 1],
+	[68, "AMETHYST", "amethyst.png", "amethyst.png", "amethyst.png", FLAG_OPAQUE | FLAG_EMISSIVE, 1.5, "pickaxe", 1],
+	[69, "CRYSTAL BUD", "crystal_bud.png", "crystal_bud.png", "crystal_bud.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE, 1.5, "pickaxe", 1],
+	[70, "FIRE", "fire.png", "fire.png", "fire.png", FLAG_CUTOUT | FLAG_CROSS | FLAG_EMISSIVE, 0.0, "", 0],
+	[71, "CRAFTING TABLE", "wood_top.png", "wood_side.png", "wood_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.5, "axe", 0],
+	[72, "CHEST", "wood_top.png", "wood_side.png", "wood_top.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.5, "axe", 0],
+	[73, "FURNACE", "stone.png", "cobblestone.png", "stone.png", FLAG_OPAQUE, 3.5, "pickaxe", 1],
+	[74, "PLANKS", "planks.png", "planks.png", "planks.png", FLAG_OPAQUE | FLAG_FLAMMABLE, 2.0, "axe", 0],
 ]
 
 const TEXTURE_ROOT := "res://assets/placeholders/zigcraft/default/"
@@ -249,6 +258,28 @@ func _init() -> void:
 	var tile_lookup := _build_texture_array()
 	_build_block_tables(tile_lookup)
 	_load_water_material()
+
+
+## Wrong or under-tier tools can destroy a block, but cannot harvest its drops.
+static func break_seconds(block_id: int, tool_id: int = 0) -> float:
+	if block_id <= BLOCK_AIR or block_id >= BLOCK_DEFS.size():
+		return -1.0
+	var def: Array = BLOCK_DEFS[block_id]
+	if float(def[6]) < 0.0 or (int(def[5]) & FLAG_UNBREAKABLE) != 0:
+		return -1.0
+	var speed := 1.0
+	if not String(def[7]).is_empty() and ItemRegistry.tool_kind(tool_id) == def[7]:
+		speed = float(ItemRegistry.tool_tier(tool_id) * 2)
+	return float(def[6]) * (1.5 if can_harvest(block_id, tool_id) else 5.0) / speed
+
+
+static func can_harvest(block_id: int, tool_id: int = 0) -> bool:
+	if block_id <= BLOCK_AIR or block_id >= BLOCK_DEFS.size():
+		return false
+	var def: Array = BLOCK_DEFS[block_id]
+	if float(def[6]) < 0.0 or (int(def[5]) & FLAG_UNBREAKABLE) != 0:
+		return false
+	return int(def[8]) == 0 or (ItemRegistry.tool_kind(tool_id) == def[7] and ItemRegistry.tool_tier(tool_id) >= int(def[8]))
 
 
 func is_valid_id(block_id: int) -> bool:
@@ -392,6 +423,14 @@ func _build_material(array_texture: Texture2DArray, fallback_image: Image) -> vo
 
 
 func _load_image(path: String) -> Image:
+	if path == TEXTURE_ROOT + "planks.png":
+		var planks := Image.create(TILE_PX, TILE_PX, false, Image.FORMAT_RGBA8)
+		for y in TILE_PX:
+			for x in TILE_PX:
+				var seam := y % 16 == 0 or (x + (y / 16) * 24) % 48 == 0
+				var grain := float((x * 13 + (y / 3) * 7) % 11) / 100.0
+				planks.set_pixel(x, y, Color("715033") if seam else Color("b98c54").darkened(grain))
+		return planks
 	var texture := load(path) as Texture2D
 	if texture == null:
 		push_warning("Block texture missing, using placeholder: %s" % path)

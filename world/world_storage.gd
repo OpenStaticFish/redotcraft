@@ -38,9 +38,11 @@ func _init(p_root_path: String = DEFAULT_ROOT) -> void:
 
 
 func create_world(world_config: Dictionary, initial_state: Dictionary = {}, requested_id: String = "",
-		activate: bool = true) -> Dictionary:
+		activate: bool = true, game_mode: int = GameMode.CREATIVE) -> Dictionary:
 	_reset_cache()
 	metadata = {}
+	if not GameMode.is_valid(game_mode):
+		return {}
 	var normalized_config := WorldGenConfig.new(world_config).to_dictionary()
 	world_id = _safe_id(requested_id)
 	if not requested_id.is_empty() and world_id != requested_id:
@@ -62,6 +64,7 @@ func create_world(world_config: Dictionary, initial_state: Dictionary = {}, requ
 		"created_unix": now,
 		"updated_unix": now,
 		"worldgen": normalized_config,
+		"game_mode": game_mode,
 		"layout": {
 			"chunk_size": VoxelDefs.CHUNK_SIZE,
 			"world_height": VoxelDefs.WORLD_HEIGHT,
@@ -227,7 +230,8 @@ static func duplicate_world(p_world_id: String, p_root_path: String = DEFAULT_RO
 		return {}
 	var copy := WorldStorage.new(p_root_path)
 	var created := copy.create_world(
-		source_metadata.get("worldgen", {}), source_metadata.get("state", {}), "", false)
+		source_metadata.get("worldgen", {}), source_metadata.get("state", {}), "", false,
+		int(source_metadata.get("game_mode", GameMode.CREATIVE)))
 	if created.is_empty():
 		return {}
 	var source_name := String(source_metadata.get("name", "World"))
@@ -293,6 +297,7 @@ static func _summary_from_metadata(value: Dictionary, id: String) -> Dictionary:
 		return {}
 	var worldgen: Dictionary = value["worldgen"]
 	var worldgen_version := int(worldgen.get("worldgen_version", -1))
+	var mode: Variant = value.get("game_mode", GameMode.CREATIVE)
 	return {
 		"id": id,
 		"name": String(value.get("name", "")),
@@ -301,8 +306,10 @@ static func _summary_from_metadata(value: Dictionary, id: String) -> Dictionary:
 		"seed": int(worldgen.get("seed", 0)),
 		"world_type": clampi(int(worldgen.get("world_type", 0)), 0, 2),
 		"worldgen_version": worldgen_version,
+		"game_mode": int(mode) if GameMode.is_valid(mode) else -1,
 		"compatible": int(value.get("format_version", -1)) == METADATA_VERSION \
-			and worldgen_version >= 1 and worldgen_version <= WorldGenConfig.CURRENT_VERSION,
+			and worldgen_version >= 1 and worldgen_version <= WorldGenConfig.CURRENT_VERSION \
+			and GameMode.is_valid(mode),
 	}
 
 
@@ -594,17 +601,21 @@ func _read_metadata_file(path: String) -> Dictionary:
 	if FileAccess.file_exists(path):
 		var primary: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
 		if typeof(primary) == TYPE_DICTIONARY and _validate_metadata(primary):
+			primary["game_mode"] = int(primary.get("game_mode", GameMode.CREATIVE))
 			return primary
 	var backup := path + ".bak"
 	if FileAccess.file_exists(backup):
 		var recovered: Variant = JSON.parse_string(FileAccess.get_file_as_string(backup))
 		if typeof(recovered) == TYPE_DICTIONARY and _validate_metadata(recovered):
 			_metadata_loaded_from_backup = true
+			recovered["game_mode"] = int(recovered.get("game_mode", GameMode.CREATIVE))
 			return recovered
 	return {}
 
 
 func _validate_metadata(value: Dictionary) -> bool:
+	if not GameMode.is_valid(value.get("game_mode", GameMode.CREATIVE)):
+		return false
 	if value.get("magic", "") != METADATA_MAGIC or int(value.get("format_version", -1)) != METADATA_VERSION:
 		return false
 	if _safe_id(String(value.get("id", ""))) != String(value.get("id", "")):

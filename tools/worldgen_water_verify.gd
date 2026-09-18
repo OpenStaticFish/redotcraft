@@ -19,6 +19,7 @@ var _failures := PackedStringArray()
 
 
 func _initialize() -> void:
+	_verify_flat_world_is_dry()
 	_verify_determinism()
 	_verify_legacy_compatibility()
 	_verify_adjacent_chunk_borders()
@@ -31,6 +32,18 @@ func _initialize() -> void:
 		push_error(failure)
 	print("WORLDGEN WATER VERIFY: FAIL (", _failures.size(), ")")
 	quit(1)
+
+
+func _verify_flat_world_is_dry() -> void:
+	var config := TEST_CONFIG.duplicate()
+	config["world_type"] = WorldGenConfig.WORLD_TYPE_FLAT
+	var generator := TerrainGenerator.new()
+	generator.configure(config)
+	var full := generator.generate_data(Vector2i.ZERO, {}, false)
+	var lod := generator.generate_data(Vector2i.ZERO, {}, true)
+	_expect(not full.data.has(BlockRegistry.BLOCK_WATER), "flat world flooded below sea level")
+	for water_y in lod.lod_water_y:
+		_expect(water_y == -1, "flat LOD world contains water")
 
 
 func _verify_determinism() -> void:

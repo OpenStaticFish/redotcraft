@@ -124,7 +124,8 @@ func _init(config_value: WorldGenConfig, biomes_value: BiomeCatalog, sampler_val
 	biomes = biomes_value if biomes_value != null else BiomeCatalogScript.new()
 	terrain_sampler = sampler_value
 	decorations = DecorationCatalogScript.new(config.worldgen_version)
-	_ore_catalog = OreCatalogScript.new(config.worldgen_version)
+	# V14 changes stage eligibility, not the legacy ore distribution.
+	_ore_catalog = OreCatalogScript.new(mini(config.worldgen_version, OreCatalogScript.LEGACY_VERSION_MAX))
 	_cave_spaghetti_a = _make_cave_noise(1701, 0.018, 2)
 	_cave_spaghetti_b = _make_cave_noise(1877, 0.015, 2)
 	_cave_cheese = _make_cave_noise(1999, 0.009, 3)
@@ -149,6 +150,10 @@ func populate(chunk_pos: Vector2i, field: ChunkTerrainData, edits: Dictionary, f
 		_place_ore_veins(data, origin_x, origin_z)
 		_place_geodes(data, field, origin_x, origin_z)
 		_decorate_caves(data, field, origin_x, origin_z)
+	elif full_detail and config.world_type != WorldGenConfigScript.WORLD_TYPE_FLAT \
+			and config.worldgen_version >= WorldGenConfigScript.CAVE_INDEPENDENT_ORES_VERSION:
+		# Preserve the cave-enabled stage order and pre-v14 cave-free worlds.
+		_place_ore_veins(data, origin_x, origin_z)
 	if full_detail and config.decoration_density > 0.0:
 		var decoration_scratch := DecorationGroundScratch.new()
 		max_y = _decorate(data, field, origin_x, origin_z, max_y, decoration_scratch)
@@ -436,6 +441,9 @@ func _fill_base_and_surface(data: PackedByteArray, field: ChunkTerrainData) -> i
 
 
 func _column_water_y(field: ChunkTerrainData, field_index: int, surface_y: int) -> int:
+	# Flat voxel terrain sits below sea level but must remain dry.
+	if config.world_type == WorldGenConfigScript.WORLD_TYPE_FLAT:
+		return -1
 	var inland_water: int = field.inland_water_y[field_index]
 	if inland_water > surface_y:
 		return inland_water

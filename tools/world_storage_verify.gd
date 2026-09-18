@@ -5,6 +5,7 @@ var _root := "user://world_storage_verify_%d" % Time.get_ticks_usec()
 
 
 func _initialize() -> void:
+	_verify_game_modes()
 	_verify_v1_compatibility_fixture()
 	_verify_round_trip_and_regions()
 	_verify_future_metadata_rejection()
@@ -20,6 +21,49 @@ func _initialize() -> void:
 		push_error(failure)
 	print("WORLD STORAGE VERIFY: FAIL (", _failures.size(), ")")
 	quit(1)
+
+
+func _verify_game_modes() -> void:
+	for value in [0, 1, 0.0, 1.0]:
+		_expect(GameMode.is_valid(value), "valid mode rejected: %s" % value)
+	for value in [true, false, "0", "1", null, -1, 2, 0.5, 1.5, INF, NAN, [], {}]:
+		_expect(not GameMode.is_valid(value), "invalid mode accepted: %s" % str(value))
+	var storage := WorldStorage.new(_root)
+	_expect(storage.create_world({}, {}, "bad-mode", false, 2).is_empty(), "invalid creation mode accepted")
+	for mode in [GameMode.CREATIVE, GameMode.SURVIVAL]:
+		var id := "mode-%d" % mode
+		var created := storage.create_world({}, {}, id, false, mode)
+		_expect(created.get("game_mode", -1) == mode, "creation lost mode")
+		_expect(storage.flush({"test": true}) == OK, "mode fixture flush failed")
+		_expect(storage.open_world(id).get("game_mode", -1) == mode, "reopen lost mode")
+		_expect(WorldStorage.duplicate_world(id, _root).get("game_mode", -1) == mode, "duplicate lost mode")
+		var backup := WorldStorage.backup_world(id, _root, _root + "-backups")
+		var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(backup + "/metadata.json"))
+		_expect(saved is Dictionary and saved.get("game_mode", -1) == mode, "backup lost mode")
+		var path := _root + "/" + id + "/metadata.json"
+		var file := FileAccess.open(path, FileAccess.WRITE)
+		file.store_string("{}")
+		file = null
+		_expect(storage.open_world(id).get("game_mode", -1) == mode, "recovery backup lost mode")
+	var legacy := storage.create_world({}, {}, "legacy-mode", false)
+	_expect(legacy.get("game_mode", -1) == GameMode.CREATIVE, "old caller default changed")
+	legacy.erase("game_mode")
+	var legacy_path := _root + "/legacy-mode/metadata.json"
+	var fixture := FileAccess.open(legacy_path, FileAccess.WRITE)
+	fixture.store_string(JSON.stringify(legacy))
+	fixture = null
+	_expect(storage.open_world("legacy-mode").get("game_mode", -1) == GameMode.CREATIVE, "legacy absent mode not creative")
+	for invalid in [true, "1", 0.5, 2, null]:
+		legacy["game_mode"] = invalid
+		fixture = FileAccess.open(legacy_path, FileAccess.WRITE)
+		fixture.store_string(JSON.stringify(legacy))
+		fixture = null
+		_expect(storage.open_world("legacy-mode").is_empty(), "invalid metadata mode loaded")
+	for summary in WorldStorage.list_world_summaries(_root):
+		if summary["id"] == "legacy-mode":
+			_expect(not summary["compatible"], "invalid mode summary is loadable")
+		elif String(summary["id"]).begins_with("mode-"):
+			_expect(summary["game_mode"] == int(String(summary["id"]).trim_prefix("mode-")), "summary lost mode")
 
 
 func _verify_v1_compatibility_fixture() -> void:

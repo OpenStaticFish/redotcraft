@@ -255,6 +255,7 @@ func _on_create_world(seed: int, world_type: int) -> void:
 	config["seed"] = seed
 	config["world_type"] = world_type
 	GameConfig.apply_world(config)
+	GameConfig.pending_game_mode = _play_panel.get_selected_game_mode()
 	# Main creates the durable world only after the gameplay scene loads, so a
 	# failed scene change cannot leave an empty world in the library.
 	GameConfig.clear_active_world()

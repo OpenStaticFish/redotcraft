@@ -68,6 +68,13 @@ jobs:
             tools/input_rebind_verify.gd \
             tools/photo_mode_verify.gd \
             tools/player_target_verify.tscn \
+            tools/player_survival_verify.gd \
+            tools/inventory_crafting_verify.gd \
+            tools/inventory_ui_verify.gd \
+            tools/item_drops_verify.gd \
+            tools/gameplay_integration_verify.gd \
+            tools/survival_progression_verify.gd \
+            tools/flat_survival_warning_verify.gd \
             tools/explosives_verify.tscn \
             tools/fire_verify.tscn \
             tools/worldgen_cactus_verify.gd \

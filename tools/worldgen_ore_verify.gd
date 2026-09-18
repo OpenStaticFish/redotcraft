@@ -26,6 +26,7 @@ func _initialize() -> void:
 	_verify_catalog(populator)
 	_verify_stage_fingerprints(populator)
 	_verify_replacement_semantics(populator)
+	_verify_generator_versions()
 	if _failures.is_empty():
 		print("WORLDGEN ORE VERIFY: PASS")
 		quit(0)
@@ -78,6 +79,37 @@ func _verify_replacement_semantics(populator: VoxelPopulator) -> void:
 	var before := data.duplicate()
 	populator._place_ore_veins(data, 0, 0)
 	_expect(data == before, "ore generation replaced a non-stone block")
+
+
+func _verify_generator_versions() -> void:
+	var generator := TerrainGenerator.new()
+	_expect(WorldGenConfig.new().worldgen_version == 14, "new worlds must default to v14")
+	for version in [13, 14]:
+		generator.configure({"seed": 123456789, "worldgen_version": version})
+		var data: PackedByteArray = generator.generate_data(Vector2i.ZERO, {}).data
+		_expect(_sha256(data) == "8a589915d1d2e84b4f8f38a312f1176fa894ec62cce323b6c0136fed756715e7",
+			"v%d default cave fixture changed" % version)
+		for world_type in [WorldGenConfig.WORLD_TYPE_NORMAL, WorldGenConfig.WORLD_TYPE_AMPLIFIED,
+				WorldGenConfig.WORLD_TYPE_FLAT]:
+			generator.configure({"seed": 123456789, "worldgen_version": version,
+				"cave_density": 0.0, "world_type": world_type})
+			data = generator.generate_data(Vector2i.ZERO, {}).data
+			var total := 0
+			for count in _ore_counts(data).values():
+				total += int(count)
+			var needs_ores: bool = version >= 14 and world_type != WorldGenConfig.WORLD_TYPE_FLAT
+			_expect(total > 0 if needs_ores else total == 0,
+				"v%d type %d cave-free ore count: %d" % [version, world_type, total])
+			print("CAVE-FREE v", version, " type=", world_type, " ores=", total)
+	# Flat layout remains byte-identical regardless of the ore version or caves.
+	generator.configure({"seed": 123456789, "worldgen_version": 13,
+		"world_type": WorldGenConfig.WORLD_TYPE_FLAT})
+	var flat_before: PackedByteArray = generator.generate_data(Vector2i.ZERO, {}).data
+	for density in [0.0, 1.0]:
+		generator.configure({"seed": 123456789, "worldgen_version": 14,
+			"world_type": WorldGenConfig.WORLD_TYPE_FLAT, "cave_density": density})
+		_expect(generator.generate_data(Vector2i.ZERO, {}).data == flat_before,
+			"v14 changed the Flat layout at cave density %s" % density)
 
 
 func _stone_volume() -> PackedByteArray:
