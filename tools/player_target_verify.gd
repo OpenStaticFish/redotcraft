@@ -77,6 +77,7 @@ func _ready() -> void:
 		push_error("player_target_verify: stream boundary blocked motion through loaded chunks")
 		failed = true
 	var flight_player := Player.new()
+	flight_player.game_mode = GameMode.CREATIVE
 	var flight_shape := CollisionShape3D.new()
 	flight_shape.shape = CapsuleShape3D.new()
 	flight_player.add_child(flight_shape)

@@ -62,6 +62,9 @@ const INPUT_ACTION_DEFS := [
 	{"action": "move_right", "label": "Move Right", "group": "Movement"},
 	{"action": "jump", "label": "Jump / Double-tap Fly", "group": "Movement"},
 	{"action": "sprint", "label": "Sprint", "group": "Movement"},
+	{"action": "crouch", "label": "Crouch / Protect Edges", "group": "Movement"},
+	{"action": "third_person", "label": "Third Person", "group": "Action"},
+	{"action": "pick_block", "label": "Pick Block / Middle Mouse", "group": "Action"},
 	{"action": "fly_up", "label": "Fly Up", "group": "Movement"},
 	{"action": "fly_down", "label": "Fly Down", "group": "Movement"},
 	{"action": "fly_boost", "label": "Fly Boost", "group": "Movement"},
@@ -177,6 +180,7 @@ var world: Dictionary = DEFAULT_WORLD.duplicate()
 var graphics: Dictionary = {}
 var active_world_id := ""
 var active_world_metadata: Dictionary = {}
+var pending_game_mode: int = GameMode.SURVIVAL
 
 
 func _ready() -> void:
@@ -202,8 +206,12 @@ func apply_world(config: Dictionary) -> void:
 func activate_world(metadata: Dictionary) -> bool:
 	if metadata.is_empty() or typeof(metadata.get("worldgen", null)) != TYPE_DICTIONARY:
 		return false
+	var mode: Variant = metadata.get("game_mode", GameMode.CREATIVE)
+	if not GameMode.is_valid(mode) or String(metadata.get("id", "")).is_empty():
+		return false
 	active_world_id = String(metadata.get("id", ""))
 	active_world_metadata = metadata.duplicate(true)
+	active_world_metadata["game_mode"] = int(mode)
 	apply_world(metadata["worldgen"])
 	return not active_world_id.is_empty()
 
@@ -215,6 +223,12 @@ func clear_active_world() -> void:
 
 func has_active_world() -> bool:
 	return not active_world_id.is_empty()
+
+
+func get_game_mode() -> int:
+	if has_active_world():
+		return int(active_world_metadata.get("game_mode", GameMode.CREATIVE))
+	return pending_game_mode
 
 
 func get_setting(key: String) -> Variant:

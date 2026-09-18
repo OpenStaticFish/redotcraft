@@ -3,9 +3,10 @@
 class_name WorldGenConfig
 extends RefCounted
 
-const CURRENT_VERSION: int = 13
+const CURRENT_VERSION: int = 14
 const SPLINE_TERRAIN_VERSION: int = 10
 const VARIANT_WORLDGEN_VERSION: int = 11
+const CAVE_INDEPENDENT_ORES_VERSION: int = 14
 
 const WORLD_TYPE_NORMAL: int = 0
 const WORLD_TYPE_FLAT: int = 1

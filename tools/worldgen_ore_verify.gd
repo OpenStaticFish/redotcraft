@@ -26,6 +26,8 @@ func _initialize() -> void:
 	_verify_catalog(populator)
 	_verify_stage_fingerprints(populator)
 	_verify_replacement_semantics(populator)
+	_verify_compact_stamps(populator)
+	_verify_generator_versions()
 	if _failures.is_empty():
 		print("WORLDGEN ORE VERIFY: PASS")
 		quit(0)
@@ -78,6 +80,65 @@ func _verify_replacement_semantics(populator: VoxelPopulator) -> void:
 	var before := data.duplicate()
 	populator._place_ore_veins(data, 0, 0)
 	_expect(data == before, "ore generation replaced a non-stone block")
+
+
+func _verify_compact_stamps(populator: VoxelPopulator) -> void:
+	# Compare every possible exposed height to the frozen full-volume stage,
+	# including negative origins, ore-band boundaries and non-stone surfaces.
+	for origin in ORIGINS:
+		var full := _stone_volume()
+		populator._place_ore_veins(full, origin.x, origin.y)
+		var solid_y := PackedInt32Array()
+		var solid_id := PackedByteArray()
+		var sub_id := PackedByteArray()
+		solid_y.resize(VoxelDefs.CHUNK_AREA)
+		solid_id.resize(VoxelDefs.CHUNK_AREA)
+		sub_id.resize(VoxelDefs.CHUNK_AREA)
+		for y in range(1, VoxelDefs.WORLD_HEIGHT):
+			solid_y.fill(y)
+			solid_id.fill(BlockRegistry.BLOCK_STONE)
+			sub_id.fill(BlockRegistry.BLOCK_STONE)
+			for column in range(0, VoxelDefs.CHUNK_AREA, 3):
+				solid_id[column] = BlockRegistry.BLOCK_GRASS
+			for column in range(0, VoxelDefs.CHUNK_AREA, 5):
+				sub_id[column] = BlockRegistry.BLOCK_DIRT
+			populator._place_ore_veins(PackedByteArray(), origin.x, origin.y, solid_y, solid_id, sub_id)
+			for column in VoxelDefs.CHUNK_AREA:
+				var expected_top: int = BlockRegistry.BLOCK_GRASS if column % 3 == 0 else full[column + y * VoxelDefs.DATA_STRIDE_Y]
+				var expected_sub: int = BlockRegistry.BLOCK_DIRT if column % 5 == 0 else full[column + (y - 1) * VoxelDefs.DATA_STRIDE_Y]
+				_expect(solid_id[column] == expected_top and sub_id[column] == expected_sub,
+					"compact ore stamp differs at %s column=%d y=%d" % [origin, column, y])
+
+
+func _verify_generator_versions() -> void:
+	var generator := TerrainGenerator.new()
+	_expect(WorldGenConfig.new().worldgen_version == 14, "new worlds must default to v14")
+	for version in [13, 14]:
+		generator.configure({"seed": 123456789, "worldgen_version": version})
+		var data: PackedByteArray = generator.generate_data(Vector2i.ZERO, {}).data
+		_expect(_sha256(data) == "8a589915d1d2e84b4f8f38a312f1176fa894ec62cce323b6c0136fed756715e7",
+			"v%d default cave fixture changed" % version)
+		for world_type in [WorldGenConfig.WORLD_TYPE_NORMAL, WorldGenConfig.WORLD_TYPE_AMPLIFIED,
+				WorldGenConfig.WORLD_TYPE_FLAT]:
+			generator.configure({"seed": 123456789, "worldgen_version": version,
+				"cave_density": 0.0, "world_type": world_type})
+			data = generator.generate_data(Vector2i.ZERO, {}).data
+			var total := 0
+			for count in _ore_counts(data).values():
+				total += int(count)
+			var needs_ores: bool = version >= 14 and world_type != WorldGenConfig.WORLD_TYPE_FLAT
+			_expect(total > 0 if needs_ores else total == 0,
+				"v%d type %d cave-free ore count: %d" % [version, world_type, total])
+			print("CAVE-FREE v", version, " type=", world_type, " ores=", total)
+	# Flat layout remains byte-identical regardless of the ore version or caves.
+	generator.configure({"seed": 123456789, "worldgen_version": 13,
+		"world_type": WorldGenConfig.WORLD_TYPE_FLAT})
+	var flat_before: PackedByteArray = generator.generate_data(Vector2i.ZERO, {}).data
+	for density in [0.0, 1.0]:
+		generator.configure({"seed": 123456789, "worldgen_version": 14,
+			"world_type": WorldGenConfig.WORLD_TYPE_FLAT, "cave_density": density})
+		_expect(generator.generate_data(Vector2i.ZERO, {}).data == flat_before,
+			"v14 changed the Flat layout at cave density %s" % density)
 
 
 func _stone_volume() -> PackedByteArray:

@@ -1,0 +1,220 @@
+## redot --headless --path . --script res://tools/inventory_crafting_verify.gd
+extends SceneTree
+
+var failures := 0
+var notifications := 0
+
+
+func _initialize() -> void:
+	_test_inventory()
+	_test_crafting()
+	_test_progression()
+	_test_containers()
+	_test_catalog()
+	print("INVENTORY CRAFTING VERIFY: %s" % ("PASS" if failures == 0 else "FAIL (%d)" % failures))
+	quit(0 if failures == 0 else 1)
+
+
+func _expect(condition: bool, message: String) -> void:
+	if not condition:
+		failures += 1
+		push_error(message)
+
+
+func _notified() -> void:
+	notifications += 1
+
+
+func _test_inventory() -> void:
+	var inventory := ItemInventory.new()
+	_expect(inventory.slots.size() == 40 and ItemInventory.HOTBAR_SIZE == 10, "default sizes")
+	inventory.changed.connect(_notified)
+	_expect(inventory.add_item(2, 70) == 0, "add stacks")
+	_expect(inventory.slots[0].count == 64 and inventory.slots[1].count == 6, "stack packing")
+	_expect(notifications == 1, "add emits once")
+	_expect(inventory.move_stack(0, 2, true) and inventory.slots[2].count == 32, "split stack")
+	_expect(inventory.move_stack(2, 1) and inventory.slots[1].count == 38, "merge stacks")
+	_expect(not inventory.remove_at(-1) and not inventory.remove_at(0, 100), "invalid removals")
+	_expect(inventory.add_item(999999, 2) == 2 and inventory.add_item(0) == 1, "reject invalid IDs")
+	var snapshot := inventory.persistent_state()
+	snapshot[0].count = 1
+	_expect(inventory.slots[0].count == 32, "snapshot does not alias")
+	var tiny := ItemInventory.new(1)
+	_expect(tiny.add_item(2, 70) == 6, "overflow remainder")
+	var before := tiny.persistent_state()
+	_expect(not tiny.move_stack(0, 2) and tiny.persistent_state() == before, "invalid move is inert")
+	tiny.restore([])
+	_expect(tiny.add_item(ItemRegistry.ITEM_WOOD_PICKAXE, 2, 2) == 1, "tools do not stack")
+	_expect(tiny.wear_tool(0) and tiny.slots[0].durability == 1, "wear tool")
+	_expect(tiny.wear_tool(0) and tiny.slots[0].is_empty(), "tool breaks")
+	_expect(not tiny.wear_tool(0), "empty slot not a tool")
+	tiny.restore([{"id": 2, "count": 999, "durability": 99}])
+	_expect(tiny.slots[0] == {"id": 2, "count": 64, "durability": 0}, "restore clamps stacks")
+	tiny.restore([{"id": ItemRegistry.ITEM_WOOD_PICKAXE, "count": 1, "durability": 0}])
+	_expect(tiny.slots[0].is_empty(), "restore rejects broken tools")
+	var overflow := tiny.migrate_counts({"2": 70})
+	_expect(tiny.count_item(2) == 64 and overflow.get(2) == 6, "legacy counts and overflow")
+	inventory.restore([{"id": 2, "count": 5}, {"id": 3, "count": 4}])
+	_expect(not inventory.move_stack(0, 1, true), "split never swaps unlike stacks")
+	_expect(inventory.move_stack(0, 1) and inventory.slots[0].id == 3, "full move swaps")
+	inventory.restore([{}, {"id": ItemRegistry.ITEM_FLINT_AND_STEEL, "count": 1, "durability": 12}])
+	var restored := ItemInventory.new()
+	restored.restore(JSON.parse_string(JSON.stringify(inventory.persistent_state())))
+	_expect(restored.persistent_state() == inventory.persistent_state(), "inventory JSON round trip")
+
+
+func _test_crafting() -> void:
+	var inventory := ItemInventory.new(2)
+	inventory.add_item(BlockRegistry.BLOCK_PLANKS, 4)
+	inventory.add_item(1010, 3)
+	var before := inventory.persistent_state()
+	_expect(not CraftingRecipes.craft(inventory, "wood_pickaxe", false), "table requirement")
+	_expect(not CraftingRecipes.craft(inventory, "wood_pickaxe", true), "atomic capacity rejection")
+	_expect(inventory.persistent_state() == before, "failed craft retains ingredients")
+	inventory.remove_at(0)
+	notifications = 0
+	inventory.changed.connect(_notified)
+	_expect(CraftingRecipes.craft(inventory, "wood_pickaxe", true), "craft uses freed ingredient slot")
+	_expect(inventory.count_item(1001) == 1 and inventory.count_item(1010) == 1, "craft exact counts")
+	_expect(notifications == 1, "craft emits only committed state")
+	before = inventory.persistent_state()
+	_expect(not CraftingRecipes.craft(inventory, "missing", true), "unknown recipe rejected")
+	_expect(not CraftingRecipes.craft(inventory, "iron_pickaxe", true), "missing ingredients rejected")
+	_expect(inventory.persistent_state() == before, "recipe failures inert")
+	var ids := {}
+	for recipe in CraftingRecipes.RECIPES:
+		_expect(recipe.category in ["Basics", "Tools", "Storage", "Food", "Building", "Lighting"], "recipe category")
+		_expect(not ids.has(recipe.id), "unique recipe ID")
+		ids[recipe.id] = true
+		var sample := ItemInventory.new()
+		for id in recipe.ingredients:
+			_expect(ItemRegistry.is_valid(id), "valid recipe ingredient")
+			sample.add_item(id, recipe.ingredients[id])
+		_expect(CraftingRecipes.craft(sample, recipe.id, true), "recipe crafts: " + recipe.id)
+		_expect(sample.count_item(recipe.output) == recipe.count, "recipe output count")
+
+
+func _test_progression() -> void:
+	var inventory := ItemInventory.new(2)
+	inventory.add_item(BlockRegistry.BLOCK_LOG, 16)
+	var before := inventory.persistent_state()
+	_expect(CraftingRecipes.max_craftable(inventory, "planks_oak", false) == 16, "maximum counts batches not output")
+	_expect(not CraftingRecipes.craft(inventory, "planks_oak", false, 17), "all requested batches required")
+	_expect(not CraftingRecipes.craft(inventory, "planks_oak", false, 0), "zero batch rejected")
+	_expect(not CraftingRecipes.craft(inventory, "planks_oak", false, -1), "negative batch rejected")
+	_expect(not CraftingRecipes.craft(inventory, "planks_oak", false, 9223372036854775807), "oversized batch rejected")
+	_expect(inventory.persistent_state() == before, "batch rejection leaves inventory unchanged")
+	_expect(CraftingRecipes.craft(inventory, "planks_oak", false, 16), "multi-batch commit")
+	_expect(inventory.count_item(BlockRegistry.BLOCK_PLANKS) == 64, "batch output exact")
+	inventory = ItemInventory.new(1)
+	inventory.add_item(BlockRegistry.BLOCK_LOG, 17)
+	before = inventory.persistent_state()
+	_expect(CraftingRecipes.max_craftable(inventory, "planks_oak", false) == 0, "output capacity limits all batches")
+	_expect(not CraftingRecipes.craft(inventory, "planks_oak", false, 17), "batch output overflow rejected")
+	_expect(inventory.persistent_state() == before, "output overflow preserves all inputs")
+	inventory.restore([{"id": BlockRegistry.BLOCK_LOG, "count": 16}])
+	_expect(CraftingRecipes.max_craftable(inventory, "planks_oak", false) == 16, "maximum finds nonmonotonic freed-slot fit")
+	_expect(CraftingRecipes.blocking_reason(inventory, "planks_oak", false).contains("full"), "single batch blocked by capacity")
+	_expect(CraftingRecipes.craft(inventory, "planks_oak", false, 16), "full batch frees input slot")
+	_expect(CraftingRecipes.blocking_reason(inventory, "wood_pickaxe", false).contains("table"), "table reason")
+	_expect(CraftingRecipes.blocking_reason(inventory, "wood_pickaxe", true).contains("stick"), "named missing materials")
+	_expect(CraftingRecipes.get_recipe("missing").is_empty(), "unknown recipe lookup")
+	_expect(CraftingRecipes.max_craftable(inventory, "missing", true) == 0, "unknown maximum")
+	inventory = ItemInventory.new(2)
+	inventory.add_item(BlockRegistry.BLOCK_PLANKS, 9)
+	inventory.add_item(ItemRegistry.ITEM_STICK, 6)
+	before = inventory.persistent_state()
+	_expect(CraftingRecipes.max_craftable(inventory, "wood_pickaxe", true) == 0, "unstackable tool batch respects capacity")
+	_expect(not CraftingRecipes.craft(inventory, "wood_pickaxe", true, 3), "three tools cannot fit two slots")
+	_expect(inventory.persistent_state() == before, "tool batch failure retains ingredients")
+	inventory = ItemInventory.new()
+	inventory.add_item(BlockRegistry.BLOCK_MELON)
+	_expect(CraftingRecipes.craft(inventory, "melon_slices", false) and inventory.count_item(ItemRegistry.ITEM_MELON_SLICE) == 4, "melon cuts into four slices")
+	_expect(CraftingRecipes.craft(inventory, "melon", false) and inventory.count_item(BlockRegistry.BLOCK_MELON) == 1
+		and inventory.count_item(ItemRegistry.ITEM_MELON_SLICE) == 0, "reverse melon recipe cannot duplicate food")
+	inventory = ItemInventory.new()
+	inventory.add_item(BlockRegistry.BLOCK_BAMBOO, 256)
+	_expect(CraftingRecipes.max_craftable(inventory, "bamboo_sticks", false) == 64, "maximum bounded at 64")
+	for log_id in [BlockRegistry.BLOCK_LOG, BlockRegistry.BLOCK_SPRUCE_LOG, BlockRegistry.BLOCK_BIRCH_LOG, BlockRegistry.BLOCK_ACACIA_LOG, BlockRegistry.BLOCK_JUNGLE_LOG, BlockRegistry.BLOCK_MANGROVE_LOG]:
+		_expect(CraftingRecipes.SMELTING[log_id] == ItemRegistry.ITEM_CHARCOAL, "all logs produce charcoal")
+	_expect(CraftingRecipes.SMELTING[BlockRegistry.BLOCK_RED_SAND] == BlockRegistry.BLOCK_GLASS, "red sand smelts")
+	_expect(CraftingRecipes.SMELTING[BlockRegistry.BLOCK_CLAY] == BlockRegistry.BLOCK_TERRACOTTA, "clay smelts")
+	_expect(ItemRegistry.food_value(BlockRegistry.BLOCK_MELON) == 0.0, "whole melon is not edible")
+	_expect(ItemRegistry.food_value(ItemRegistry.ITEM_MELON_SLICE) == 2.0 and ItemRegistry.food_value(ItemRegistry.ITEM_MUSHROOM_STEW) == 6.0, "new food nutrition")
+	_expect(ItemRegistry.harvest_drop(BlockRegistry.BLOCK_STONE) == {"id": BlockRegistry.BLOCK_COBBLESTONE, "count": 1}, "stone drops cobblestone")
+	_expect(ItemRegistry.harvest_drop(BlockRegistry.BLOCK_COAL_ORE).id == ItemRegistry.ITEM_COAL, "coal ore drops coal")
+	_expect(ItemRegistry.harvest_drop(BlockRegistry.BLOCK_LOG).id == BlockRegistry.BLOCK_LOG, "other blocks drop themselves")
+	_expect(BlockRegistry.BLOCK_PLANKS == 74 and ItemRegistry.ITEM_CHARCOAL == 1017 and ItemRegistry.ITEM_FLINT == 1021, "appended stable IDs")
+	_expect((BlockRegistry.BLOCK_DEFS[BlockRegistry.BLOCK_PLANKS][5] & BlockRegistry.FLAG_FLAMMABLE) != 0, "planks flammable")
+	_expect(BlockRegistry.break_seconds(BlockRegistry.BLOCK_PLANKS, ItemRegistry.ITEM_WOOD_AXE) < BlockRegistry.break_seconds(BlockRegistry.BLOCK_PLANKS), "axe speeds plank harvesting")
+	for fuel in [BlockRegistry.BLOCK_PLANKS, ItemRegistry.ITEM_WOOD_PICKAXE, ItemRegistry.ITEM_WOOD_AXE, ItemRegistry.ITEM_WOOD_SHOVEL, ItemRegistry.ITEM_CHARCOAL]:
+		_expect(ItemRegistry.fuel_seconds(fuel) > 0.0, "new fuels burn")
+		var containers := BlockContainers.new()
+		var furnace := containers.ensure_furnace(Vector3i.ZERO)
+		furnace.restore([{"id": BlockRegistry.BLOCK_KELP, "count": 2}, {"id": fuel, "count": 1, "durability": 1}, {}])
+		containers.tick(ItemRegistry.fuel_seconds(fuel))
+		_expect(furnace.slots[1].is_empty(), "fuel including worn tools consumed once")
+		var count := furnace.count_item(ItemRegistry.ITEM_DRIED_KELP)
+		containers.tick(100.0)
+		_expect(furnace.count_item(ItemRegistry.ITEM_DRIED_KELP) == count, "spent fuel never duplicates")
+
+
+func _test_containers() -> void:
+	var model := BlockContainers.new()
+	var chest_pos := Vector3i(-16, 25, 4)
+	var furnace_pos := Vector3i(1, 2, 3)
+	model.tick(100.0)
+	_expect(model.containers.is_empty(), "tick never creates furnaces")
+	var chest := model.ensure_chest(chest_pos)
+	_expect(chest.slots.size() == 27 and model.ensure_chest(chest_pos) == chest, "chest identity and size")
+	_expect(model.ensure_furnace(chest_pos) == null, "container type conflict preserves chest")
+	chest.add_item(2, 128)
+	var furnace := model.ensure_furnace(furnace_pos)
+	_expect(furnace.slots.size() == 3, "furnace slot count")
+	_expect(model.can_insert(furnace_pos, 0, 14) and not model.can_insert(furnace_pos, 2, 1012), "furnace insertion rules")
+	furnace.restore([{"id": 14, "count": 3}, {"id": 1011, "count": 1}, {}])
+	model.tick(5.0)
+	_expect(model.get_furnace(furnace_pos).progress == 5.0 and furnace.slots[2].is_empty(), "partial smelting")
+	var copy := BlockContainers.new()
+	copy.restore(JSON.parse_string(JSON.stringify(model.persistent_state())))
+	_expect(copy.get_inventory(chest_pos).count_item(2) == 128, "chest serialization")
+	copy.tick(15.0)
+	model.tick(15.0)
+	_expect(copy.get_inventory(furnace_pos).persistent_state() == furnace.persistent_state(), "furnace resumes after restore")
+	_expect(furnace.slots[2].count == 2 and furnace.slots[0].count == 1, "multi-smelt delta")
+	_expect(model.get_furnace(furnace_pos).burn_remaining == 60.0, "fuel charged once")
+	model.tick(60.0)
+	_expect(furnace.slots[2].count == 3 and model.get_furnace(furnace_pos).burn_remaining == 0.0, "idle furnace burns residual fuel")
+	furnace.restore([{"id": 14, "count": 1}, {"id": 1011, "count": 1}, {"id": 1012, "count": 64}])
+	model.tick(20.0)
+	_expect(furnace.slots[1].count == 1 and furnace.slots[0].count == 1, "blocked output consumes no new fuel or input")
+	furnace.remove_at(2)
+	model.tick(10.0)
+	_expect(furnace.slots[2].count == 64 and furnace.slots[0].is_empty(), "output merges to capacity")
+	var state := model.persistent_state()
+	model.tick(-10.0)
+	model.tick(NAN)
+	_expect(model.persistent_state() == state, "invalid delta ignored")
+	_expect(model.remove(chest_pos).size() == 27 and model.get_inventory(chest_pos) == null, "remove returns chest contents")
+	_expect(model.remove(chest_pos).is_empty(), "remove missing container")
+	for input_id in CraftingRecipes.SMELTING:
+		_expect(ItemRegistry.is_valid(input_id) and ItemRegistry.is_valid(CraftingRecipes.SMELTING[input_id]), "valid smelting IDs")
+		var sample := BlockContainers.new()
+		var slots := sample.ensure_furnace(Vector3i.ZERO)
+		slots.restore([{"id": input_id, "count": 1}, {"id": ItemRegistry.ITEM_CHARCOAL, "count": 1}, {}])
+		sample.tick(CraftingRecipes.SMELT_SECONDS)
+		_expect(slots.slots[0].is_empty() and slots.slots[1].is_empty()
+			and slots.count_item(CraftingRecipes.SMELTING[input_id]) == 1, "smelting consumes input/fuel and produces output")
+
+
+func _test_catalog() -> void:
+	for row in BlockRegistry.BLOCK_DEFS:
+		_expect(row.size() == 9, "block metadata complete: %s" % row[1])
+	_expect(BlockRegistry.BLOCK_CRAFTING_TABLE == 71 and BlockRegistry.BLOCK_CHEST == 72 and BlockRegistry.BLOCK_FURNACE == 73, "new block IDs")
+	_expect(not BlockRegistry.can_harvest(11, 1007) and BlockRegistry.break_seconds(11, 1007) < 0.0, "bedrock unbreakable")
+	_expect(not BlockRegistry.can_harvest(16, 1007), "water unharvestable")
+	_expect(not BlockRegistry.can_harvest(14, 1001) and BlockRegistry.can_harvest(14, 1004), "ore tier gate")
+	_expect(BlockRegistry.break_seconds(3, 1001) < BlockRegistry.break_seconds(3, 0), "matching tool speeds mining")
+	_expect(ItemRegistry.tool_kind(1001) == "pickaxe" and ItemRegistry.tool_tier(1007) == 3, "tool catalog")
+	_expect(ItemRegistry.max_durability(1000) > 0 and ItemRegistry.stack_limit(1000) == 1, "flint preserved as durable tool")
+	_expect(ItemRegistry.food_value(1014) > ItemRegistry.food_value(1013), "cooking improves food")

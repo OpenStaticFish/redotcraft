@@ -8,6 +8,11 @@ signal status_requested(message: String)
 signal slot_cycled(direction: int)
 signal slot_selected(index: int)
 signal pause_requested
+signal died(cause: String)
+signal vitals_changed()
+signal block_picked(block_id: int)
+signal block_interacted(position: Vector3i)
+signal mined_block(position: Vector3i, block_id: int, harvest: bool)
 
 const WALK_SPEED := 4.6
 const SPRINT_SPEED := 6.8
@@ -25,9 +30,31 @@ const SPRINT_FOV_BOOST := 6.0
 const FOV_LERP_SPEED := 8.0
 const FOOTSTEP_STRIDE := 1.7
 const FOOTSTEP_MIN_SPEED := 0.6
+const MAX_HEALTH := 20.0
+const MAX_HUNGER := 20.0
+const MAX_AIR := 10.0
+const CROUCH_SPEED := 1.8
 
 var world: VoxelWorld
+var game_mode: int = GameMode.SURVIVAL
 var can_place_check: Callable = Callable()
+var interact_check: Callable = Callable()
+var health := MAX_HEALTH
+var hunger := MAX_HUNGER
+var air := MAX_AIR
+var dead := false
+var crouching := false
+var third_person := false
+var mining_progress := 0.0
+var _mining := false
+var _mining_position := Vector3i.ZERO
+var _mining_id := 0
+var _mining_tool := 0
+var _survival_clock := 0.0
+var _regen_clock := 0.0
+var _fall_start := NAN
+var _head_height := 1.65
+var _effects: PlayerEffects
 var selected_block := 1
 var target_block := Vector3i.ZERO
 var target_normal := Vector3i.UP
@@ -47,6 +74,10 @@ var _held_block: MeshInstance3D
 
 func _ready() -> void:
 	camera.current = true
+	_head_height = head.position.y
+	_effects = PlayerEffects.new()
+	add_child(_effects)
+	_effects.setup(self)
 	spawn_position = global_position
 	apply_settings()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
@@ -70,6 +101,8 @@ func setup_world(world_node: VoxelWorld) -> void:
 
 
 func set_selected_block(block_id: int) -> void:
+	if selected_block != block_id:
+		cancel_mining()
 	selected_block = block_id
 	_update_held_block()
 
@@ -85,6 +118,10 @@ func persistent_state() -> Dictionary:
 		"yaw": rotation.y,
 		"pitch": head.rotation.x if head != null else 0.0,
 		"flying": flying,
+		"health": health,
+		"hunger": hunger,
+		"air": air,
+		"dead": dead,
 		"spawn": [spawn_position.x, spawn_position.y, spawn_position.z],
 	}
 
@@ -96,13 +133,27 @@ func restore_persistent_state(state: Dictionary) -> bool:
 	var restored := Vector3(float(position_value[0]), float(position_value[1]), float(position_value[2]))
 	if not is_finite(restored.x) or not is_finite(restored.y) or not is_finite(restored.z):
 		return false
-	if restored.y < 0.0:
+	if restored.y < 0.0 and (game_mode == GameMode.CREATIVE or (
+			not bool(state.get("dead", false))
+			and _restore_vital(state.get("health", MAX_HEALTH), MAX_HEALTH) > 0.0)):
 		return false
 	global_position = restored
 	rotation.y = float(state.get("yaw", 0.0))
 	if head != null:
 		head.rotation.x = clampf(float(state.get("pitch", 0.0)), -pitch_limit, pitch_limit)
-	flying = bool(state.get("flying", false))
+	flying = game_mode == GameMode.CREATIVE and bool(state.get("flying", false))
+	health = _restore_vital(state.get("health", MAX_HEALTH), MAX_HEALTH)
+	hunger = _restore_vital(state.get("hunger", MAX_HUNGER), MAX_HUNGER)
+	air = _restore_vital(state.get("air", MAX_AIR), MAX_AIR)
+	dead = bool(state.get("dead", false)) or health <= 0.0
+	if game_mode == GameMode.CREATIVE:
+		health = MAX_HEALTH
+		hunger = MAX_HUNGER
+		air = MAX_AIR
+		dead = false
+	if dead:
+		health = 0.0
+	_reset_survival_motion()
 	velocity = Vector3.ZERO
 	var spawn_value: Variant = state.get("spawn", [])
 	if typeof(spawn_value) == TYPE_ARRAY and spawn_value.size() == 3:
@@ -114,21 +165,89 @@ func restore_persistent_state(state: Dictionary) -> bool:
 			spawn_position = restored
 	else:
 		spawn_position = restored
+	vitals_changed.emit()
 	return true
+
+
+func _restore_vital(value: Variant, maximum: float) -> float:
+	if typeof(value) != TYPE_FLOAT and typeof(value) != TYPE_INT:
+		return maximum
+	var number := float(value)
+	return clampf(number, 0.0, maximum) if is_finite(number) else maximum
+
+
+func take_damage(amount: float, cause: String = "injury") -> void:
+	if game_mode == GameMode.CREATIVE or dead or not is_finite(amount) or amount <= 0.0:
+		return
+	health = maxf(0.0, health - amount)
+	if health <= 0.0:
+		dead = true
+		_reset_survival_motion()
+		if _highlight != null:
+			_highlight.hide()
+		if _held_block != null:
+			_held_block.hide()
+	vitals_changed.emit()
+	if dead:
+		died.emit(cause)
+
+
+## Returns false when food should not be consumed by the inventory owner.
+func eat(amount: float) -> bool:
+	if game_mode == GameMode.CREATIVE or dead or not is_finite(amount) or amount <= 0.0 or hunger >= MAX_HUNGER:
+		return false
+	hunger = minf(MAX_HUNGER, hunger + amount)
+	vitals_changed.emit()
+	return true
+
+
+func respawn() -> void:
+	_reset_survival_motion()
+	flying = false
+	crouching = false
+	global_position = spawn_position
+	if world != null:
+		world.setup_player(self, true)
+		global_position = world.find_safe_spawn(spawn_position)
+		world.setup_player(self, true)
+	health = MAX_HEALTH
+	hunger = MAX_HUNGER
+	air = MAX_AIR
+	dead = false
+	vitals_changed.emit()
+
+
+func _reset_survival_motion() -> void:
+	velocity = Vector3.ZERO
+	_fall_start = NAN
+	_survival_clock = 0.0
+	_regen_clock = 0.0
+	_last_jump_time = -10.0
+	cancel_mining()
 
 
 ## Detached photo-mode camera: freeze player simulation and hide the targeting
 ## highlight and the first-person held block so the composition cannot be
 ## disturbed or the hand model caught in the shot.
 func set_photo_mode(enabled: bool) -> void:
+	cancel_mining()
 	process_mode = Node.PROCESS_MODE_DISABLED if enabled else Node.PROCESS_MODE_INHERIT
 	if enabled and _highlight != null:
 		_highlight.visible = false
 	if _held_block != null:
-		_held_block.visible = not enabled
+		_held_block.visible = not enabled and not third_person and selected_block != BlockRegistry.BLOCK_AIR
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if dead:
+		return
+	if event.is_action_pressed("pick_block") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		_pick_target()
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		cancel_mining()
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var sensitivity := GameConfig.get_mouse_sensitivity()
 		rotation.y -= event.relative.x * sensitivity
@@ -166,20 +285,44 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		elif event.is_action_pressed("jump"):
 			_handle_double_tap_jump()
+		elif event.is_action_pressed("third_person"):
+			third_person = not third_person
+			cancel_mining()
 
 
 func _physics_process(delta: float) -> void:
+	if dead:
+		return
 	if global_position.y < FALL_RESET_Y:
-		global_position = spawn_position
-		velocity = Vector3.ZERO
-	_update_target()
+		if game_mode == GameMode.CREATIVE:
+			respawn()
+		else:
+			take_damage(MAX_HEALTH, "void")
+		return
+	crouching = not flying and Input.is_action_pressed("crouch")
+	head.position.y = _head_height - (0.35 if crouching else 0.0)
+	_effects.update_view(delta)
 	# Never simulate movement in a chunk whose collision has not committed yet.
 	# Extreme streaming and boosted flight can otherwise outrun the nearest-first
 	# worker queue; a flying player could then descend straight through visible
 	# terrain while the authoritative collision shape was still being built.
 	if world != null and not world.is_collision_ready_at(global_position):
 		velocity = Vector3.ZERO
+		_fall_start = NAN
+		cancel_mining()
+		has_target = false
+		if _highlight != null:
+			_highlight.hide()
 		return
+	_update_target()
+	_update_survival(delta)
+	if dead:
+		return
+	if _mining and (not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.mouse_mode != Input.MOUSE_MODE_CAPTURED):
+		cancel_mining()
+	if not _mining and has_target and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		_break_target()
+	_tick_mining(delta)
 	var input_vector := Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
 	var direction := Vector3(input_vector.x, 0.0, input_vector.y).rotated(Vector3.UP, rotation.y)
 	if direction.length_squared() > 1.0:
@@ -194,8 +337,8 @@ func _physics_process(delta: float) -> void:
 		velocity.y = move_toward(velocity.y, vertical * fly_speed, fly_accel * delta)
 		velocity.z = move_toward(velocity.z, direction.z * fly_speed, fly_accel * delta)
 	else:
-		sprinting = Input.is_action_pressed("sprint") and input_vector.length_squared() > 0.01
-		var speed := SPRINT_SPEED if sprinting else WALK_SPEED
+		sprinting = not crouching and hunger > 6.0 and Input.is_action_pressed("sprint") and input_vector.length_squared() > 0.01
+		var speed := CROUCH_SPEED if crouching else (SPRINT_SPEED if sprinting else WALK_SPEED)
 		var acceleration := GROUND_ACCEL if is_on_floor() else AIR_ACCEL
 		velocity.x = move_toward(velocity.x, direction.x * speed, acceleration * delta)
 		velocity.z = move_toward(velocity.z, direction.z * speed, acceleration * delta)
@@ -205,6 +348,8 @@ func _physics_process(delta: float) -> void:
 			velocity.y = JUMP_VELOCITY
 		else:
 			velocity.y = -0.5
+	if crouching and is_on_floor():
+		_protect_edge(delta)
 	if world != null:
 		var intended_position := global_position + velocity * delta
 		var loaded_fraction := world.loaded_motion_fraction(global_position, intended_position)
@@ -230,7 +375,17 @@ func _physics_process(delta: float) -> void:
 		var constrained_position := global_position + velocity * delta
 		if velocity.y < 0.0 and not world.is_collision_ready_at(constrained_position):
 			velocity.y = 0.0
+	var was_grounded := is_on_floor()
+	if flying or _water_at(global_position + Vector3.UP * 0.1):
+		_fall_start = NAN
+	elif not was_grounded:
+		_fall_start = global_position.y if is_nan(_fall_start) else maxf(_fall_start, global_position.y)
 	move_and_slide()
+	if not flying and is_on_floor() and not is_nan(_fall_start):
+		var distance := _fall_start - global_position.y
+		_fall_start = NAN
+		if distance > 3.0 and not _water_at(global_position + Vector3.UP * 0.1):
+			take_damage(floorf(distance - 3.0), "fall")
 	if camera:
 		var target_fov := base_fov + SPRINT_FOV_BOOST if sprinting and direction.length_squared() > 0.0 else base_fov
 		camera.fov = lerpf(camera.fov, target_fov, clampf(delta * FOV_LERP_SPEED, 0.0, 1.0))
@@ -272,7 +427,7 @@ func _update_target() -> void:
 	if world == null:
 		return
 	has_target = false
-	var result := _voxel_raycast(camera.global_position, -camera.global_transform.basis.z, REACH)
+	var result := _voxel_raycast(head.global_position, -camera.global_transform.basis.z, REACH)
 	if result.is_empty():
 		_highlight.visible = false
 		return
@@ -327,17 +482,72 @@ func _voxel_raycast(origin: Vector3, direction_value: Vector3, max_distance: flo
 	return {}
 
 
+func _pick_target() -> void:
+	if not dead and has_target and world != null:
+		block_picked.emit(world.get_block_world(target_block))
+
+
 func _break_target() -> void:
-	if not has_target or world == null:
+	if dead or not has_target or world == null:
 		return
-	var removed := world.break_block(target_block)
-	if removed != BlockRegistry.BLOCK_AIR:
-		block_broken.emit(removed)
-		AudioManager.play_block_break(removed, Vector3(target_block) + Vector3(0.5, 0.5, 0.5))
+	_mining = true
+	_mining_position = target_block
+	_mining_id = world.get_block_world(target_block)
+	_mining_tool = selected_block
+	mining_progress = 0.0
+	if game_mode == GameMode.CREATIVE:
+		_tick_mining(0.0)
+
+
+func cancel_mining() -> void:
+	_mining = false
+	mining_progress = 0.0
+	if _effects != null:
+		_effects.hide_cracks()
+
+
+func _tick_mining(delta: float) -> void:
+	if not _mining or dead or world == null:
+		return
+	if not has_target or target_block != _mining_position or selected_block != _mining_tool \
+			or world.get_block_world(target_block) != _mining_id:
+		cancel_mining()
+		return
+	var seconds := BlockRegistry.break_seconds(_mining_id, _mining_tool)
+	if seconds < 0.0 or not is_finite(seconds):
+		cancel_mining()
+		return
+	mining_progress = 1.0 if game_mode == GameMode.CREATIVE else minf(1.0, mining_progress + delta / maxf(0.05, seconds))
+	if _effects != null:
+		_effects.show_cracks(_mining_position, mining_progress)
+	if mining_progress < 1.0:
+		return
+	var position_mined := _mining_position
+	var harvest := BlockRegistry.can_harvest(_mining_id, _mining_tool)
+	cancel_mining()
+	var removed := world.break_block(position_mined)
+	if removed == BlockRegistry.BLOCK_AIR:
+		return
+	if _effects != null:
+		_effects.burst(position_mined)
+	block_broken.emit(removed)
+	mined_block.emit(position_mined, removed, harvest)
+	AudioManager.play_block_break(removed, Vector3(position_mined) + Vector3(0.5, 0.5, 0.5))
 
 
 func _place_target() -> void:
-	if not has_target or world == null:
+	if dead or world == null:
+		return
+	cancel_mining()
+	if has_target and interact_check.is_valid() and interact_check.call(target_block):
+		block_interacted.emit(target_block)
+		return
+	if selected_block == BlockRegistry.BLOCK_AIR:
+		return
+	if ItemRegistry.food_value(selected_block) > 0.0:
+		item_used.emit(selected_block, target_block if has_target else Vector3i.ZERO)
+		return
+	if not has_target:
 		return
 	if can_place_check.is_valid() and not can_place_check.call():
 		status_requested.emit("No %s left" % _selected_name())
@@ -354,10 +564,13 @@ func _place_target() -> void:
 
 
 func _handle_double_tap_jump() -> void:
+	if game_mode != GameMode.CREATIVE or dead:
+		return
 	var now := Time.get_ticks_msec() / 1000.0
 	if now - _last_jump_time <= DOUBLE_TAP_TIME:
 		flying = not flying
 		velocity.y = 0.0
+		_fall_start = NAN
 		_last_jump_time = -10.0
 		status_requested.emit("Flying enabled" if flying else "Flying disabled")
 	else:
@@ -392,9 +605,14 @@ func _create_held_block() -> void:
 
 func _update_held_block() -> void:
 	if _held_block and world:
-		_held_block.visible = not ItemRegistry.is_item(selected_block)
+		_held_block.visible = not third_person and selected_block != BlockRegistry.BLOCK_AIR
 		if ItemRegistry.is_item(selected_block):
-			_held_block.mesh = null
+			var tool_mesh := BoxMesh.new()
+			tool_mesh.size = Vector3(0.18, 1.2, 0.18)
+			_held_block.mesh = tool_mesh
+			var tool_material := StandardMaterial3D.new()
+			tool_material.albedo_color = Color(0.55, 0.36, 0.19)
+			_held_block.material_override = tool_material
 			return
 		_held_block.mesh = world.make_block_mesh(selected_block)
 		_held_block.material_override = world.get_blocks_material()
@@ -410,3 +628,77 @@ func _player_occupies(block_position: Vector3i) -> bool:
 	var block_box := AABB(Vector3(block_position), Vector3.ONE)
 	var player_box := AABB(global_position + Vector3(-0.34, 0.05, -0.34), Vector3(0.68, 1.85, 0.68))
 	return block_box.intersects(player_box)
+
+
+func _head_in_water() -> bool:
+	return head != null and _water_at(head.global_position)
+
+
+func _water_at(at: Vector3) -> bool:
+	if world == null:
+		return false
+	var cell := Vector3i(at.floor())
+	var id := world.get_block_world(cell)
+	var registry := world.get_registry()
+	if registry != null and registry.has_flag(id, BlockRegistry.FLAG_CROSS):
+		id = world.get_block_world(cell + Vector3i.UP)
+	return id == BlockRegistry.BLOCK_WATER or (id >= BlockRegistry.BLOCK_WATER_FLOW_7 and id <= BlockRegistry.BLOCK_WATER_FLOW_1)
+
+
+func _update_survival(delta: float) -> void:
+	if game_mode == GameMode.CREATIVE or dead or world == null or world.get_registry() == null:
+		return
+	var previous := Vector3(health, hunger, air)
+	var moving := Vector2(velocity.x, velocity.z).length() > 0.6
+	var draining := 0.004
+	if moving and not flying:
+		draining = 0.06 if Input.is_action_pressed("sprint") and not crouching else 0.02
+	hunger = maxf(0.0, hunger - delta * draining)
+	var submerged := _head_in_water()
+	air = maxf(0.0, air - delta) if submerged else minf(MAX_AIR, air + delta * 4.0)
+	_survival_clock += delta
+	while _survival_clock >= 1.0 and not dead:
+		_survival_clock -= 1.0
+		var feet_id := world.get_block_world(Vector3i((global_position + Vector3.UP * 0.1).floor()))
+		var ground_cell := Vector3i((global_position - Vector3.UP * 0.1).floor())
+		var ground_id := world.get_block_world(ground_cell)
+		var head_id := world.get_block_world(Vector3i(head.global_position.floor()))
+		if feet_id == BlockRegistry.BLOCK_LAVA or head_id == BlockRegistry.BLOCK_LAVA or ground_id == BlockRegistry.BLOCK_LAVA:
+			take_damage(4.0, "lava")
+		elif feet_id == BlockRegistry.BLOCK_FIRE or head_id == BlockRegistry.BLOCK_FIRE \
+				or world.is_burning_at(ground_cell):
+			take_damage(2.0, "fire")
+		if submerged and air <= 0.0:
+			take_damage(2.0, "drowning")
+		elif world.get_registry().is_opaque(head_id):
+			take_damage(1.0, "suffocation")
+		if hunger <= 0.0:
+			take_damage(1.0, "starvation")
+	if not dead and hunger >= 18.0 and health < MAX_HEALTH:
+		_regen_clock += delta
+		if _regen_clock >= 4.0:
+			_regen_clock = 0.0
+			health = minf(MAX_HEALTH, health + 1.0)
+			hunger = maxf(0.0, hunger - 0.5)
+	else:
+		_regen_clock = 0.0
+	if previous != Vector3(health, hunger, air):
+		vitals_changed.emit()
+
+
+func _has_support(at: Vector3) -> bool:
+	if world == null or not world.is_collision_ready_at(at):
+		return false
+	var query := PhysicsRayQueryParameters3D.create(at + Vector3.UP * 0.1, at - Vector3.UP * 0.65, 1, [get_rid()])
+	return not get_world_3d().direct_space_state.intersect_ray(query).is_empty()
+
+
+func _protect_edge(delta: float) -> void:
+	# Check axes separately, then the diagonal, so sneaking slides along ledges.
+	if not _has_support(global_position + Vector3(velocity.x * delta, 0.0, 0.0)):
+		velocity.x = 0.0
+	if not _has_support(global_position + Vector3(0.0, 0.0, velocity.z * delta)):
+		velocity.z = 0.0
+	if not _has_support(global_position + Vector3(velocity.x * delta, 0.0, velocity.z * delta)):
+		velocity.x = 0.0
+		velocity.z = 0.0

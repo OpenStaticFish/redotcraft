@@ -1216,6 +1216,15 @@ func _data_index(block_position: Vector3i) -> int:
 	return local_x + local_z * VoxelDefs.DATA_STRIDE_Z + block_position.y * VoxelDefs.DATA_STRIDE_Y
 
 
+func is_full_chunk_resident_at(cell: Vector3i) -> bool:
+	var chunk := _loaded_chunk_for(cell)
+	return chunk != null and not chunk.lod
+
+
+func is_burning_at(cell: Vector3i) -> bool:
+	return _burning.has(cell)
+
+
 func get_block_world(block_position: Vector3i) -> int:
 	var chunk := _loaded_chunk_for(block_position)
 	if chunk == null or chunk.lod:

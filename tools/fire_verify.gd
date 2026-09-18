@@ -52,7 +52,7 @@ func _check_ignition_and_spread() -> void:
 	for step in 12:
 		world._fire_tick()
 	# The log catches fire but is never replaced by a fire block.
-	_expect(world._burning.has(fuel_position), "fire did not catch the adjacent log")
+	_expect(world.is_burning_at(fuel_position), "fire did not catch the adjacent log")
 	_expect(world.get_block_world(fuel_position) == BlockRegistry.BLOCK_LOG,
 		"burning log was replaced instead of burning in place")
 	# Burn-out destroys the block and persists the settled air edit.
@@ -60,6 +60,7 @@ func _check_ignition_and_spread() -> void:
 		world._fire_tick()
 	_expect(world.get_block_world(fuel_position) == BlockRegistry.BLOCK_AIR,
 		"burning log never crumbled away")
+	_expect(not world.is_burning_at(fuel_position), "burnt-out log still reports burning")
 	_expect(world._edited_blocks.get(fuel_position, -1) == BlockRegistry.BLOCK_AIR,
 		"burnt log did not persist its settled air edit")
 	world.free()
@@ -126,7 +127,7 @@ func _check_flint_and_steel() -> void:
 	_set_block(world._chunks[Vector2i.ZERO].data, log_position, BlockRegistry.BLOCK_LOG)
 	var lit_log := world.use_flint_and_steel(log_position, Vector3i.UP)
 	_expect(int(lit_log.get("ignited", 0)) == 1, "flint and steel did not ignite a log")
-	_expect(world._burning.has(log_position), "clicked log did not start burning")
+	_expect(world.is_burning_at(log_position), "clicked log did not start burning")
 	_expect(world.get_block_world(log_position) == BlockRegistry.BLOCK_LOG,
 		"clicked log was replaced by a fire block instead of burning in place")
 
@@ -144,7 +145,7 @@ func _check_submerged_and_support() -> void:
 	_set_block(world._chunks[Vector2i.ZERO].data, wet_log + Vector3i.UP, BlockRegistry.BLOCK_WATER)
 	var wet_lit := world.use_flint_and_steel(wet_log, Vector3i.UP)
 	_expect(wet_lit.get("blocked", "") == "wet", "flint and steel lit a submerged log")
-	_expect(not world._burning.has(wet_log), "submerged log started burning")
+	_expect(not world.is_burning_at(wet_log), "submerged log started burning")
 
 	# Water on a lateral face (a log at the waterline) also counts as flooded.
 	var shoreline_log := Vector3i(13, 9, 13)
@@ -152,7 +153,7 @@ func _check_submerged_and_support() -> void:
 	_set_block(world._chunks[Vector2i.ZERO].data, shoreline_log + Vector3i(0, 0, 1), BlockRegistry.BLOCK_WATER)
 	_expect(world.use_flint_and_steel(shoreline_log, Vector3i.UP).get("blocked", "") == "wet",
 		"flint and steel lit a log touching water on the side")
-	_expect(not world._burning.has(shoreline_log), "shoreline log started burning")
+	_expect(not world.is_burning_at(shoreline_log), "shoreline log started burning")
 
 	# Re-clicking a burning block reports already-burning rather than a face hint.
 	var log_position := Vector3i(4, 9, 4)

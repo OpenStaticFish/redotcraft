@@ -26,8 +26,10 @@ catalogs/samplers used by worker jobs. A chunk then runs these ordered stages:
    decorations and v11 region POIs, then applies player edits last.
 6. `VoxelPopulator.populate_lod()` handles distance chunks: it writes compact
 	per-column top/sub/water arrays instead of a full voxel volume and skips
-	caves, ores, and detailed flora. It retains floor patches, low scrub, and real
-	tree crowns using in-field anchors and shared stamp functions; site-validity probes are
+	caves, buried ores, and detailed flora. V14 samples the shared ore stamps only
+	at the compact top/sub cells so exposed stone matches full-detail ore. It retains
+	floor patches, low scrub, and real tree crowns using in-field anchors and shared
+	stamp functions; site-validity probes are
    skipped because they leave the padded field and cost nearly full
    population. `ChunkMesher.build_lod()` consumes those arrays directly, and
    full chunks expand compact neighbors on the worker thread. Keep the compact

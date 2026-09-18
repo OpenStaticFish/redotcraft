@@ -18,6 +18,19 @@ func _initialize() -> void:
 
 func _run() -> void:
 	var game_config: Node = root.get_node("GameConfig")
+	_expect(game_config.get_game_mode() == GameMode.SURVIVAL, "new session must default to Survival")
+	var legacy := {"id": "mode-test", "worldgen": {}}
+	_expect(game_config.activate_world(legacy), "legacy activation rejected")
+	_expect(game_config.get_game_mode() == GameMode.CREATIVE, "legacy activation must be Creative")
+	for invalid in [true, "1", 0.5, 2, null]:
+		_expect(not game_config.activate_world({"id": "bad", "worldgen": {}, "game_mode": invalid}), "invalid activation accepted")
+		_expect(game_config.active_world_id == "mode-test", "invalid activation changed active world")
+	_expect(game_config.activate_world({"id": "survival", "worldgen": {}, "game_mode": 1.0}), "JSON Survival activation rejected")
+	_expect(game_config.get_game_mode() == GameMode.SURVIVAL, "active Survival mode lost")
+	game_config.pending_game_mode = GameMode.CREATIVE
+	game_config.clear_active_world()
+	_expect(game_config.get_game_mode() == GameMode.CREATIVE, "clear reset pending mode")
+	game_config.pending_game_mode = GameMode.SURVIVAL
 	var menu: Node = load("res://ui/main_menu.tscn").instantiate()
 	root.add_child(menu)
 	await process_frame
@@ -32,12 +45,18 @@ func _run() -> void:
 	menu._on_play()
 	await process_frame
 	_expect(play.visible, "Play did not open the worlds hub")
+	_expect(not play._mode_row.visible and not play._mode_hint.visible, "landing shows creation mode controls")
 	_expect(root.gui_get_focus_owner() == play.get_node("Center/Panel/Box/LandingBox/NewWorldButton"),
 		"worlds hub did not focus New World for an empty library")
 	play.get_node("Center/Panel/Box/LandingBox/NewWorldButton").pressed.emit()
 	await process_frame
 	_expect(root.gui_get_focus_owner() == play.get_node("Center/Panel/Box/SeedRow/SeedField"), "world setup did not focus the seed field")
 	_expect(play.get_node("Center/Panel/Box/TypeRow/TypeOption").item_count == 3, "world type list is incomplete")
+	_expect(play.get_selected_game_mode() == GameMode.SURVIVAL, "creation selector must default to Survival")
+	_expect(play._mode_option.item_count == 2 and play._mode_row.visible, "creation mode selector missing")
+	_expect("locked after creation" in play._mode_hint.text, "creation mode lock explanation missing")
+	play._mode_option.select(0)
+	_expect(play.get_selected_game_mode() == GameMode.CREATIVE, "Creative selection not exposed")
 
 	# Advanced -> back restores the play screen.
 	play.advanced_requested.emit()
@@ -46,6 +65,7 @@ func _run() -> void:
 	worldgen.close_panel()
 	await process_frame
 	_expect(play.visible and not worldgen.visible, "closing advanced should return to the play screen")
+	_expect(play.get_selected_game_mode() == GameMode.CREATIVE, "advanced reset selected mode")
 	_expect(root.gui_get_focus_owner() == play.get_node("Center/Panel/Box/Footer/AdvancedButton"), "advanced did not restore focus")
 
 	# Config merge payload keeps every tunable the old combined panel created.
@@ -67,6 +87,19 @@ func _run() -> void:
 	play.get_node("Center/Panel/Box/LandingBox/LoadWorldButton").pressed.emit()
 	await process_frame
 	_expect(play._cards.size() == 3, "load view did not list every saved world")
+	_expect(not play._mode_row.visible and not play._mode_hint.visible, "load view exposes mode editing")
+	var mode_labels := (play._cards["alpha"] as Node).find_children("GameModeLabel", "Label", true, false)
+	_expect(mode_labels.size() == 1 and mode_labels[0].text == "Creative", "saved card mode label missing")
+	var mode_card: Button = play._cards["alpha"]
+	var card_content: MarginContainer = mode_card.get_node("Content")
+	await process_frame
+	_expect(mode_card.size.y >= card_content.get_combined_minimum_size().y,
+		"world card clips mode label or bottom padding")
+	mode_labels[0].add_theme_font_size_override("font_size", 30)
+	for frame in 4:
+		await process_frame
+	_expect(mode_card.size.y >= card_content.get_combined_minimum_size().y,
+		"world card does not grow with mode label text size")
 	var future_card: Button = play._cards.get("future")
 	_expect(future_card != null and not future_card.disabled,
 		"incompatible world cannot be selected for deletion")

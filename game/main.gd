@@ -7,7 +7,6 @@ const WorldgenOverlayScene := preload("res://ui/worldgen_overlay.tscn")
 const MinimapScene := preload("res://ui/minimap.tscn")
 const MapOverlayScene := preload("res://ui/map_overlay.tscn")
 
-const HOTBAR: Array[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 27, BlockRegistry.BLOCK_TNT, BlockRegistry.BLOCK_NUKE, ItemRegistry.ITEM_FLINT_AND_STEEL]
 const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32, 27: 32, BlockRegistry.BLOCK_TNT: 16, BlockRegistry.BLOCK_NUKE: 4, ItemRegistry.ITEM_FLINT_AND_STEEL: 1}
 const STATS_INTERVAL := 0.25
 const NEAR_SHADOW_DISTANCE := 6.0
@@ -22,7 +21,7 @@ const UNDERWATER_DEEP_COLOR := Color(0.02, 0.08, 0.16)
 const CAVE_FADE_SECONDS := 0.65
 const DYNAMIC_RESOLUTION_INTERVAL := 0.5
 const DYNAMIC_RESOLUTION_SMOOTHING := 0.2
-const SESSION_STATE_VERSION := 1
+const SESSION_STATE_VERSION := 2
 const AUTOSAVE_RETRY_SECONDS := 30.0
 
 @onready var world: VoxelWorld = $World
@@ -45,7 +44,12 @@ var slot_key_labels: Array[Label] = []
 var slot_count_labels: Array[Label] = []
 var selected_slot := 0
 var status_time := 6.0
-var inventory: Dictionary = INITIAL_INVENTORY.duplicate()
+var inventory := ItemInventory.new()
+var containers := BlockContainers.new()
+var _drops: ItemDrops
+var _survival_ui: SurvivalUI
+var _inventory_overflow: Dictionary = {}
+var _container_check_time := 0.0
 var _pause_menu: PauseMenu
 var _stats_time := 0.0
 var _underwater_amount := 0.0
@@ -72,10 +76,12 @@ var _dynamic_resolution_active := false
 var _world_storage: WorldStorage
 var _autosave_time := 0.0
 var _storage_warning_shown := false
+var _game_mode: int = GameMode.SURVIVAL
 
 
 func _ready() -> void:
 	var saved_state := _prepare_world_storage()
+	player.game_mode = _game_mode
 	UITheme.apply(_hud_root)
 	_style_hud()
 	_apply_config()
@@ -84,6 +90,11 @@ func _ready() -> void:
 	GameConfig.interface_scale_changed.connect(_apply_hud_text_layout)
 	_build_crosshair()
 	_build_pause_menu()
+	_survival_ui = SurvivalUI.new()
+	add_child(_survival_ui)
+	_survival_ui.setup(_hud_root, player)
+	_survival_ui.respawn_requested.connect(_on_respawn)
+	_survival_ui.menu_requested.connect(_on_new_world)
 	_connect_player()
 	_inventory_overlay.opened.connect(_on_inventory_opened)
 	_inventory_overlay.closed.connect(_on_inventory_closed)
@@ -127,7 +138,17 @@ func _ready() -> void:
 	_weather.ambience_changed.connect(_on_weather_ambience)
 	_inventory_overlay.weather_toggled.connect(_on_weather_toggled)
 	_restore_session_state(saved_state)
-	player.set_selected_block(HOTBAR[selected_slot])
+	_drops = ItemDrops.new()
+	add_child(_drops)
+	_drops.setup(world, player, inventory)
+	if saved_state.get("drops") is Array:
+		_drops.restore(saved_state.drops)
+	for item_id in _inventory_overflow:
+		_drops.spawn_drop(player.global_position, {"id": int(item_id), "count": int(_inventory_overflow[item_id]), "durability": ItemRegistry.max_durability(int(item_id))})
+	_inventory_overflow.clear()
+	inventory.changed.connect(_update_inventory_display)
+	_inventory_overlay.configure_inventory(inventory, world)
+	_inventory_overlay.set_game_mode(_game_mode)
 	_update_inventory_display()
 	_show_control_hint()
 	var shadow_capture := ShadowCaptureScript.new()
@@ -142,6 +163,8 @@ func _ready() -> void:
 	_photo_mode.status_requested.connect(set_status)
 	_photo_mode.camera_mode_changed.connect(_on_photo_camera_changed)
 	add_child(_photo_mode)
+	if player.dead:
+		_on_player_died("Saved expedition")
 
 
 func _get_shadow_capture_state() -> Dictionary:
@@ -230,6 +253,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _process(delta: float) -> void:
 	if not get_tree().paused:
+		containers.tick(delta)
+		_container_check_time -= delta
+		if _container_check_time <= 0.0:
+			_container_check_time = 0.5
+			_check_removed_containers()
 		_autosave_time += delta
 		var autosave_interval := GameConfig.get_autosave_interval()
 		if autosave_interval > 0.0 and _autosave_time >= autosave_interval:
@@ -333,18 +361,20 @@ func _apply_config() -> void:
 
 
 func _prepare_world_storage() -> Dictionary:
+	_game_mode = GameConfig.get_game_mode()
 	_world_storage = WorldStorage.new()
 	var metadata: Dictionary = {}
 	if GameConfig.has_active_world():
 		metadata = _world_storage.open_world(GameConfig.active_world_id)
 	if metadata.is_empty():
-		metadata = _world_storage.create_world(GameConfig.world)
+		metadata = _world_storage.create_world(GameConfig.world, {}, "", true, _game_mode)
 	if metadata.is_empty():
 		push_warning("World storage is unavailable; continuing without persistence")
 		_world_storage = null
 		GameConfig.clear_active_world()
 		return {}
 	GameConfig.activate_world(metadata)
+	_game_mode = GameConfig.get_game_mode()
 	return _migrate_session_state(metadata.get("state", {}))
 
 
@@ -356,26 +386,31 @@ func _migrate_session_state(value: Variant) -> Dictionary:
 	if version > SESSION_STATE_VERSION:
 		push_warning("Save uses unsupported session state version %d" % version)
 		return {}
-	# Version 0 saves used the same fields but did not carry an explicit tag.
-	state["state_version"] = SESSION_STATE_VERSION
+	# Keep the source version until inventory restoration has migrated its rows.
 	return state
 
 
 func _restore_session_state(state: Dictionary) -> void:
+	_inventory_overflow.clear()
 	if state.is_empty():
+		_inventory_overflow = inventory.migrate_counts(INITIAL_INVENTORY if _game_mode == GameMode.CREATIVE else {})
 		return
 	var saved_inventory: Variant = state.get("inventory", null)
-	if state.has("inventory") and typeof(saved_inventory) == TYPE_ARRAY:
-		var restored_inventory: Dictionary = {}
-		for entry in saved_inventory:
-			if typeof(entry) != TYPE_ARRAY or entry.size() != 2:
-				continue
-			var item_id := int(entry[0])
-			var count := clampi(int(entry[1]), 0, 9999)
-			if item_id > 0:
-				restored_inventory[item_id] = count
-		inventory = restored_inventory
-	selected_slot = clampi(int(state.get("selected_slot", 0)), 0, HOTBAR.size() - 1)
+	if saved_inventory is Array:
+		if int(state.get("state_version", 0)) >= 2:
+			inventory.restore(saved_inventory)
+		else:
+			var counts := {}
+			for entry in saved_inventory:
+				if entry is Array and entry.size() == 2:
+					var item_id := int(entry[0])
+					counts[item_id] = int(counts.get(item_id, 0)) + maxi(int(entry[1]), 0)
+			_inventory_overflow = inventory.migrate_counts(counts)
+	else:
+		_inventory_overflow = inventory.migrate_counts(INITIAL_INVENTORY if _game_mode == GameMode.CREATIVE else {})
+	if state.get("containers") is Dictionary:
+		containers.restore(state.containers)
+	selected_slot = clampi(int(state.get("selected_slot", 0)), 0, ItemInventory.HOTBAR_SIZE - 1)
 	var day_state: Variant = state.get("day_night", {})
 	if typeof(day_state) == TYPE_DICTIONARY:
 		_day_night.restore_persistent_state(day_state)
@@ -387,17 +422,13 @@ func _restore_session_state(state: Dictionary) -> void:
 
 
 func _build_persistent_state() -> Dictionary:
-	var inventory_rows: Array = []
-	var item_ids: Array[int] = []
-	for key in inventory:
-		item_ids.append(int(key))
-	item_ids.sort()
-	for item_id in item_ids:
-		inventory_rows.append([item_id, int(inventory[item_id])])
+	_check_removed_containers()
 	return {
 		"state_version": SESSION_STATE_VERSION,
 		"player": player.persistent_state(),
-		"inventory": inventory_rows,
+		"inventory": inventory.persistent_state(),
+		"containers": containers.persistent_state(),
+		"drops": _drops.persistent_state() if is_instance_valid(_drops) else [],
 		"selected_slot": selected_slot,
 		"day_night": _day_night.persistent_state(),
 		"weather": _weather.persistent_state(),
@@ -482,7 +513,10 @@ func _apply_graphics() -> void:
 
 
 func _connect_player() -> void:
-	player.block_broken.connect(_on_block_broken)
+	player.mined_block.connect(_on_mined_block)
+	player.block_picked.connect(_on_block_picked)
+	player.block_interacted.connect(_on_block_interacted)
+	player.died.connect(_on_player_died)
 	player.block_placed.connect(_on_block_placed)
 	player.item_used.connect(_on_item_used)
 	player.status_requested.connect(set_status)
@@ -490,6 +524,8 @@ func _connect_player() -> void:
 	player.slot_selected.connect(select_slot)
 	player.pause_requested.connect(activate_pause)
 	player.can_place_check = can_place_selected
+	player.interact_check = func(position: Vector3i) -> bool:
+		return world.get_block_world(position) in [BlockRegistry.BLOCK_CRAFTING_TABLE, BlockRegistry.BLOCK_CHEST, BlockRegistry.BLOCK_FURNACE]
 
 
 func _build_pause_menu() -> void:
@@ -605,7 +641,7 @@ func _build_crosshair() -> void:
 
 
 func _build_hotbar() -> void:
-	var slot_count := HOTBAR.size()
+	var slot_count := ItemInventory.HOTBAR_SIZE
 	var available_width := get_viewport().get_visible_rect().size.x - 24.0
 	_hotbar_slot_size = minf(SLOT_WIDTH, floorf(
 		(available_width - SLOT_MARGIN * 2.0 - (slot_count - 1) * SLOT_GAP) / slot_count))
@@ -709,6 +745,8 @@ func _update_slot_styles() -> void:
 
 
 func activate_pause() -> void:
+	if player.dead:
+		return
 	if _map_overlay != null and _map_overlay.visible:
 		_map_overlay.close()
 		return
@@ -717,25 +755,36 @@ func activate_pause() -> void:
 
 
 func _on_inventory_opened() -> void:
+	if player.dead or _pause_menu.visible or (_photo_mode != null and _photo_mode.is_camera_active()):
+		_inventory_overlay.close_panel()
+		return
+	player.cancel_mining()
 	if _map_overlay != null and _map_overlay.visible:
 		_map_overlay.close()
-	_inventory_overlay.show_inventory(inventory, world)
 	_inventory_overlay.set_weather_state(_weather.is_raining())
 	get_tree().paused = true
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 
 
 func _on_inventory_closed() -> void:
+	if player.dead or _pause_menu.visible:
+		get_tree().paused = true
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		return
 	get_tree().paused = false
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
 
 func _on_inventory_time_selected(hours: float) -> void:
+	if _game_mode != GameMode.CREATIVE:
+		return
 	_day_night.set_time(hours)
 	set_status("Time set to %s" % _day_night.get_clock_text())
 
 
 func _on_weather_toggled() -> void:
+	if _game_mode != GameMode.CREATIVE:
+		return
 	_weather.toggle()
 	_inventory_overlay.set_weather_state(_weather.is_raining())
 
@@ -833,11 +882,17 @@ func _on_quit_game() -> void:
 
 
 func _on_slot_cycled(direction: int) -> void:
-	select_slot(wrapi(selected_slot + direction, 0, HOTBAR.size()))
+	select_slot(wrapi(selected_slot + direction, 0, ItemInventory.HOTBAR_SIZE))
 
 
-func _on_block_broken(block_id: int) -> void:
-	collect_block(block_id)
+func _on_mined_block(position: Vector3i, block_id: int, harvest: bool) -> void:
+	if _game_mode == GameMode.SURVIVAL:
+		inventory.wear_tool(selected_slot)
+	_drop_container_contents(position)
+	if harvest and _game_mode == GameMode.SURVIVAL:
+		var drop := ItemRegistry.harvest_drop(block_id)
+		if not drop.is_empty():
+			_drops.spawn_drop(Vector3(position) + Vector3.ONE * 0.5, drop)
 	set_status("Mined %s" % world.get_block_name(block_id))
 
 
@@ -846,7 +901,88 @@ func _on_block_placed(block_id: int) -> void:
 	set_status("Placed %s" % world.get_block_name(block_id))
 
 
+func _on_block_picked(block_id: int) -> void:
+	if not ItemRegistry.is_valid(block_id):
+		return
+	if _game_mode == GameMode.CREATIVE:
+		inventory.slots[selected_slot] = {"id": block_id, "count": ItemRegistry.stack_limit(block_id),
+			"durability": ItemRegistry.max_durability(block_id)}
+		inventory.changed.emit()
+		_update_inventory_display()
+		return
+	for index in inventory.slots.size():
+		if int(inventory.slots[index].get("id", 0)) != block_id:
+			continue
+		if index < ItemInventory.HOTBAR_SIZE:
+			select_slot(index)
+		else:
+			inventory.move_stack(index, selected_slot)
+		return
+	set_status("You do not own %s" % _item_name(block_id))
+
+
+func _on_block_interacted(position: Vector3i) -> void:
+	if not player.dead:
+		_inventory_overlay.open_station(position, world.get_block_world(position), containers)
+
+
+func _drop_container_contents(position: Vector3i) -> void:
+	if _game_mode == GameMode.CREATIVE:
+		containers.remove(position)
+		return
+	if not is_instance_valid(_drops):
+		return
+	for stack in containers.remove(position):
+		if not stack.is_empty():
+			_drops.spawn_drop(Vector3(position) + Vector3.ONE * 0.5, stack)
+
+
+func _check_removed_containers() -> void:
+	if world == null or not is_instance_valid(_drops):
+		return
+	for position: Vector3i in containers.containers.keys():
+		# get_block_world returns air for unloaded/LOD chunks, not actual absence.
+		if not world.is_full_chunk_resident_at(position):
+			continue
+		if world.get_block_world(position) != int(containers.containers[position].block_id):
+			_drop_container_contents(position)
+
+
+func _on_player_died(cause: String) -> void:
+	if _photo_mode != null and _photo_mode.is_camera_active():
+		_photo_mode.set_free_camera(false)
+	if _inventory_overlay.visible:
+		_inventory_overlay.close_panel()
+	if _map_overlay != null and _map_overlay.visible:
+		_map_overlay.close()
+	if _pause_menu.visible:
+		_pause_menu.close_menu()
+	_survival_ui.show_death(cause)
+	get_tree().paused = true
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+
+
+func _on_respawn() -> void:
+	player.respawn()
+	_survival_ui.hide_death()
+	get_tree().paused = false
+	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	_update_inventory_display()
+	_flush_world_save()
+
+
 func _on_item_used(item_id: int, block_position: Vector3i) -> void:
+	if player.dead or not can_place_selected() or int(inventory.slots[selected_slot].get("id", 0)) != item_id:
+		return
+	var food := ItemRegistry.food_value(item_id)
+	if food > 0.0:
+		if player.eat(food):
+			inventory.remove_at(selected_slot)
+			if item_id == ItemRegistry.ITEM_MUSHROOM_STEW:
+				var overflow := inventory.add_item(ItemRegistry.ITEM_BOWL)
+				if overflow > 0:
+					_drops.spawn_drop(player.global_position, {"id": ItemRegistry.ITEM_BOWL, "count": overflow})
+		return
 	if item_id != ItemRegistry.ITEM_FLINT_AND_STEEL:
 		return
 	var result := world.use_flint_and_steel(block_position, player.target_normal)
@@ -856,6 +992,9 @@ func _on_item_used(item_id: int, block_position: Vector3i) -> void:
 	if result.has("blocked"):
 		set_status("Too wet to light" if result["blocked"] == "wet" else "Already burning")
 		return
+	if _game_mode == GameMode.SURVIVAL:
+		inventory.wear_tool(selected_slot)
+	_check_removed_containers()
 	if int(result.get("ignited", 0)) > 0:
 		AudioManager.play_block_place(BlockRegistry.BLOCK_FIRE, Vector3(block_position) + Vector3(0.5, 0.5, 0.5))
 		set_status("Lit fire")
@@ -865,49 +1004,49 @@ func _on_item_used(item_id: int, block_position: Vector3i) -> void:
 
 
 func select_slot(index: int) -> void:
-	selected_slot = clampi(index, 0, HOTBAR.size() - 1)
+	if selected_slot != clampi(index, 0, ItemInventory.HOTBAR_SIZE - 1) and player != null:
+		player.cancel_mining()
+	selected_slot = clampi(index, 0, ItemInventory.HOTBAR_SIZE - 1)
 	_update_slot_styles()
-	Motion.pulse(slot_panels[selected_slot])
-	if player:
-		player.set_selected_block(HOTBAR[selected_slot])
-	if _selection_chip != null and world != null:
-		_selection_chip.text = "%s · ×%d" % [
-			_item_name(HOTBAR[selected_slot]).to_lower(),
-			inventory.get(HOTBAR[selected_slot], 0)]
-	set_status("Selected %s (%d)" % [_item_name(HOTBAR[selected_slot]), inventory.get(HOTBAR[selected_slot], 0)])
+	if selected_slot < slot_panels.size():
+		Motion.pulse(slot_panels[selected_slot])
+	_update_inventory_display()
 
 
 func can_place_selected() -> bool:
-	return inventory.get(HOTBAR[selected_slot], 0) > 0
-
-
-func collect_block(block_id: int) -> void:
-	inventory[block_id] = inventory.get(block_id, 0) + 1
-	_update_inventory_display()
+	return int(inventory.slots[selected_slot].get("count", 0)) > 0
 
 
 func consume_selected_block() -> void:
-	var block_id: int = HOTBAR[selected_slot]
-	inventory[block_id] = maxi(inventory.get(block_id, 0) - 1, 0)
-	_update_inventory_display()
+	if _game_mode == GameMode.SURVIVAL:
+		inventory.remove_at(selected_slot)
 
 
 func _update_inventory_display() -> void:
 	var registry := world.get_registry()
 	for index in slot_icons.size():
-		var item_id: int = HOTBAR[index]
-		if ItemRegistry.is_item(item_id):
+		var stack := inventory.slots[index]
+		var item_id := int(stack.get("id", 0))
+		if item_id == 0:
+			slot_icons[index].texture = null
+		elif ItemRegistry.is_item(item_id):
 			slot_icons[index].texture = ItemRegistry.make_icon(item_id, int(_hotbar_icon_size))
 		elif registry != null:
 			slot_icons[index].texture = BlockIcon.make_icon(registry, item_id, int(_hotbar_icon_size))
-		slot_count_labels[index].text = "×%d" % inventory.get(item_id, 0)
+		slot_count_labels[index].text = str(stack.get("count", ""))
+		if ItemRegistry.max_durability(item_id) > 0:
+			slot_count_labels[index].text = "%d/%d" % [int(stack.get("durability", 0)), ItemRegistry.max_durability(item_id)]
+	var selected := inventory.slots[selected_slot]
+	var selected_id := int(selected.get("id", 0))
+	player.set_selected_block(selected_id)
 	if _selection_chip != null:
 		_selection_chip.text = "%s · ×%d" % [
-			_item_name(HOTBAR[selected_slot]).to_lower(),
-			inventory.get(HOTBAR[selected_slot], 0)]
+			_item_name(selected_id).to_lower(), selected.get("count", 0)]
 
 
 func _item_name(item_id: int) -> String:
+	if item_id == 0:
+		return "Empty hand"
 	if ItemRegistry.is_item(item_id):
 		return ItemRegistry.get_item_name(item_id)
 	return world.get_block_name(item_id)
@@ -922,9 +1061,10 @@ func set_status(message: String) -> void:
 ## Startup/rebind toast for the core controls; called again when the pause
 ## menu's Settings close so a mid-game remap is reflected.
 func _show_control_hint() -> void:
-	set_status("%s move   double-tap %s to fly   %s inventory   %s map   %s minimap   ESC pause" % [
+	var jump_hint := "double-tap %s to fly" if _game_mode == GameMode.CREATIVE else "%s jump"
+	set_status("%s move   %s   %s inventory   %s map   %s minimap   ESC pause" % [
 		GameConfig.input_move_hint(),
-		GameConfig.input_key("jump"),
+		jump_hint % GameConfig.input_key("jump"),
 		GameConfig.input_key("inventory"),
 		GameConfig.input_key("map_overlay"),
 		GameConfig.input_key("minimap"),

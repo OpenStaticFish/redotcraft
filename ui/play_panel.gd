@@ -84,15 +84,22 @@ var _rename_cancel_button: Button
 var _rename_confirm_button: Button
 var _operation_status: Label
 var _editing_rename := false
+var _mode_row: HBoxContainer
+var _mode_option: OptionButton
+var _mode_hint: Label
 
 
 func _ready() -> void:
 	UITheme.apply(self)
+	_build_mode_controls()
 	_build_management_controls()
 	_style_static()
 	_load_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	for type_name in WORLD_TYPES:
 		_type_option.add_item(type_name)
+	_type_option.item_selected.connect(_update_creation_description)
+	_mode_option.item_selected.connect(_update_creation_description)
+	_update_creation_description()
 	_random_button.pressed.connect(func() -> void:
 		_seed_field.text = str(randi() % 1000000000)
 	)
@@ -189,6 +196,8 @@ func _show_view(view: int) -> void:
 	_view = view
 	_landing_box.visible = view == View.LANDING
 	_type_row.visible = view == View.CREATE
+	_mode_row.visible = view == View.CREATE
+	_mode_hint.visible = view == View.CREATE
 	_seed_row.visible = view == View.CREATE
 	_footer.visible = view == View.CREATE
 	_load_box.visible = view == View.LOAD
@@ -206,6 +215,7 @@ func _show_view(view: int) -> void:
 			_heading.text = "New World"
 			_seed_field.text = str(GameConfig.get_world_seed())
 			_type_option.selected = clampi(GameConfig.get_world_type(), 0, WORLD_TYPES.size() - 1)
+			_update_creation_description()
 			_seed_field.grab_focus()
 		View.LOAD:
 			_heading.text = "Load World"
@@ -308,7 +318,7 @@ func _build_card(world: Dictionary) -> Button:
 	card.toggle_mode = false
 	card.focus_mode = Control.FOCUS_ALL
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.custom_minimum_size = Vector2(0.0, 62.0)
+	card.custom_minimum_size = Vector2(0.0, 82.0)
 	card.set_meta("world_id", id)
 	card.set_meta("compatible", compatible)
 	if compatible:
@@ -360,6 +370,13 @@ func _build_card(world: Dictionary) -> Button:
 	UITheme.apply_font_size(meta, 13)
 	meta.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	details.add_child(meta)
+	var mode_label := Label.new()
+	mode_label.name = "GameModeLabel"
+	mode_label.text = GameMode.display_name(int(world.get("game_mode", GameMode.CREATIVE)))
+	mode_label.add_theme_color_override("font_color", UITheme.MUTED)
+	UITheme.apply_font_size(mode_label, 13)
+	mode_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	details.add_child(mode_label)
 
 	var stats := VBoxContainer.new()
 	stats.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -392,6 +409,10 @@ func _build_card(world: Dictionary) -> Button:
 		stat_value.text = "INCOMPATIBLE"
 
 	_style_card(card, false)
+	# Button children do not contribute to its minimum size automatically.
+	margin.minimum_size_changed.connect(func() -> void:
+		card.custom_minimum_size.y = maxf(82.0, margin.get_combined_minimum_size().y))
+	card.custom_minimum_size.y = maxf(82.0, margin.get_combined_minimum_size().y)
 	card.pressed.connect(_on_card_activated.bind(id))
 	card.gui_input.connect(_on_card_gui_input.bind(id))
 	return card
@@ -609,6 +630,44 @@ func _backup_selected() -> void:
 
 
 # ------------------------------------------------------------- create view --
+
+func get_selected_game_mode() -> int:
+	return _mode_option.get_selected_id()
+
+
+func _build_mode_controls() -> void:
+	var box := _type_row.get_parent()
+	_mode_row = HBoxContainer.new()
+	_mode_row.name = "GameModeRow"
+	_mode_row.visible = false
+	var label := Label.new()
+	_style_row_label(label, "Game Mode")
+	_mode_row.add_child(label)
+	_mode_option = OptionButton.new()
+	_mode_option.name = "GameModeOption"
+	_mode_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for mode in [GameMode.CREATIVE, GameMode.SURVIVAL]:
+		_mode_option.add_item(GameMode.display_name(mode), mode)
+	_mode_option.select(_mode_option.get_item_index(GameMode.SURVIVAL))
+	_mode_row.add_child(_mode_option)
+	box.add_child(_mode_row)
+	box.move_child(_mode_row, _type_row.get_index())
+	_mode_hint = Label.new()
+	_mode_hint.name = "GameModeHint"
+	_mode_hint.visible = false
+	_mode_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_mode_hint.add_theme_color_override("font_color", UITheme.MUTED)
+	UITheme.apply_font_size(_mode_hint, 13)
+	box.add_child(_mode_hint)
+	box.move_child(_mode_hint, _mode_row.get_index() + 1)
+
+
+func _update_creation_description(_index: int = -1) -> void:
+	_mode_hint.text = "Creative: build freely. Survival: gather and survive.\nGame mode is locked after creation."
+	if _type_option.selected == WorldGenConfig.WORLD_TYPE_FLAT \
+			and get_selected_game_mode() == GameMode.SURVIVAL:
+		_mode_hint.text += "\nWarning: Flat Survival is resource-limited. Flat terrain generates no trees or ores."
+
 
 func _on_import() -> void:
 	var text := DisplayServer.clipboard_get().strip_edges()
