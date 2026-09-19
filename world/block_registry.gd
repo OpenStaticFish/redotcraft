@@ -508,6 +508,13 @@ func is_flammable(block_id: int) -> bool:
 	return has_flag(block_id, FLAG_FLAMMABLE)
 
 
+## Blocks whose settled position is resolved by VoxelWorld's persisted gravity
+## simulation. Red sand shares sand's material behavior without consuming a
+## format flag bit (block IDs and flags are persisted in compact bytes).
+func is_gravity_block(block_id: int) -> bool:
+	return block_id == BLOCK_SAND or block_id == BLOCK_RED_SAND or block_id == BLOCK_GRAVEL
+
+
 func is_water_id(block_id: int) -> bool:
 	return block_id == BLOCK_WATER or (block_id >= BLOCK_WATER_FLOW_7 and block_id <= BLOCK_WATER_FLOW_1)
 

@@ -24,6 +24,7 @@ const EXTREME_WARNING := "Warning: extreme render distance can take minutes to l
 
 var _first_focus: Control
 var _scroll: ScrollContainer
+var _distance_timer: Timer
 
 
 func _ready() -> void:
@@ -65,6 +66,9 @@ func _resize_to_viewport() -> void:
 func close_panel() -> void:
 	if not visible:
 		return
+	if _distance_timer != null and not _distance_timer.is_stopped():
+		_distance_timer.stop()
+		setting_changed.emit("render_distance", GameConfig.get_setting("render_distance"))
 	visible = false
 	closed.emit()
 
@@ -103,7 +107,10 @@ func _category_definition() -> Dictionary:
 				"title": "Gameplay",
 				"advanced": false,
 				"rows": [
-					{"type": "slider", "label": "Mouse Sensitivity", "key": "mouse_sensitivity", "min": 0.0005, "max": 0.005, "step": 0.0001, "format": "%.2fx", "scale": 1000.0},
+					{"type": "slider", "label": "Horizontal Sensitivity", "key": "mouse_sensitivity_x", "min": GameConfig.MOUSE_SENSITIVITY_MIN, "max": GameConfig.MOUSE_SENSITIVITY_MAX, "step": 0.0001, "format": "%.2fx", "scale": 1000.0, "tooltip": "Mouse look speed when turning left or right."},
+					{"type": "slider", "label": "Vertical Sensitivity", "key": "mouse_sensitivity_y", "min": GameConfig.MOUSE_SENSITIVITY_MIN, "max": GameConfig.MOUSE_SENSITIVITY_MAX, "step": 0.0001, "format": "%.2fx", "scale": 1000.0, "tooltip": "Mouse look speed when looking up or down."},
+					{"type": "check", "label": "Invert Y Axis", "key": "invert_y", "tooltip": "Reverse vertical mouse look for gameplay and the photo camera."},
+					{"type": "check", "label": "Reduced Motion", "key": "reduced_motion", "tooltip": "Show menu, HUD, and modal changes instantly instead of playing motion effects."},
 					{"type": "option", "label": "Autosave", "key": "autosave_interval", "options": GameConfig.AUTOSAVE_INTERVAL_NAMES, "values": GameConfig.AUTOSAVE_INTERVAL_VALUES, "tooltip": "How often active gameplay is saved. Worlds are always saved when leaving or quitting."},
 				],
 			}
@@ -114,6 +121,7 @@ func _category_definition() -> Dictionary:
 				"rows": [
 					{"type": "render_distance", "label": "Render Distance", "key": "render_distance", "min": 4.0, "max": RENDER_DISTANCE_MAX, "step": 1.0, "format": "%d chunks"},
 					{"type": "option", "label": "Terrain Detail", "key": "lod_mode", "options": GameConfig.LOD_MODE_NAMES, "tooltip": "Full Detail generates real chunks through the selected distance. Balanced uses compact terrain beyond 8 chunks."},
+					{"type": "check", "label": "Experimental LOD Batching", "key": "lod_batching", "tooltip": "Balanced LOD only: merges eligible 2x2 opaque distance meshes to reduce draw calls. Water and Full Detail are unchanged. Disable it if profiling or play feels slower on this GPU."},
 					{"type": "slider", "label": "Field of View", "key": "fov", "min": 60.0, "max": 100.0, "step": 1.0, "format": "%d"},
 					{"type": "check", "label": "Fullscreen", "key": "fullscreen", "window": true},
 					{"type": "option", "label": "UI Scale", "key": "ui_scale", "options": GameConfig.UI_SCALE_NAMES, "values": GameConfig.UI_SCALE_VALUES, "tooltip": "Scales the HUD and menus without changing the 3D render resolution."},
@@ -305,10 +313,17 @@ func _add_render_distance(entry: Dictionary) -> Control:
 	_rows_box.add_child(warning)
 	if _first_focus == null:
 		_first_focus = slider
+	_distance_timer = Timer.new()
+	_distance_timer.one_shot = true
+	_distance_timer.wait_time = 0.2
+	add_child(_distance_timer)
+	_distance_timer.timeout.connect(func() -> void:
+		setting_changed.emit(key, GameConfig.get_setting(key))
+	)
 	slider.value_changed.connect(func(value: float) -> void:
 		value_label.text = entry["format"] % roundi(value)
 		GameConfig.set_setting(key, value)
-		setting_changed.emit(key, value)
+		_distance_timer.start()
 	)
 	toggle.toggled.connect(func(pressed: bool) -> void:
 		GameConfig.set_setting("extreme_render_distance", pressed)

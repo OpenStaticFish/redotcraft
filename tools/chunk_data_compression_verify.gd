@@ -100,6 +100,9 @@ func _verify_neighbor_snapshot(world: VoxelWorld, remote_pos: Vector2i, data: Pa
 func _verify_approach_and_edit(world: VoxelWorld, remote_pos: Vector2i) -> void:
 	var remote: VoxelWorld.Chunk = world._chunks[remote_pos]
 	world._stream_center = remote_pos
+	# Collision restoration only services the authoritative desired set. This
+	# focused fixture builds chunks directly instead of calling setup_player().
+	world._desired[remote_pos] = true
 	world._ensure_near_collision()
 	_expect(not remote.data.is_empty() and remote.compressed_data.is_empty(),
 		"approaching a collision chunk did not restore mutable data")

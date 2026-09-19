@@ -16,6 +16,9 @@ const VoxelDefsScript = preload("res://world/voxel_defs.gd")
 const SURFACE_CLEARANCE: int = 3
 const FEATURE_CELL_SIZE: int = 8
 const FEATURE_HALO: int = 6
+# All current stamps, including legacy fallen logs and asymmetric acacia,
+# remain within three blocks of their anchor. Keep the wider owner enumeration.
+const FEATURE_FOOTPRINT_RADIUS: int = 3
 # Grove candidates are six blocks apart and have a maximum horizontal tree
 # footprint of three blocks (jungle/spruce). The three-block halo makes every
 # touched chunk evaluate the same global candidate; FEATURE_HALO remains the
@@ -366,6 +369,9 @@ func _accepted_region_structures(field: ChunkTerrainData, origin_x: int, origin_
 			var candidate: StructureCatalog.Candidate = StructureCatalogScript.candidate_for(config.seed, owner_x, owner_z)
 			if candidate == null:
 				continue
+			if not _footprint_intersects_chunk(candidate.anchor.x, candidate.anchor.y,
+					StructureCatalogScript.HORIZONTAL_HALO, origin_x, origin_z):
+				continue
 			var ground := _cached_decoration_ground(field, candidate.anchor.x, candidate.anchor.y, ground_scratch)
 			if _region_structure_site_is_valid(field, ground_scratch, candidate, ground.x):
 				accepted.append([candidate, ground.x])
@@ -524,6 +530,13 @@ func _badlands_stratum(world_x: int, y: int, world_z: int) -> int:
 func _carve_noise_caves(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, origin_z: int) -> void:
 	var tunnel_width := clampf(0.055 + 0.035 * config.cave_density, 0.04, 0.16)
 	var chamber_threshold := clampf(0.62 - 0.07 * config.cave_density, 0.44, 0.62)
+	var tunnel_limits := PackedFloat64Array()
+	var chamber_limits := PackedFloat64Array()
+	tunnel_limits.resize(VoxelDefsScript.SEA_LEVEL + 53)
+	chamber_limits.resize(VoxelDefsScript.SEA_LEVEL + 53)
+	for y in range(4, tunnel_limits.size()):
+		tunnel_limits[y] = tunnel_width * clampf(float(VoxelDefsScript.SEA_LEVEL + 52 - y) / 24.0, 0.35, 1.0)
+		chamber_limits[y] = chamber_threshold + clampf(float(y - 12) / 72.0, 0.0, 1.0) * 0.10
 	for local_z in VoxelDefsScript.CHUNK_SIZE:
 		var world_z := origin_z + local_z
 		for local_x in VoxelDefsScript.CHUNK_SIZE:
@@ -540,13 +553,12 @@ func _carve_noise_caves(data: PackedByteArray, field: ChunkTerrainData, origin_x
 				var voxel_index := _index(local_x, y, local_z)
 				if not _is_carvable_stone(data[voxel_index]):
 					continue
-				var high_taper := clampf(float(VoxelDefsScript.SEA_LEVEL + 52 - y) / 24.0, 0.35, 1.0)
 				var ridge_a := absf(_cave_spaghetti_a.get_noise_3d(world_x, y, world_z))
-				var ridge_b := absf(_cave_spaghetti_b.get_noise_3d(world_x, y, world_z))
-				var spaghetti := maxf(ridge_a, ridge_b) < tunnel_width * high_taper
-				var depth_bias := clampf(float(y - 12) / 72.0, 0.0, 1.0) * 0.10
-				var cheese := _cave_cheese.get_noise_3d(world_x, y, world_z) > chamber_threshold + depth_bias
-				if spaghetti or cheese:
+				# Noise is immutable: skip the second ridge when the first already
+				# rejects the tunnel, and skip cheese when a tunnel already carves.
+				var spaghetti := ridge_a < tunnel_limits[y] \
+					and absf(_cave_spaghetti_b.get_noise_3d(world_x, y, world_z)) < tunnel_limits[y]
+				if spaghetti or _cave_cheese.get_noise_3d(world_x, y, world_z) > chamber_limits[y]:
 					data[voxel_index] = BlockRegistryScript.BLOCK_AIR
 
 
@@ -1125,6 +1137,8 @@ func _decorate(data: PackedByteArray, field: ChunkTerrainData, origin_x: int, or
 			var hash_value: int = WorldGenHashScript.hash_2d(config.seed + 1103, cell_x, cell_z)
 			var world_x: int = cell_x * FEATURE_CELL_SIZE + 1 + hash_value % (FEATURE_CELL_SIZE - 2)
 			var world_z: int = cell_z * FEATURE_CELL_SIZE + 1 + (hash_value / 31) % (FEATURE_CELL_SIZE - 2)
+			if not _footprint_intersects_chunk(world_x, world_z, FEATURE_FOOTPRINT_RADIUS, origin_x, origin_z):
+				continue
 			var ground := _cached_decoration_ground(field, world_x, world_z, ground_scratch)
 			if ground.x < 0:
 				continue
@@ -1172,6 +1186,8 @@ func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int,
 			# from occupying another candidate's root/trunk volume.
 			var world_x: int = cell_x * TREE_CELL_SIZE + 2 + anchor_hash % 2
 			var world_z: int = cell_z * TREE_CELL_SIZE + 2 + (anchor_hash / 23) % 2
+			if not _footprint_intersects_chunk(world_x, world_z, TREE_FOOTPRINT_RADIUS, origin_x, origin_z):
+				continue
 			if lod and not ChunkTerrainDataScript.is_valid_local(world_x - origin_x, world_z - origin_z):
 				continue
 			var ground := _cached_decoration_ground(field, world_x, world_z, ground_scratch)
@@ -1212,6 +1228,8 @@ func _collect_trees(field: ChunkTerrainData, origin_x: int, origin_z: int,
 			var hash_value: int = WorldGenHashScript.hash_2d(config.seed + 1103, cell_x, cell_z)
 			var world_x: int = cell_x * FEATURE_CELL_SIZE + 1 + hash_value % (FEATURE_CELL_SIZE - 2)
 			var world_z: int = cell_z * FEATURE_CELL_SIZE + 1 + (hash_value / 31) % (FEATURE_CELL_SIZE - 2)
+			if not _footprint_intersects_chunk(world_x, world_z, FEATURE_FOOTPRINT_RADIUS, origin_x, origin_z):
+				continue
 			if lod and not ChunkTerrainDataScript.is_valid_local(world_x - origin_x, world_z - origin_z):
 				continue
 			var ground := _cached_decoration_ground(field, world_x, world_z, ground_scratch)
@@ -1411,6 +1429,10 @@ func _decorate_ground_cover(data: PackedByteArray, field: ChunkTerrainData, orig
 			var anchor_hash: int = WorldGenHashScript.hash_2d(config.seed + 1181, cell_x, cell_z)
 			var center_x: int = cell_x * GROUND_COVER_CELL_SIZE + 2 + anchor_hash % (GROUND_COVER_CELL_SIZE - 4)
 			var center_z: int = cell_z * GROUND_COVER_CELL_SIZE + 2 + (anchor_hash / 29) % (GROUND_COVER_CELL_SIZE - 4)
+			# Tufts spread two blocks from the anchor; excluded anchors cannot
+			# write any voxel here, regardless of their terrain/biome decision.
+			if not _footprint_intersects_chunk(center_x, center_z, 2, origin_x, origin_z):
+				continue
 			var ground := _decoration_ground(field, center_x, center_z)
 			if ground.x <= VoxelDefsScript.SEA_LEVEL + 1:
 				continue
@@ -1483,6 +1505,8 @@ func _decorate_underwater(data: PackedByteArray, field: ChunkTerrainData, origin
 			var anchor_hash: int = WorldGenHashScript.hash_2d(config.seed + 1423, cell_x, cell_z)
 			var center_x: int = cell_x * UNDERWATER_CELL_SIZE + 2 + anchor_hash % (UNDERWATER_CELL_SIZE - 4)
 			var center_z: int = cell_z * UNDERWATER_CELL_SIZE + 2 + (anchor_hash / 29) % (UNDERWATER_CELL_SIZE - 4)
+			if not _footprint_intersects_chunk(center_x, center_z, UNDERWATER_TUFT_RADIUS, origin_x, origin_z):
+				continue
 			var ground := _cached_decoration_ground(field, center_x, center_z, ground_scratch)
 			if ground.x < 0 or not biomes.is_ocean_biome(ground.y):
 				continue
@@ -1499,6 +1523,8 @@ func _decorate_underwater(data: PackedByteArray, field: ChunkTerrainData, origin
 				var tuft_hash: int = WorldGenHashScript.hash_3d(config.seed + 1451, cell_x, tuft_index, cell_z)
 				var world_x: int = center_x + (tuft_hash % (UNDERWATER_TUFT_RADIUS * 2 + 1)) - UNDERWATER_TUFT_RADIUS
 				var world_z: int = center_z + ((tuft_hash / 13) % (UNDERWATER_TUFT_RADIUS * 2 + 1)) - UNDERWATER_TUFT_RADIUS
+				if not _footprint_intersects_chunk(world_x, world_z, 0, origin_x, origin_z):
+					continue
 				var tuft_ground := _cached_decoration_ground(field, world_x, world_z, ground_scratch)
 				if tuft_ground.x < 0 or not biomes.is_ocean_biome(tuft_ground.y):
 					continue
@@ -1706,6 +1732,14 @@ func _grove_leaf_block(decoration_set: int) -> int:
 		BiomeCatalogScript.DECORATION_SWAMP:
 			return BlockRegistryScript.BLOCK_MANGROVE_LEAVES
 	return BlockRegistryScript.BLOCK_AIR
+
+
+## Reject only footprints that cannot touch this chunk. Terrain/site decisions
+## for every overlapping candidate remain global and generation-order independent.
+func _footprint_intersects_chunk(world_x: int, world_z: int, radius: int, origin_x: int, origin_z: int) -> bool:
+	return world_x + radius >= origin_x and world_z + radius >= origin_z \
+		and world_x - radius < origin_x + VoxelDefsScript.CHUNK_SIZE \
+		and world_z - radius < origin_z + VoxelDefsScript.CHUNK_SIZE
 
 
 ## The field handles the immediate border; farther feature-cell origins query

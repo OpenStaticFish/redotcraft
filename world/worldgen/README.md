@@ -45,6 +45,14 @@ each chunk as eight neighbors arrive. Later edits, collision additions, and
 neighbor invalidations rebuild from immutable snapshots of loaded chunk data;
 only an actual full/LOD mode transition reruns terrain generation.
 
+Generation and meshing use min-heaps with a shared priority policy: the current
+stream-center chunk first, then its immediate ring (local edited owners get
+feedback priority), then the collision-radius ring, then distant chunks. Within
+each tier use squared distance, not worker completion order. Ready meshes win
+equal priorities; distant meshes never unconditionally outrank nearer generation.
+Heaps are rebuilt in linear time on stream-center changes and dispatch costs
+O(log queued chunks), without shifting the full generation array on each pop.
+
 All coordinates are global and all generation state is read-only after
 configuration. Do not add mutable sampler caches or scene-tree access to worker
 code. Any cache must be bounded, synchronized, and keyed by the complete config
@@ -62,6 +70,21 @@ shape-resource creation time, and triangle count for both full and compact LOD
 chunks. It intentionally excludes `VoxelWorld` scheduling and neighbors; use
 `stream_full_verify.gd` to time the end-to-end authoritative stream.
 Compare like-for-like runs on the same machine.
+
+The Ryzen 7 7700 streaming investigation, actual worker-limit sweep, and
+output-preserving mesh improvements are recorded in `tools/CHUNK_PERFORMANCE.md`.
+`tools/stream_transition_verify.gd` covers distance changes while paused, rapid
+in-flight changes, and Full/Balanced transitions (`-- --normal` uses normal
+terrain instead of the fast flat fixture). Streaming continues while menus are
+paused, but the water/gravity/fire simulation clocks do not advance.
+
+`tools/population_benchmark.gd` breaks full population into individual stages and
+pins twelve preoptimization output hashes. The current footprint pruning skips
+terrain queries only when the candidate's entire write/clear footprint cannot
+touch the target chunk. Keep `FEATURE_FOOTPRINT_RADIUS` conservative when adding
+new stamps; `tools/population_pruning_verify.gd` verifies catalog stamp extents.
+All overlapping candidates must still use the same global site decisions and
+stamping order, including across negative-coordinate chunk borders.
 
 ## Main tuning controls
 

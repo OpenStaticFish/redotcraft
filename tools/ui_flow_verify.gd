@@ -216,9 +216,24 @@ func _run() -> void:
 	display.open_panel()
 	await process_frame
 	_expect(display.visible and settings.visible, "display category did not open over the hub")
+	var original_distance: Variant = game_config.get_setting("render_distance")
+	var applied_distances: Array[int] = []
+	display.setting_changed.connect(func(key: String, value: Variant) -> void:
+		if key == "render_distance":
+			applied_distances.append(int(value))
+	)
+	var distance_slider: HSlider = display._first_focus
+	for value in [4, 5, 6]:
+		distance_slider.value = value
+	_expect(applied_distances.is_empty(), "slider drag rebuilt terrain immediately")
+	await create_timer(0.3).timeout
+	_expect(applied_distances == [6], "slider changes did not coalesce to the final distance")
+	distance_slider.value = 7
 	_send_cancel()
 	await process_frame
 	_expect(not display.visible and settings.visible, "cancel should close only the display category")
+	_expect(applied_distances == [6, 7], "closing Display lost the pending distance change")
+	game_config.set_setting("render_distance", original_distance)
 
 	# Graphics -> advanced -> nested cancel -> hub -> menu.
 	graphics.open_panel()

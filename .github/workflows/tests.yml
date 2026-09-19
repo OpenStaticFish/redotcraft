@@ -10,11 +10,8 @@ name: PR tests
 # only becomes available once the file is on the default branch.
 #
 # Known follow-ups before making this required:
-#   - tools/stream_full_verify.gd caps its wait at 240 * 0.25s (60s); slow
-#     (4 vCPU) runners can exceed that and fail spuriously. Raise MAX_WAIT_TICKS.
 #   - The parse check only walks scripts the editor loads; an unreferenced
 #     broken script needs a dedicated scanner (load() + can_instantiate()).
-#   - Unit tests for pure logic still need a runner (ROADMAP "Unit tests").
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -61,11 +58,19 @@ jobs:
           CHECK_TIMEOUT_SECONDS: "120"
         run: |
           bash .github/scripts/run_checks.sh \
+            tools/unit_tests.gd \
+            tools/chunk_priority_verify.gd \
+            tools/lod_batch_verify.gd \
+            tools/mesh_parity_verify.gd \
+            tools/asset_license_verify.gd \
             tools/audio_verify.gd \
             tools/weather_verify.gd \
             tools/ui_flow_verify.gd \
             tools/ui_scale_verify.gd \
             tools/input_rebind_verify.gd \
+            tools/loading_progress_verify.gd \
+            tools/first_run_hints_verify.gd \
+            tools/motion_camera_verify.tscn \
             tools/photo_mode_verify.gd \
             tools/player_target_verify.tscn \
             tools/player_survival_verify.gd \
@@ -108,6 +113,8 @@ jobs:
         run: |
           bash .github/scripts/run_checks.sh \
             tools/worldgen_verify.gd \
+            tools/population_benchmark.gd \
+            tools/population_pruning_verify.gd \
             tools/worldgen_water_verify.gd \
             tools/worldgen_ore_verify.gd \
             tools/worldgen_structure_verify.gd \
@@ -175,11 +182,13 @@ jobs:
         run: |
           bash .github/scripts/run_checks.sh \
             tools/stream_full_verify.gd \
+            tools/stream_transition_verify.gd \
             tools/stream_soak_verify.gd \
             tools/lod_mode_verify.gd \
             tools/chunk_data_compression_verify.gd \
             tools/world_storage_verify.gd \
-            tools/light_invalidation_verify.gd
+            tools/light_invalidation_verify.gd \
+            tools/block_physics_verify.tscn
 
       - name: Upload check logs
         if: failure()

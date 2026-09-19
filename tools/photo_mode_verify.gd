@@ -33,7 +33,9 @@ func _run() -> void:
 
 	var photo := PhotoMode.new()
 	photo.initialize(player_camera, hud)
-	photo.mouse_sensitivity_provider = func() -> float: return 0.0025
+	photo.mouse_sensitivity_x_provider = func() -> float: return 0.0025
+	photo.mouse_sensitivity_y_provider = func() -> float: return 0.0025
+	photo.invert_y_provider = func() -> bool: return false
 	root_node.add_child(photo)
 
 	# HUD toggle keeps the root visibility and the tracked state in sync.

@@ -1,6 +1,11 @@
 class_name VoxelWorld
 extends Node3D
 
+## Main-thread streaming telemetry. Worker jobs only write their private slots;
+## these snapshots are assembled after completion/commit on the scene thread.
+signal stream_progress_changed(progress: Dictionary)
+signal initial_stream_ready
+
 const SPAWN_RADIUS := 1
 const SPAWN_SEARCH_RADIUS := 12
 ## Half the logical cores, capped at 8. Measured on a 16-thread desktop: 8
@@ -29,6 +34,22 @@ const STREAM_BOUNDARY_MARGIN := 0.05
 ## putting compression in the active meshing path.
 const ENABLE_COLD_CHUNK_COMPRESSION := false
 const COMMIT_BUDGET_MS := 2
+## Balanced LOD can reduce its opaque terrain submissions by combining four
+## already-built compact chunk meshes. This is strictly a render-only cache:
+## generation, edit ownership, neighbour snapshots, collision, and water stay
+## with their authoritative chunks. One upload per frame keeps this optional
+## presentation work from becoming a distant-streaming hitch.
+const LOD_BATCH_SIZE := 2
+const MAX_LOD_BATCH_UPLOADS_PER_TICK := 1
+const MAX_QUEUED_LOD_BATCHES := 64
+## The cap is deliberately below a worst-case group: an aggregate is rebuilt
+## from four GPU surfaces on the main thread, so a pathological cliff/canopy
+## group must gracefully keep its source meshes instead of causing a long hitch.
+const MAX_LOD_BATCH_VERTICES := 16384
+const MAX_LOD_BATCH_INDICES := 24576
+const MAX_LOD_BATCH_REFILL_CANDIDATES_PER_TICK := 12
+const BATCH_UPLOAD_SOFT_BUDGET_USEC := 1000
+const STREAM_PROGRESS_INTERVAL := 0.15
 ## Diagnostic map rasters resolve one mode sample per pixel. The final-height
 ## family walks the erosion graph five times per sample, so map views request
 ## fewer pixels for those modes instead of freezing their refresh for seconds.
@@ -38,6 +59,10 @@ const DEBUG_MAP_HEAVY_MODES: Array[String] = ["height", "raw_height", "slope"]
 const REBUILD_OPPOSITE_BITS := [2, 1, 8, 4, 128, 64, 32, 16]
 const WATER_TICK_INTERVAL := 0.25
 const WATER_CELLS_PER_TICK := 1024
+## Falling blocks use the same bounded main-thread cadence as water. A block
+## advances one cell per tick so a large collapse cannot stall one frame.
+const GRAVITY_TICK_INTERVAL := 0.25
+const GRAVITY_CELLS_PER_TICK := 512
 const TNT_BLAST_RADIUS := 5
 const NUKE_BLAST_RADIUS := 18
 ## Fire advances in discrete steps like water. A flammable block is never
@@ -75,6 +100,10 @@ var render_distance := 10
 var lod_distance := 5
 var lod_mode := LOD_MODE_FULL
 var unload_radius := 12
+## Experimental: it is off by default even in Balanced LOD until a target
+## machine profile demonstrates that its draw-call reduction beats coarser
+## 2x2 visibility culling. Full Detail never enters this path.
+var lod_batching_enabled := false
 
 var _blocks: BlockRegistry
 var _generator: TerrainGenerator
@@ -83,6 +112,18 @@ var _mesher: ChunkMesher
 var _chunks: Dictionary = {}
 var _pending: Dictionary = {}
 var _commit_queue: Array = []
+var _lod_batches: Dictionary = {}
+var _lod_batch_queue: Array[Vector2i] = []
+var _lod_batch_queued: Dictionary = {}
+var _lod_batch_rejected: Dictionary = {}
+var _lod_batch_refill_found_work := false
+var _lod_batch_uploads := 0
+var _lod_batch_skipped := 0
+var _lod_batch_geometry_rejected := 0
+var _lod_batch_refill_cursor := 0
+var _lod_batch_refill_complete := false
+var _lod_batch_refill_passes := 0
+var _commit_budget_used_usec := 0
 var _gen_queue: Array[Vector2i] = []
 var _gen_queued: Dictionary = {}
 var _mesh_queue: Array[Vector2i] = []
@@ -90,6 +131,7 @@ var _mesh_queued: Dictionary = {}
 var _generated: Dictionary = {}
 var _dirty: Dictionary = {}
 var _desired: Dictionary = {}
+var _streamed_count := 0
 var _edited_blocks: Dictionary = {}
 var _edits_by_chunk: Dictionary = {}
 var _hydrated_edit_chunks: Dictionary = {}
@@ -101,6 +143,11 @@ var _water_queue: Array[Vector3i] = []
 var _water_queued: Dictionary = {}
 var _water_head := 0
 var _water_accum := 0.0
+var _gravity_queue: Array[Vector3i] = []
+var _gravity_queued: Dictionary = {}
+var _gravity_seeded_chunks: Dictionary = {}
+var _gravity_head := 0
+var _gravity_accum := 0.0
 var _fire_queue: Array[Vector3i] = []
 var _fire_queued: Dictionary = {}
 var _fire_accum := 0.0
@@ -113,7 +160,18 @@ var _burning_queue: Array[Vector3i] = []
 var _burning_queued: Dictionary = {}
 var _fire_overlay: FireOverlay
 var _worldgen_revision := 0
+var _stream_progress_time := 0.0
+var _initial_stream_center := Vector2i(999999, 999999)
+var _initial_stream_active := false
+var _initial_stream_complete := false
 var _max_active_jobs := MIN_ACTIVE_JOBS
+var _generation_jobs := 0
+var _mesh_jobs := 0
+var _discarded_jobs := 0
+var _generation_usec := 0
+var _mesh_usec := 0
+var _commit_usec := 0
+var _stream_main_usec := 0
 var _full_jobs_measured := 0
 var _lod_jobs_measured := 0
 var _generation_ema_ms := 0.0
@@ -241,7 +299,17 @@ class CommitItem:
 		lod = p_lod
 
 
+## A batch deliberately contains no voxel state and no physics. It owns only
+## one opaque MeshInstance3D plus the four source positions whose original
+## render instances are hidden while this cache is valid.
+class LodRenderBatch:
+	var members: Array[Vector2i] = []
+	var mesh: MeshInstance3D
+
+
 func _ready() -> void:
+	# Menus pause simulation, not the background terrain pipeline.
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_blocks = BlockRegistry.new()
 	_generator = TerrainGenerator.new()
 	_mesher = ChunkMesher.new(_blocks)
@@ -256,10 +324,20 @@ func _process(delta: float) -> void:
 	if _player == null:
 		return
 	_stream_tick()
+	_stream_progress_time += delta
+	if _stream_progress_time >= STREAM_PROGRESS_INTERVAL:
+		_stream_progress_time = 0.0
+		_emit_stream_progress()
+	if get_tree().paused:
+		return
 	_water_accum += delta
 	if _water_accum >= WATER_TICK_INTERVAL:
 		_water_accum = 0.0
 		_water_tick()
+	_gravity_accum += delta
+	if _gravity_accum >= GRAVITY_TICK_INTERVAL:
+		_gravity_accum = 0.0
+		_gravity_tick()
 	_fire_accum += delta
 	if _fire_accum >= FIRE_TICK_INTERVAL:
 		_fire_accum = 0.0
@@ -267,6 +345,7 @@ func _process(delta: float) -> void:
 
 
 func _exit_tree() -> void:
+	_clear_lod_batches()
 	for pos in _pending.keys():
 		WorkerThreadPool.wait_for_task_completion((_pending[pos] as PendingJob).task)
 	_pending.clear()
@@ -293,6 +372,7 @@ func configure(world_config: Dictionary, render_distance_chunks: int,
 func set_edit_store(store: WorldStorage) -> void:
 	_edit_store = store
 	_hydrated_edit_chunks.clear()
+	_gravity_seeded_chunks.clear()
 	_edited_blocks.clear()
 	_edits_by_chunk.clear()
 
@@ -304,7 +384,13 @@ func flush_edit_store() -> Error:
 
 
 func set_render_distance(value: int) -> void:
-	render_distance = maxi(value, 1)
+	var normalized := maxi(value, 1)
+	if render_distance == normalized:
+		return
+	render_distance = normalized
+	# A changed boundary can turn one member of a cached 2x2 compact group into
+	# Full Detail. Reveal source meshes before the asynchronous transition lands.
+	_clear_lod_batches()
 	_update_lod_distance()
 	unload_radius = render_distance + 2
 	_rebuild_desired()
@@ -316,8 +402,19 @@ func set_lod_mode(value: int) -> void:
 	if lod_mode == normalized:
 		return
 	lod_mode = normalized
+	_clear_lod_batches()
 	_update_lod_distance()
 	_rebuild_desired()
+
+
+## Exposed for controlled Forward+ A/B profiling and safe fallback on hardware
+## where four-way array uploads do not pay for their draw-call reduction.
+func set_lod_batching_enabled(enabled: bool) -> void:
+	if lod_batching_enabled == enabled:
+		return
+	lod_batching_enabled = enabled
+	_clear_lod_batches()
+	_reset_lod_batch_refill()
 
 
 func _update_lod_distance() -> void:
@@ -415,7 +512,23 @@ func setup_player(player_node: Node3D, sync_spawn_area := false) -> void:
 	_schedule_jobs()
 
 
+## Starts the first world entry without synchronously generating a spawn ring.
+## Main keeps player input locked until `initial_stream_ready`; all chunk work
+## continues through the ordinary nearest-first worker queues.
+func begin_initial_stream(player_node: Node3D) -> void:
+	_player = player_node
+	_stream_center = _chunk_for_position(player_node.global_position)
+	_initial_stream_center = _stream_center
+	_initial_stream_active = true
+	_initial_stream_complete = false
+	_stream_progress_time = 0.0
+	_rebuild_desired()
+	_schedule_jobs()
+	_emit_stream_progress()
+
+
 func _stream_tick() -> void:
+	var started := Time.get_ticks_usec()
 	var center := _chunk_for_position(_player.global_position)
 	if center != _stream_center:
 		_stream_center = center
@@ -424,21 +537,39 @@ func _stream_tick() -> void:
 		_drop_far_collision()
 	_collect_jobs()
 	_process_commit_queue()
+	_process_lod_batch_queue()
 	# Discover missing nearby collision before assigning newly-opened worker
 	# slots. Otherwise generation can refill every slot first while boosted
 	# flight waits on a floor remesh that was only queued afterward.
 	_ensure_near_collision()
 	_schedule_jobs()
+	_update_initial_stream_state()
+	_stream_main_usec += Time.get_ticks_usec() - started
+
+
+func _update_initial_stream_state() -> void:
+	if not _initial_stream_active or _initial_stream_complete:
+		return
+	for dz in range(-SPAWN_RADIUS, SPAWN_RADIUS + 1):
+		for dx in range(-SPAWN_RADIUS, SPAWN_RADIUS + 1):
+			var pos := _initial_stream_center + Vector2i(dx, dz)
+			var chunk: Chunk = _chunks.get(pos)
+			if chunk == null or chunk.lod or not _is_chunk_collision_ready(pos):
+				return
+	_initial_stream_complete = true
+	_emit_stream_progress()
+	initial_stream_ready.emit()
 
 
 ## Distant full chunks are committed without a collision shape. Rebuilds are
 ## only requested as the player gets close, which keeps shape memory bounded to
 ## the local area while the world stays full-detail everywhere in range.
 func _ensure_near_collision() -> void:
-	var candidates: Array[Vector2i] = []
 	for dz in range(-COLLISION_DISTANCE, COLLISION_DISTANCE + 1):
 		for dx in range(-COLLISION_DISTANCE, COLLISION_DISTANCE + 1):
 			var pos := _stream_center + Vector2i(dx, dz)
+			if not _desired.has(pos):
+				continue
 			var chunk: Chunk = _chunks.get(pos)
 			if chunk == null or chunk.lod:
 				continue
@@ -452,18 +583,7 @@ func _ensure_near_collision() -> void:
 				if pending.kind == "mesh" and not pending.lod and not pending.want_collision:
 					_dirty[pos] = true
 				continue
-			candidates.append(pos)
-	# `_queue_rebuild()` pushes normal work to the front. Queue far-to-near so
-	# the current chunk and its closest floor ring finish first, regardless of
-	# dictionary/scan order or older dirty work already in the mesh queue.
-	candidates.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		return (a - _stream_center).length_squared() > (b - _stream_center).length_squared()
-	)
-	for pos in candidates:
-		_queue_rebuild(pos)
-		if _mesh_queued.has(pos):
-			_mesh_queue.erase(pos)
-			_mesh_queue.push_front(pos)
+			_queue_rebuild(pos)
 
 
 func _drop_far_collision() -> void:
@@ -493,6 +613,7 @@ func _generate_spawn_area() -> void:
 
 func _rebuild_desired() -> void:
 	_desired.clear()
+	_streamed_count = 0
 	_mesh_queue.clear()
 	_mesh_queued.clear()
 	var wanted: Array[Vector2i] = []
@@ -501,14 +622,17 @@ func _rebuild_desired() -> void:
 	# At extreme distances this removes a large main-thread O(n log n) hitch.
 	for ring in range(render_distance + 1):
 		for dx in range(-ring, ring + 1):
-			for dz in range(-ring, ring + 1):
-				if maxi(absi(dx), absi(dz)) != ring:
-					continue
+			# Enumerate the perimeter itself, not every interior cell on every
+			# ring (the latter visits O(radius^3) cells during a distance change).
+			var zs := range(-ring, ring + 1) if absi(dx) == ring else [-ring, ring]
+			for dz in zs:
 				var pos := _stream_center + Vector2i(dx, dz)
 				_desired[pos] = true
 				var want_lod := _chunk_uses_lod(pos)
 				if _chunks.has(pos) and (_chunks[pos] as Chunk).lod != want_lod:
 					_dirty[pos] = true
+				elif _chunks.has(pos):
+					_streamed_count += 1
 				var staged: TerrainGenerator.GenResult = _generated.get(pos)
 				if staged != null and (staged.lod != want_lod \
 						or staged.config_revision != _worldgen_revision):
@@ -518,7 +642,10 @@ func _rebuild_desired() -> void:
 	_gen_queue = wanted
 	_gen_queued.clear()
 	for pos in _gen_queue:
-		_gen_queued[pos] = true
+		_gen_queued[pos] = false
+	# Bottom-up heap construction is linear, including at Extreme distance.
+	for index in range(_gen_queue.size() / 2 - 1, -1, -1):
+		_work_sift_down(_gen_queue, _gen_queued, index)
 	for pos in _dirty.keys():
 		if _desired.has(pos) and not _pending.has(pos) and not _gen_queued.has(pos):
 			_queue_rebuild(pos)
@@ -527,42 +654,29 @@ func _rebuild_desired() -> void:
 			_generated.erase(pos)
 		else:
 			_queue_generated_mesh_if_ready(pos)
+	_reconcile_lod_batches()
+	_reset_lod_batch_refill()
 
 
 func _schedule_jobs() -> void:
 	if _gen_queue.is_empty() and _mesh_queue.is_empty():
 		return
 	while not _mesh_queue.is_empty() or not _gen_queue.is_empty():
-		var mesh_job := false
-		var queue_index := 0
 		if _pending.size() > _max_active_jobs:
 			break
-		var urgent_mesh_index := _urgent_queue_index(_mesh_queue)
-		var urgent_generation_index := _urgent_queue_index(_gen_queue)
-		if urgent_mesh_index >= 0:
-			mesh_job = true
-			queue_index = urgent_mesh_index
-		elif urgent_generation_index >= 0:
-			queue_index = urgent_generation_index
-		elif _pending.size() < _max_active_jobs:
-			# Away from the player, finish already-generated meshes before doing
-			# more terrain work. Near the player, the urgent branches above always
-			# fill real chunk holes before unrelated distance remeshes.
-			mesh_job = not _mesh_queue.is_empty()
-		else:
+		var mesh_job := _next_work_is_mesh()
+		var next_pos: Vector2i = _mesh_queue[0] if mesh_job else _gen_queue[0]
+		var urgent := not _chunk_uses_lod(next_pos) and _within_collision_range(next_pos)
+		if _pending.size() >= _max_active_jobs and not urgent:
 			break
-		# At the normal cap, only the urgent branches can reach this point. This
-		# is the single bounded overflow slot; WorkerThreadPool high priority runs
-		# it as soon as stale distance work releases a worker.
+		# Only nearby full-detail work can use the one bounded overflow slot.
 		var pos: Vector2i
 		if mesh_job:
-			pos = _mesh_queue[queue_index]
-			_mesh_queue.remove_at(queue_index)
-			_mesh_queued.erase(pos)
+			pos = _work_pop(_mesh_queue, _mesh_queued)
 		else:
-			pos = _gen_queue[queue_index]
-			_gen_queue.remove_at(queue_index)
-			_gen_queued.erase(pos)
+			pos = _work_pop(_gen_queue, _gen_queued)
+		if not _desired.has(pos):
+			continue
 		if _pending.has(pos):
 			continue
 		if mesh_job and not _chunks.has(pos) and not _generated.has(pos):
@@ -610,32 +724,111 @@ func _schedule_jobs() -> void:
 				high_priority,
 				"voxel_generate")
 		_pending[pos] = job
+		if job.kind == "generate":
+			_generation_jobs += 1
+		else:
+			_mesh_jobs += 1
 
 
-func _urgent_queue_index(queue: Array[Vector2i]) -> int:
-	for index in queue.size():
-		var pos := queue[index]
-		if not _chunk_uses_lod(pos) and _within_collision_range(pos):
-			return index
-	return -1
+## Queues are min-heaps. The membership maps also mark urgent edited owners.
+## Keys depend only on the stream center and that mark, not mutable chunk state.
+## Re-centering rebuilds both heaps; queued edits can only promote an entry.
+func _work_priority(pos: Vector2i, edited: bool) -> int:
+	var offset := pos - _stream_center
+	var ring := maxi(absi(offset.x), absi(offset.y))
+	var tier := 4
+	if ring == 0:
+		tier = 0
+	elif ring <= SPAWN_RADIUS:
+		tier = 1 if edited else 2
+	elif ring <= COLLISION_DISTANCE:
+		tier = 3
+	return tier * 1000000000 + offset.length_squared()
+
+
+func _work_less(a: Vector2i, b: Vector2i, queued: Dictionary) -> bool:
+	var a_priority := _work_priority(a, bool(queued.get(a, false)))
+	var b_priority := _work_priority(b, bool(queued.get(b, false)))
+	if a_priority != b_priority:
+		return a_priority < b_priority
+	return a.x < b.x or (a.x == b.x and a.y < b.y)
+
+
+func _work_push(queue: Array[Vector2i], queued: Dictionary, pos: Vector2i, edited := false) -> void:
+	var index := queue.size()
+	if queued.has(pos):
+		if not edited or bool(queued[pos]):
+			return
+		index = queue.find(pos)
+	else:
+		queue.append(pos)
+	queued[pos] = edited
+	while index > 0:
+		var parent := (index - 1) / 2
+		if not _work_less(queue[index], queue[parent], queued):
+			break
+		var swap := queue[parent]
+		queue[parent] = queue[index]
+		queue[index] = swap
+		index = parent
+
+
+func _work_sift_down(queue: Array[Vector2i], queued: Dictionary, index: int) -> void:
+	while index * 2 + 1 < queue.size():
+		var child := index * 2 + 1
+		if child + 1 < queue.size() and _work_less(queue[child + 1], queue[child], queued):
+			child += 1
+		if not _work_less(queue[child], queue[index], queued):
+			return
+		var swap := queue[index]
+		queue[index] = queue[child]
+		queue[child] = swap
+		index = child
+
+
+func _work_pop(queue: Array[Vector2i], queued: Dictionary) -> Vector2i:
+	var pos := queue[0]
+	var last: Vector2i = queue.pop_back()
+	queued.erase(pos)
+	if not queue.is_empty():
+		queue[0] = last
+		_work_sift_down(queue, queued, 0)
+	return pos
+
+
+func _next_work_is_mesh() -> bool:
+	if _mesh_queue.is_empty():
+		return false
+	if _gen_queue.is_empty():
+		return true
+	# Finish render/collision work first only when its priority is at least as
+	# close. Distant completed terrain must not starve nearby missing chunks.
+	return _work_priority(_mesh_queue[0], bool(_mesh_queued[_mesh_queue[0]])) \
+		<= _work_priority(_gen_queue[0], bool(_gen_queued[_gen_queue[0]]))
 
 
 func _process_commit_queue() -> void:
 	var start := Time.get_ticks_msec()
+	_commit_budget_used_usec = 0
 	while not _commit_queue.is_empty():
 		var commit_index := _next_commit_index()
 		var item: CommitItem = _commit_queue[commit_index]
 		_commit_queue.remove_at(commit_index)
 		if not _desired.has(item.pos):
+			_discarded_jobs += 1
 			_discard_unloaded_chunk_state(item.pos)
 			continue
 		var mode_stale := item.lod != _chunk_uses_lod(item.pos)
 		if item.version != _chunk_edit_version.get(item.pos, 0) or item.config_revision != _worldgen_revision or mode_stale:
+			_discarded_jobs += 1
 			_queue_rebuild(item.pos)
 			continue
+		var commit_start := Time.get_ticks_usec()
 		_commit_chunk(item.pos, item.result, item.lod)
+		_commit_usec += Time.get_ticks_usec() - commit_start
 		if Time.get_ticks_msec() - start > COMMIT_BUDGET_MS:
 			break
+	_commit_budget_used_usec = Time.get_ticks_usec() - start * 1000
 
 
 func _next_commit_index() -> int:
@@ -662,12 +855,20 @@ func _collect_jobs() -> void:
 			continue
 		WorkerThreadPool.wait_for_task_completion(job.task)
 		_pending.erase(pos)
+		if job.kind == "generate":
+			var generated_result: TerrainGenerator.GenResult = job.slot.get("generated")
+			if generated_result != null:
+				_generation_usec += int(generated_result.timings.get("generation_us", 0))
+		else:
+			_mesh_usec += int(job.slot.get("mesh_us", 0))
 		if not _desired.has(pos):
 			# No off-screen result is useful. Purging only after the worker has
 			# completed preserves its edit-version stale check until this point.
+			_discarded_jobs += 1
 			_discard_unloaded_chunk_state(pos)
 			continue
 		if _dirty.has(pos):
+			_discarded_jobs += 1
 			# An edit invalidated this job's neighbor snapshot while it was running.
 			# Discard the stale result and immediately schedule a fresh build.
 			if _desired.has(pos):
@@ -682,6 +883,7 @@ func _collect_jobs() -> void:
 				_generated[pos] = generated
 				_queue_generated_meshes_around(pos)
 			elif _desired.has(pos):
+				_discarded_jobs += 1
 				_queue_rebuild(pos)
 			continue
 		if job.slot.has("result") and job.slot["result"] != null:
@@ -804,8 +1006,7 @@ func _queue_generated_mesh_if_ready(pos: Vector2i) -> void:
 	if not _generated.has(pos) or not _desired.has(pos) or _pending.has(pos) \
 			or _mesh_queued.has(pos) or not _generated_neighbors_ready(pos):
 		return
-	_mesh_queue.append(pos)
-	_mesh_queued[pos] = true
+	_work_push(_mesh_queue, _mesh_queued, pos)
 
 
 func _generated_neighbors_ready(pos: Vector2i) -> bool:
@@ -989,9 +1190,262 @@ func _compress_distant_chunks() -> void:
 			chunk.data.clear()
 
 
+## Groups are aligned in chunk coordinates (including negatives) so a stream
+## recenter never changes ownership. They only combine opaque compact LOD
+## surfaces; water remains per chunk to retain the renderer's existing
+## transparent-object ordering and culling behaviour.
+func _lod_batch_key(pos: Vector2i) -> Vector2i:
+	return Vector2i(floori(float(pos.x) / float(LOD_BATCH_SIZE)),
+		floori(float(pos.y) / float(LOD_BATCH_SIZE)))
+
+
+func _lod_batch_members(key: Vector2i) -> Array[Vector2i]:
+	var origin := key * LOD_BATCH_SIZE
+	return [origin, origin + Vector2i(1, 0), origin + Vector2i(0, 1), origin + Vector2i(1, 1)]
+
+
+func _lod_batch_priority(key: Vector2i) -> int:
+	var center := key * LOD_BATCH_SIZE + Vector2i(1, 1)
+	return (center - _stream_center).length_squared()
+
+
+func _queue_lod_batch_for(pos: Vector2i) -> void:
+	if not lod_batching_enabled or not _chunk_uses_lod(pos):
+		return
+	_lod_batch_refill_complete = false
+	var key := _lod_batch_key(pos)
+	if _lod_batches.has(key):
+		_invalidate_lod_batch(key)
+	if _lod_batch_queued.has(key):
+		return
+	if _lod_batch_queue.size() >= MAX_QUEUED_LOD_BATCHES:
+		var furthest_index := 0
+		var furthest_priority := _lod_batch_priority(_lod_batch_queue[0])
+		for index in range(1, _lod_batch_queue.size()):
+			var priority := _lod_batch_priority(_lod_batch_queue[index])
+			if priority > furthest_priority:
+				furthest_index = index
+				furthest_priority = priority
+		if _lod_batch_priority(key) >= furthest_priority:
+			_lod_batch_skipped += 1
+			return
+		var evicted: Vector2i = _lod_batch_queue[furthest_index]
+		_lod_batch_queue.remove_at(furthest_index)
+		_lod_batch_queued.erase(evicted)
+		_lod_batch_skipped += 1
+	_lod_batch_queue.append(key)
+	_lod_batch_queued[key] = true
+
+
+## Scan the existing desired grid incrementally instead of retaining an
+## unbounded "all batches" list. A queue cap can therefore protect a frame
+## without permanently abandoning a group that was far away when batching was
+## toggled on: future bounded passes revisit it after nearer uploads drain.
+func _reset_lod_batch_refill() -> void:
+	_lod_batch_rejected.clear()
+	_lod_batch_refill_cursor = 0
+	_lod_batch_refill_complete = false
+	_lod_batch_refill_passes = 0
+	_lod_batch_refill_found_work = false
+
+
+func _refill_lod_batch_queue() -> void:
+	if not lod_batching_enabled or _desired.is_empty() or _lod_batch_refill_complete:
+		return
+	var minimum := _lod_batch_key(_stream_center - Vector2i(render_distance, render_distance))
+	var maximum := _lod_batch_key(_stream_center + Vector2i(render_distance, render_distance))
+	var width := maximum.x - minimum.x + 1
+	var height := maximum.y - minimum.y + 1
+	var total := width * height
+	if total <= 0:
+		return
+	for _candidate in MAX_LOD_BATCH_REFILL_CANDIDATES_PER_TICK:
+		var index := _lod_batch_refill_cursor
+		var key := minimum + Vector2i(index % width, index / width)
+		if not _lod_batches.has(key) and not _lod_batch_queued.has(key) and _lod_batch_is_eligible(key):
+			_lod_batch_refill_found_work = true
+			_queue_lod_batch_for(key * LOD_BATCH_SIZE)
+		_lod_batch_refill_cursor = (_lod_batch_refill_cursor + 1) % total
+		if _lod_batch_refill_cursor == 0:
+			_lod_batch_refill_passes += 1
+			_lod_batch_refill_complete = not _lod_batch_refill_found_work
+			_lod_batch_refill_found_work = false
+			if _lod_batch_refill_complete:
+				return
+
+
+func _lod_batch_is_eligible(key: Vector2i) -> bool:
+	if not lod_batching_enabled or _lod_batch_rejected.has(key):
+		return false
+	for pos in _lod_batch_members(key):
+		if not _desired.has(pos) or not _chunk_uses_lod(pos):
+			return false
+		var chunk: Chunk = _chunks.get(pos)
+		if chunk == null or not chunk.lod or chunk.mesh == null or chunk.mesh.mesh == null:
+			return false
+	return true
+
+
+## The foreground stream always wins. Compact aggregates are presentation-only:
+## if a collision-ring chunk is missing/not ready or a commit still needs the
+## scene thread, leave all source meshes visible and service that work first.
+func _batching_has_foreground_pressure() -> bool:
+	if not _commit_queue.is_empty():
+		return true
+	for dz in range(-COLLISION_DISTANCE, COLLISION_DISTANCE + 1):
+		for dx in range(-COLLISION_DISTANCE, COLLISION_DISTANCE + 1):
+			var pos := _stream_center + Vector2i(dx, dz)
+			if not _desired.has(pos):
+				continue
+			var chunk: Chunk = _chunks.get(pos)
+			if chunk == null or chunk.lod or not _is_chunk_collision_ready(pos):
+				return true
+	return false
+
+
+## ArrayMesh construction is a RenderingServer-facing operation and therefore
+## intentionally stays on the scene thread. It does not create worker tasks,
+## cannot consume the urgent collision slot, and is capped by the caller.
+func _process_lod_batch_queue() -> void:
+	if not lod_batching_enabled or lod_distance >= render_distance:
+		return
+	if _lod_batch_refill_complete and _lod_batch_queue.is_empty():
+		return
+	if _batching_has_foreground_pressure():
+		return
+	# `_process_commit_queue()` gets the first share of the streaming frame. The
+	# actual ArrayMesh upload below cannot be preempted, so this is a soft guard:
+	# do not begin it after commits have already used most of their time budget.
+	if _commit_budget_used_usec > COMMIT_BUDGET_MS * 1000 - BATCH_UPLOAD_SOFT_BUDGET_USEC:
+		return
+	_refill_lod_batch_queue()
+	var uploads := 0
+	while uploads < MAX_LOD_BATCH_UPLOADS_PER_TICK and not _lod_batch_queue.is_empty():
+		var closest_index := 0
+		var closest_priority := _lod_batch_priority(_lod_batch_queue[0])
+		for index in range(1, _lod_batch_queue.size()):
+			var priority := _lod_batch_priority(_lod_batch_queue[index])
+			if priority < closest_priority:
+				closest_index = index
+				closest_priority = priority
+		var key: Vector2i = _lod_batch_queue[closest_index]
+		_lod_batch_queue.remove_at(closest_index)
+		_lod_batch_queued.erase(key)
+		if not _lod_batch_is_eligible(key):
+			continue
+		_build_lod_batch(key)
+		uploads += 1
+
+
+func _build_lod_batch(key: Vector2i) -> void:
+	_invalidate_lod_batch(key)
+	if not _lod_batch_is_eligible(key):
+		return
+	var origin_chunks := key * LOD_BATCH_SIZE
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var colors := PackedColorArray()
+	var light := PackedFloat32Array()
+	var layers := PackedFloat32Array()
+	var indices := PackedInt32Array()
+	var members := _lod_batch_members(key)
+	var vertex_total := 0
+	var index_total := 0
+	for pos in members:
+		var source_mesh: Mesh = (_chunks[pos] as Chunk).mesh.mesh
+		vertex_total += source_mesh.surface_get_array_len(0)
+		index_total += source_mesh.surface_get_array_index_len(0)
+	if vertex_total > MAX_LOD_BATCH_VERTICES or index_total > MAX_LOD_BATCH_INDICES:
+		_lod_batch_geometry_rejected += 1
+		_lod_batch_rejected[key] = true
+		return
+	for pos in members:
+		var chunk: Chunk = _chunks[pos]
+		var arrays: Array = chunk.mesh.mesh.surface_get_arrays(0)
+		if arrays.size() <= Mesh.ARRAY_INDEX:
+			return
+		var source_vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var source_normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		var source_uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+		var source_colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+		var source_light: PackedFloat32Array = arrays[Mesh.ARRAY_CUSTOM0]
+		var source_layers: PackedFloat32Array = arrays[Mesh.ARRAY_CUSTOM1]
+		var source_indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		if source_vertices.is_empty() or source_light.is_empty() or source_layers.is_empty():
+			return
+		var offset := Vector3(float((pos.x - origin_chunks.x) * VoxelDefs.CHUNK_SIZE), 0.0,
+			float((pos.y - origin_chunks.y) * VoxelDefs.CHUNK_SIZE))
+		var base := vertices.size()
+		for vertex in source_vertices:
+			vertices.append(vertex + offset)
+		normals.append_array(source_normals)
+		uvs.append_array(source_uvs)
+		colors.append_array(source_colors)
+		light.append_array(source_light)
+		layers.append_array(source_layers)
+		for index in source_indices:
+			indices.append(index + base)
+	var mesh := ChunkMesher.arrays_to_mesh(vertices, normals, uvs, colors, indices,
+		_blocks.material, light, layers)
+	if mesh == null:
+		return
+	var batch := LodRenderBatch.new()
+	batch.members = members
+	batch.mesh = MeshInstance3D.new()
+	batch.mesh.name = "LodBatch_%d_%d" % [key.x, key.y]
+	batch.mesh.position = Vector3(origin_chunks.x * VoxelDefs.CHUNK_SIZE, 0.0,
+		origin_chunks.y * VoxelDefs.CHUNK_SIZE)
+	batch.mesh.mesh = mesh
+	add_child(batch.mesh)
+	_lod_batches[key] = batch
+	for pos in members:
+		(_chunks[pos] as Chunk).mesh.visible = false
+	_lod_batch_uploads += 1
+
+
+func _invalidate_lod_batch(key: Vector2i) -> void:
+	# A new member mesh may fit even when the previous group was oversized.
+	_lod_batch_rejected.erase(key)
+	var batch: LodRenderBatch = _lod_batches.get(key)
+	if batch == null:
+		return
+	if batch.mesh != null and is_instance_valid(batch.mesh):
+		batch.mesh.visible = false
+	for pos in batch.members:
+		var chunk: Chunk = _chunks.get(pos)
+		if chunk != null and chunk.mesh != null and is_instance_valid(chunk.mesh):
+			chunk.mesh.visible = true
+	if batch.mesh != null and is_instance_valid(batch.mesh):
+		# Hiding above is immediate; deleting the old aggregate is deferred.
+		batch.mesh.queue_free()
+	_lod_batches.erase(key)
+
+
+func _clear_lod_batches() -> void:
+	for key in _lod_batches.keys():
+		_invalidate_lod_batch(key)
+	_lod_batch_queue.clear()
+	_lod_batch_queued.clear()
+	_reset_lod_batch_refill()
+
+
+func _reconcile_lod_batches() -> void:
+	for key in _lod_batches.keys():
+		if not _lod_batch_is_eligible(key):
+			_invalidate_lod_batch(key)
+
+
 func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> void:
+	# A replacement cannot share an old aggregate: reveal its current authoritative
+	# mesh first, then request a fresh group only after this commit has landed.
+	_invalidate_lod_batch(_lod_batch_key(pos))
 	_generated.erase(pos)
 	var chunk: Chunk = _chunks.get(pos)
+	var was_streamed := chunk != null and _desired.has(pos) \
+		and chunk.lod == _chunk_uses_lod(pos)
+	if not was_streamed and _desired.has(pos) and lod == _chunk_uses_lod(pos):
+		_streamed_count += 1
 	var mode_changed := chunk != null and chunk.lod != lod
 	if chunk == null:
 		chunk = _create_chunk_nodes(pos)
@@ -1011,8 +1465,14 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> voi
 	chunk.mask = res.mask
 	if not lod:
 		_seed_fire_edits(pos)
+		_seed_gravity_edits(pos)
+	else:
+		# A later transition back to Full Detail must retry candidates that were
+		# intentionally unavailable while this chunk held compact data.
+		_gravity_seeded_chunks.erase(pos)
 	chunk.mesh.mesh = ChunkMesher.arrays_to_mesh(res.verts, res.normals, res.uvs, res.colors, res.indices, _blocks.material, res.light, res.layers)
 	chunk.water.mesh = ChunkMesher.arrays_to_mesh(res.water_verts, res.water_normals, res.water_uvs, res.water_colors, res.water_indices, _blocks.water_material, res.water_light)
+	chunk.mesh.visible = true
 	if not lod and _within_collision_range(pos) and not res.collision.is_empty():
 		_ensure_chunk_collision_nodes(chunk, pos)
 		var shape := ConcavePolygonShape3D.new()
@@ -1026,6 +1486,8 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> voi
 		_invalidate_mode_change_neighbors(pos)
 	if ENABLE_COLD_CHUNK_COMPRESSION:
 		_compress_distant_chunks()
+	if lod:
+		_queue_lod_batch_for(pos)
 
 
 func _invalidate_mode_change_neighbors(pos: Vector2i) -> void:
@@ -1112,23 +1574,20 @@ func _queue_rebuild(pos: Vector2i, preserve_if_pending := false,
 			_dirty[pos] = true
 		return
 	if _gen_queued.has(pos) or _mesh_queued.has(pos):
+		if preserve_if_pending and not low_priority:
+			if _mesh_queued.has(pos):
+				_work_push(_mesh_queue, _mesh_queued, pos, true)
+			else:
+				_work_push(_gen_queue, _gen_queued, pos, true)
 		return
 	_dirty[pos] = true
 	var chunk: Chunk = _chunks.get(pos)
 	var can_remesh := chunk != null and chunk.lod == _chunk_uses_lod(pos)
 	if can_remesh:
-		if low_priority:
-			_mesh_queue.append(pos)
-		else:
-			_mesh_queue.push_front(pos)
-		_mesh_queued[pos] = true
+		_work_push(_mesh_queue, _mesh_queued, pos, preserve_if_pending and not low_priority)
 	else:
 		_generated.erase(pos)
-		if low_priority:
-			_gen_queue.append(pos)
-		else:
-			_gen_queue.push_front(pos)
-		_gen_queued[pos] = true
+		_work_push(_gen_queue, _gen_queued, pos, preserve_if_pending and not low_priority)
 
 
 func _unload_far() -> void:
@@ -1142,12 +1601,16 @@ func _free_chunk(pos: Vector2i) -> void:
 	var chunk: Chunk = _chunks.get(pos)
 	if chunk == null:
 		return
+	_invalidate_lod_batch(_lod_batch_key(pos))
+	if _desired.has(pos) and chunk.lod == _chunk_uses_lod(pos):
+		_streamed_count -= 1
 	# queue_free() is deferred. Remove physics immediately so a large render-
 	# distance contraction cannot leave one-frame ghost walls from old bodies.
 	_remove_chunk_collision_nodes(chunk)
 	chunk.mesh.queue_free()
 	chunk.water.queue_free()
 	_chunks.erase(pos)
+	_gravity_seeded_chunks.erase(pos)
 	_discard_unloaded_chunk_state(pos)
 
 
@@ -1336,6 +1799,7 @@ func break_block(block_position: Vector3i) -> int:
 	_record_edit(block_position, BlockRegistry.BLOCK_AIR)
 	_touch_chunk(chunk_position, block_position, block_id, BlockRegistry.BLOCK_AIR)
 	_seed_water(block_position)
+	_seed_gravity(block_position)
 	return BlockRegistry.canonical_id(block_id)
 
 
@@ -1369,6 +1833,7 @@ func place_block(block_position: Vector3i, block_id: int, facing: int = BlockReg
 	_record_edit(block_position, placed_id)
 	_touch_chunk(chunk_position, block_position, existing, placed_id)
 	_seed_water(block_position)
+	_seed_gravity(block_position)
 	return true
 
 
@@ -1398,6 +1863,7 @@ func _set_placed_block(position: Vector3i, block_id: int) -> void:
 	_record_edit(position, block_id)
 	_touch_chunk(chunk_position, position, existing, block_id)
 	_seed_water(position)
+	_seed_gravity(position)
 
 
 func _remove_door_part(position: Vector3i) -> void:
@@ -1413,6 +1879,7 @@ func _remove_door_part(position: Vector3i) -> void:
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
 	_touch_chunk(_chunk_for_block(position), position, existing, BlockRegistry.BLOCK_AIR)
 	_seed_water(position)
+	_seed_gravity(position)
 
 
 ## Opens or closes both persisted halves together. Interaction is valid from
@@ -1515,6 +1982,7 @@ func carve_sphere(center: Vector3i, radius: int) -> int:
 					door_counterparts[counterpart] = true
 				chunk.data[index] = BlockRegistry.BLOCK_AIR
 				_record_edit_in_chunk(position, BlockRegistry.BLOCK_AIR, chunk_position)
+				_seed_gravity(position)
 				removed += 1
 				column_changed = true
 				var dy := y - center.y
@@ -1814,6 +2282,7 @@ func _extinguish_fire(position: Vector3i, changed_chunks: Dictionary) -> void:
 	chunk.data[_data_index(position)] = BlockRegistry.BLOCK_AIR
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
 	_seed_water(position)
+	_seed_gravity(position)
 	changed_chunks[_chunk_for_block(position)] = true
 
 
@@ -1833,6 +2302,7 @@ func _destroy_burnt_block(position: Vector3i, changed_chunks: Dictionary) -> voi
 	chunk.data[_data_index(position)] = BlockRegistry.BLOCK_AIR
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
 	_seed_water(position)
+	_seed_gravity(position)
 	changed_chunks[_chunk_for_block(position)] = true
 
 
@@ -1847,6 +2317,7 @@ func _remove_door_for_batch(position: Vector3i, changed_chunks: Dictionary) -> i
 	chunk.data[index] = BlockRegistry.BLOCK_AIR
 	_record_edit(position, BlockRegistry.BLOCK_AIR)
 	_seed_water(position)
+	_seed_gravity(position)
 	changed_chunks[_chunk_for_block(position)] = true
 	return 1
 
@@ -1926,6 +2397,51 @@ func _seed_fire_edits(pos: Vector2i) -> void:
 func _seed_water(block_position: Vector3i) -> void:
 	for offset in WATER_NEIGHBOR_OFFSETS:
 		_queue_water(block_position + offset)
+
+
+## A block update can either place a gravity block or remove/change its support.
+## Queue both the changed cell and the cell directly above it; that upper cell is
+## the only one in the column whose support can have changed.
+func _seed_gravity(block_position: Vector3i) -> void:
+	_queue_gravity(block_position)
+	_queue_gravity(block_position + Vector3i.UP)
+
+
+## Rehydrated edits store final voxel states rather than transient queue state.
+## Rechecking every edited cell and its upper neighbour resumes interrupted
+## falls after reload without depending on dictionary or chunk load order.
+func _seed_gravity_edits(pos: Vector2i) -> void:
+	if _gravity_seeded_chunks.has(pos):
+		return
+	_gravity_seeded_chunks[pos] = true
+	var bucket: Dictionary = _edits_by_chunk.get(pos, {})
+	var positions: Array[Vector3i] = []
+	for key in bucket:
+		positions.append(key)
+	positions.sort_custom(func(a: Vector3i, b: Vector3i) -> bool:
+		if a.y != b.y:
+			return a.y < b.y
+		if a.z != b.z:
+			return a.z < b.z
+		return a.x < b.x
+	)
+	for position in positions:
+		_seed_gravity(position)
+
+
+func _queue_gravity(position: Vector3i) -> void:
+	if position.y <= 0 or position.y >= VoxelDefs.WORLD_HEIGHT:
+		return
+	if _gravity_queued.has(position):
+		return
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null or chunk.lod:
+		return
+	_restore_chunk_data(chunk)
+	if not _blocks.is_gravity_block(chunk.data[_data_index(position)]):
+		return
+	_gravity_queued[position] = true
+	_gravity_queue.append(position)
 
 
 func _queue_water(position: Vector3i) -> void:
@@ -2013,9 +2529,89 @@ func _water_place(position: Vector3i, block_id: int, changed_chunks: Dictionary)
 		return
 	chunk.data[index] = block_id
 	_record_edit(position, block_id)
+	_seed_gravity(position)
 	changed_chunks[_chunk_for_block(position)] = true
 	for offset in WATER_NEIGHBOR_OFFSETS:
 		_queue_water(position + offset)
+
+
+## Settles sand, red sand, and gravel after nearby persistent edits. A block
+## advances one cell per tick; every moved source and destination is recorded
+## before persistence/versioning is batched for the affected chunk ring.
+func _gravity_tick() -> void:
+	var budget := GRAVITY_CELLS_PER_TICK
+	var changed_chunks: Dictionary = {}
+	# Snapshot the tail: cells woken by a move wait for the next simulation step.
+	# Besides making the fall rate stable, this prevents one tall column from
+	# consuming the whole per-frame budget by repeatedly re-queuing itself.
+	var tick_end := _gravity_queue.size()
+	while budget > 0 and _gravity_head < tick_end:
+		var position: Vector3i = _gravity_queue[_gravity_head]
+		_gravity_head += 1
+		budget -= 1
+		_gravity_queued.erase(position)
+		_update_gravity_cell(position, changed_chunks)
+	_flush_gravity_changes(changed_chunks)
+	if _gravity_head == _gravity_queue.size():
+		_gravity_queue.clear()
+		_gravity_head = 0
+	elif _gravity_head > 4096:
+		_gravity_queue = _gravity_queue.slice(_gravity_head)
+		_gravity_head = 0
+
+
+func _update_gravity_cell(position: Vector3i, changed_chunks: Dictionary) -> void:
+	if position.y <= 1:
+		return
+	var chunk := _loaded_chunk_for(position)
+	if chunk == null or chunk.lod:
+		return
+	_restore_chunk_data(chunk)
+	var source_index := _data_index(position)
+	var block_id: int = chunk.data[source_index]
+	if not _blocks.is_gravity_block(block_id):
+		return
+	var destination := position + Vector3i.DOWN
+	# Falling is vertical, so this is currently the same x/z chunk. Keep the
+	# resident check explicit so a future lateral reaction cannot treat unknown
+	# unloaded or compact LOD data as empty space.
+	var destination_chunk := _loaded_chunk_for(destination)
+	if destination_chunk == null or destination_chunk.lod:
+		return
+	_restore_chunk_data(destination_chunk)
+	var destination_index := _data_index(destination)
+	var destination_id: int = destination_chunk.data[destination_index]
+	if not _is_gravity_passable(destination_id):
+		return
+	chunk.data[source_index] = BlockRegistry.BLOCK_AIR
+	destination_chunk.data[destination_index] = block_id
+	_record_edit(position, BlockRegistry.BLOCK_AIR)
+	_record_edit(destination, block_id)
+	changed_chunks[_chunk_for_block(position)] = true
+	changed_chunks[_chunk_for_block(destination)] = true
+	_seed_water(position)
+	_seed_water(destination)
+	_queue_gravity(destination)
+	_queue_gravity(position + Vector3i.UP)
+
+
+func _is_gravity_passable(block_id: int) -> bool:
+	# Cross blocks have inventory value and VoxelWorld has no drop owner. Treat
+	# them as support rather than silently replacing them during simulation.
+	return block_id == BlockRegistry.BLOCK_AIR or _blocks.is_water_id(block_id)
+
+
+func _flush_gravity_changes(changed_chunks: Dictionary) -> void:
+	if changed_chunks.is_empty():
+		return
+	var rebuild_chunks := {}
+	for chunk_position in changed_chunks:
+		_chunk_edit_version[chunk_position] = _chunk_edit_version.get(chunk_position, 0) + 1
+		_stage_chunk_edits(chunk_position)
+		rebuild_chunks[chunk_position] = true
+		_add_loaded_light_ring(rebuild_chunks, chunk_position)
+	for chunk_position in rebuild_chunks:
+		_queue_rebuild(chunk_position, true)
 
 
 ## Single-cell edits always remesh their owner. Neighbor snapshots only need
@@ -2034,10 +2630,8 @@ func _touch_chunk(chunk_position: Vector2i, block_position: Vector3i,
 				and _single_edit_can_invalidate_neighbor(old_block_id, new_block_id,
 					block_position, neighbor_position):
 			rebuild_neighbors.append(neighbor_position)
-	# Neighbor light/seam updates remain required, but the edited owner controls
-	# interaction feedback and collision. Queue neighbors at the back and the
-	# owner last at the front so mining/placing cannot sit behind several heavy
-	# light-volume remeshes while extreme-distance streaming is active.
+	# Neighbor light/seam updates remain required, but the edited owner gets
+	# explicit feedback priority instead of waiting behind their heavy remeshes.
 	for neighbor_position in rebuild_neighbors:
 		_queue_rebuild(neighbor_position, true, true)
 	_queue_rebuild(chunk_position, true)
@@ -2280,8 +2874,11 @@ func get_worldgen_stats() -> Dictionary:
 			lod_chunks += 1
 		else:
 			full_chunks += 1
+	var stream := get_streaming_progress()
 	return {
 		"chunks": "%d full / %d lod" % [full_chunks, lod_chunks],
+		"streamed": int(stream["loaded"]),
+		"stream total": int(stream["total"]),
 		"pending": _pending.size(),
 		"queued": _gen_queue.size() + _mesh_queue.size(),
 		"generated waiting": _generated.size(),
@@ -2291,7 +2888,100 @@ func get_worldgen_stats() -> Dictionary:
 		"populate ms": _populate_ema_ms,
 		"mesh ms ema": _mesh_ema_ms,
 		"revision": _worldgen_revision,
+		"workers": "%d / %d (+1 urgent)" % [_pending.size(), _max_active_jobs],
+		"generation jobs": _generation_jobs,
+		"mesh jobs": _mesh_jobs,
+		"discarded jobs": _discarded_jobs,
+		"generation worker ms total": float(_generation_usec) / 1000.0,
+		"mesh worker ms total": float(_mesh_usec) / 1000.0,
+		"commit ms total": float(_commit_usec) / 1000.0,
+		"stream main ms total": float(_stream_main_usec) / 1000.0,
+		"lod render batches": _lod_batches.size(),
+		"lod batch queued": _lod_batch_queue.size(),
+		"lod batch uploads": _lod_batch_uploads,
+		"lod batch skipped": _lod_batch_skipped,
+		"lod batch geometry rejected": _lod_batch_geometry_rejected,
 	}
+
+
+## Render-only diagnostic for the headless structural verifier and the display
+## profiler. A compact source is counted once: either hidden under exactly one
+## valid batch or visible as its own mesh. Water is intentionally not counted
+## as batched because it remains an individual transparent surface.
+func get_lod_batch_stats() -> Dictionary:
+	var batched_members: Dictionary = {}
+	var visible_members := 0
+	var invalid_batches := 0
+	for key in _lod_batches:
+		var batch: LodRenderBatch = _lod_batches[key]
+		if batch == null or batch.members.size() != LOD_BATCH_SIZE * LOD_BATCH_SIZE \
+				or batch.mesh == null or not is_instance_valid(batch.mesh):
+			invalid_batches += 1
+			continue
+		for pos in batch.members:
+			batched_members[pos] = int(batched_members.get(pos, 0)) + 1
+	for pos in _chunks:
+		var chunk: Chunk = _chunks[pos]
+		if not chunk.lod:
+			continue
+		if chunk.mesh != null and chunk.mesh.visible:
+			visible_members += 1
+	var duplicate_members := 0
+	for count in batched_members.values():
+		if int(count) > 1:
+			duplicate_members += 1
+	return {
+		"enabled": lod_batching_enabled,
+		"batches": _lod_batches.size(),
+		"batched members": batched_members.size(),
+		"visible lod members": visible_members,
+		"duplicate members": duplicate_members,
+		"invalid batches": invalid_batches,
+		"queued": _lod_batch_queue.size(),
+		"uploads": _lod_batch_uploads,
+		"skipped": _lod_batch_skipped,
+		"geometry rejected": _lod_batch_geometry_rejected,
+		"refill complete": _lod_batch_refill_complete,
+		"refill passes": _lod_batch_refill_passes,
+	}
+
+
+## A cheap scene-thread snapshot used by the entry overlay and compact HUD
+## feedback. `loaded` counts only chunks that match the current detail mode, so
+## a Full/LOD transition never reports stale terrain as finished streaming.
+func get_streaming_progress() -> Dictionary:
+	var loaded := _streamed_count
+	var total := _desired.size()
+	var spawn_loaded := 0
+	var spawn_collision := 0
+	var spawn_center := _initial_stream_center if _initial_stream_active else _stream_center
+	if spawn_center.x == 999999:
+		spawn_center = Vector2i.ZERO
+	for dz in range(-SPAWN_RADIUS, SPAWN_RADIUS + 1):
+		for dx in range(-SPAWN_RADIUS, SPAWN_RADIUS + 1):
+			var pos := spawn_center + Vector2i(dx, dz)
+			var chunk: Chunk = _chunks.get(pos)
+			if chunk != null and not chunk.lod:
+				spawn_loaded += 1
+				if _is_chunk_collision_ready(pos):
+					spawn_collision += 1
+	return {
+		"loaded": loaded,
+		"total": total,
+		"pending": _pending.size(),
+		"queued": _gen_queue.size() + _mesh_queue.size(),
+		"generated": _generated.size(),
+		"commits": _commit_queue.size(),
+		"spawn_loaded": spawn_loaded,
+		"spawn_collision": spawn_collision,
+		"spawn_total": (SPAWN_RADIUS * 2 + 1) * (SPAWN_RADIUS * 2 + 1),
+		"initial_ready": _initial_stream_complete,
+		"streaming": total > 0 and loaded < total,
+	}
+
+
+func _emit_stream_progress() -> void:
+	stream_progress_changed.emit(get_streaming_progress())
 
 
 ## Starts or polls an asynchronous diagnostic-map request. The expensive noise

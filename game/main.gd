@@ -6,6 +6,8 @@ const ShadowCaptureScript := preload("res://game/shadow_capture.gd")
 const WorldgenOverlayScene := preload("res://ui/worldgen_overlay.tscn")
 const MinimapScene := preload("res://ui/minimap.tscn")
 const MapOverlayScene := preload("res://ui/map_overlay.tscn")
+const FirstRunHintsScript := preload("res://game/first_run_hints.gd")
+const LoadingOverlayScript := preload("res://ui/loading_overlay.gd")
 
 const INITIAL_INVENTORY := {1: 64, 2: 64, 3: 64, 4: 64, 5: 32, 6: 32, 7: 32, 8: 32, 9: 16, 10: 32, 27: 32, BlockRegistry.BLOCK_TNT: 16, BlockRegistry.BLOCK_NUKE: 4, ItemRegistry.ITEM_FLINT_AND_STEEL: 1}
 const STATS_INTERVAL := 0.25
@@ -64,6 +66,7 @@ var _cave_biome := BiomeCatalog.CAVE_BIOME_NONE
 var _cave_tint := Color("#242936")
 var _worldgen_overlay: WorldgenOverlay
 var _photo_mode: PhotoMode
+var _first_run_hints
 var _minimap: Minimap
 var _map_overlay: MapOverlay
 var _minimap_restore := false
@@ -76,7 +79,13 @@ var _dynamic_resolution_active := false
 var _world_storage: WorldStorage
 var _autosave_time := 0.0
 var _storage_warning_shown := false
+var _session_state_read_only := false
 var _game_mode: int = GameMode.SURVIVAL
+var _loading_overlay: LoadingOverlay
+var _world_entry_waiting := false
+var _world_entry_resumed := false
+var _streaming_progress: Dictionary = {}
+var _pending_death_cause := ""
 
 
 func _ready() -> void:
@@ -102,24 +111,12 @@ func _ready() -> void:
 	var player_state: Variant = saved_state.get("player", {})
 	var resumed := typeof(player_state) == TYPE_DICTIONARY \
 		and player.restore_persistent_state(player_state)
-	if resumed:
-		world.setup_player(player, true)
-		# Recover saves written after the player had already entered unloaded or
-		# incomplete terrain. The synchronous ring above makes this validation
-		# authoritative without relocating valid cave or airborne saves.
-		if not world.is_player_volume_clear(player.global_position):
-			var recovered_spawn := world.find_safe_spawn(player.global_position)
-			player.global_position = recovered_spawn
-			player.velocity = Vector3.ZERO
-	else:
+	if not resumed:
 		var spawn := world.get_spawn_position()
 		player.global_position = spawn
 		player.spawn_position = spawn
-		world.setup_player(player)
-		spawn = world.find_safe_spawn(spawn)
-		player.global_position = spawn
-		player.spawn_position = spawn
 	player.setup_world(world)
+	_begin_world_entry(resumed)
 	_worldgen_overlay = WorldgenOverlayScene.instantiate() as WorldgenOverlay
 	add_child(_worldgen_overlay)
 	_worldgen_overlay.initialize(world, player)
@@ -150,7 +147,6 @@ func _ready() -> void:
 	_inventory_overlay.configure_inventory(inventory, world)
 	_inventory_overlay.set_game_mode(_game_mode)
 	_update_inventory_display()
-	_show_control_hint()
 	var shadow_capture := ShadowCaptureScript.new()
 	shadow_capture.name = "ShadowCapture"
 	shadow_capture.state_provider = _get_shadow_capture_state
@@ -159,12 +155,16 @@ func _ready() -> void:
 	_photo_mode = PhotoMode.new()
 	_photo_mode.name = "PhotoMode"
 	_photo_mode.initialize(player.camera, _hud_root)
-	_photo_mode.mouse_sensitivity_provider = GameConfig.get_mouse_sensitivity
+	_photo_mode.mouse_sensitivity_x_provider = GameConfig.get_mouse_sensitivity_x
+	_photo_mode.mouse_sensitivity_y_provider = GameConfig.get_mouse_sensitivity_y
+	_photo_mode.invert_y_provider = GameConfig.is_invert_y
 	_photo_mode.status_requested.connect(set_status)
 	_photo_mode.camera_mode_changed.connect(_on_photo_camera_changed)
+	_photo_mode.set_process_unhandled_input(not _world_entry_waiting)
 	add_child(_photo_mode)
+	_build_first_run_hints()
 	if player.dead:
-		_on_player_died("Saved expedition")
+		_pending_death_cause = "Saved expedition"
 
 
 func _get_shadow_capture_state() -> Dictionary:
@@ -221,10 +221,15 @@ func _get_shadow_capture_state() -> Dictionary:
 
 func _exit_tree() -> void:
 	_flush_world_save()
+	GameConfig.save_settings()
 	get_tree().paused = false
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _loading_overlay != null and is_instance_valid(_loading_overlay) \
+			and _loading_overlay.visible and _loading_overlay.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+		get_viewport().set_input_as_handled()
+		return
 	# Photo mode owns its keys and promises a clean view; leave the minimap,
 	# debug overlay, and modal map for after the camera is dismissed.
 	if _photo_mode != null and _photo_mode.is_camera_active():
@@ -275,6 +280,10 @@ func _process(delta: float) -> void:
 	if _stats_time <= 0.0:
 		_stats_time = STATS_INTERVAL
 		_update_stats()
+	if _first_run_hints != null:
+		_first_run_hints.tick(delta,
+			Input.get_vector("move_left", "move_right", "move_forward", "move_backward").length_squared() > 0.01,
+			player.has_target, player.flying)
 
 
 ## Grades the overlay, fog, caustics, and audio from the submerged state. The
@@ -356,6 +365,7 @@ func _update_frame_pacing(delta: float) -> void:
 func _apply_config() -> void:
 	var render_distance := GameConfig.get_render_distance()
 	world.configure(GameConfig.world, render_distance, GameConfig.get_lod_mode())
+	world.set_lod_batching_enabled(GameConfig.get_lod_batching_enabled())
 	_apply_graphics()
 	_update_camera_far(render_distance)
 
@@ -379,12 +389,14 @@ func _prepare_world_storage() -> Dictionary:
 
 
 func _migrate_session_state(value: Variant) -> Dictionary:
+	_session_state_read_only = false
 	if typeof(value) != TYPE_DICTIONARY:
 		return {}
 	var state: Dictionary = value.duplicate(true)
 	var version := int(state.get("state_version", 0))
 	if version > SESSION_STATE_VERSION:
 		push_warning("Save uses unsupported session state version %d" % version)
+		_session_state_read_only = true
 		return {}
 	# Keep the source version until inventory restoration has migrated its rows.
 	return state
@@ -439,10 +451,11 @@ func _flush_world_save() -> bool:
 	if _world_storage == null or player == null:
 		return false
 	var save_error := world.flush_edit_store()
-	if save_error == OK:
+	if save_error == OK and not _session_state_read_only:
 		save_error = _world_storage.flush(_build_persistent_state())
 	if save_error == OK:
-		GameConfig.active_world_metadata = _world_storage.metadata.duplicate(true)
+		if not _session_state_read_only:
+			GameConfig.active_world_metadata = _world_storage.metadata.duplicate(true)
 		if not _storage_warning_shown and _world_storage.unreadable_region_count() > 0:
 			_storage_warning_shown = true
 			set_status("A damaged world region is read-only; edits there cannot be saved")
@@ -534,7 +547,6 @@ func _build_pause_menu() -> void:
 	_pause_menu = PauseMenuScene.instantiate() as PauseMenu
 	add_child(_pause_menu)
 	_pause_menu.setting_changed.connect(_on_setting_changed)
-	_pause_menu.settings_closed.connect(_show_control_hint)
 	_pause_menu.new_world_requested.connect(_on_new_world)
 	_pause_menu.quit_requested.connect(_on_quit_game)
 
@@ -590,6 +602,8 @@ func _apply_hud_text_layout() -> void:
 	if _status_label != null:
 		_status_label.offset_top = -112.0 - 22.0 * scale
 		_status_label.offset_bottom = -112.0
+	if _first_run_hints != null:
+		_first_run_hints.apply_text_layout()
 
 
 func _build_crosshair() -> void:
@@ -761,6 +775,8 @@ func _on_inventory_opened() -> void:
 		_inventory_overlay.close_panel()
 		return
 	player.cancel_mining()
+	if _first_run_hints != null:
+		_first_run_hints.observe_inventory_opened()
 	if _map_overlay != null and _map_overlay.visible:
 		_map_overlay.close()
 	_inventory_overlay.set_weather_state(_weather.is_raining())
@@ -860,6 +876,8 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 			_update_camera_far(render_distance)
 		"lod_mode":
 			world.set_lod_mode(int(value))
+		"lod_batching":
+			world.set_lod_batching_enabled(bool(value))
 		"fov":
 			player.set_fov(float(value))
 		"graphics_preset":
@@ -872,6 +890,7 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 
 func _on_new_world() -> void:
 	_flush_world_save()
+	GameConfig.save_settings()
 	GameConfig.clear_active_world()
 	get_tree().paused = false
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
@@ -888,6 +907,8 @@ func _on_slot_cycled(direction: int) -> void:
 
 
 func _on_mined_block(position: Vector3i, block_id: int, harvest: bool) -> void:
+	if _first_run_hints != null:
+		_first_run_hints.observe_target_action()
 	if _game_mode == GameMode.SURVIVAL:
 		inventory.wear_tool(selected_slot)
 	_drop_container_contents(position)
@@ -899,6 +920,8 @@ func _on_mined_block(position: Vector3i, block_id: int, harvest: bool) -> void:
 
 
 func _on_block_placed(block_id: int) -> void:
+	if _first_run_hints != null:
+		_first_run_hints.observe_target_action()
 	consume_selected_block()
 	set_status("Placed %s" % world.get_block_name(block_id))
 
@@ -1089,17 +1112,78 @@ func set_status(message: String) -> void:
 	Motion.fade_in(_status_label)
 
 
-## Startup/rebind toast for the core controls; called again when the pause
-## menu's Settings close so a mid-game remap is reflected.
-func _show_control_hint() -> void:
-	var jump_hint := "double-tap %s to fly" if _game_mode == GameMode.CREATIVE else "%s jump"
-	set_status("%s move   %s   %s inventory   %s map   %s minimap   ESC pause" % [
-		GameConfig.input_move_hint(),
-		jump_hint % GameConfig.input_key("jump"),
-		GameConfig.input_key("inventory"),
-		GameConfig.input_key("map_overlay"),
-		GameConfig.input_key("minimap"),
-	])
+## Configures the small onboarding node without coupling its sequencing to the
+## large world/session controller. The callback keeps hints dormant under every
+## paused modal, a hidden HUD, death, and the detached photo camera.
+func _build_first_run_hints() -> void:
+	_first_run_hints = FirstRunHintsScript.new()
+	_first_run_hints.completion_provider = GameConfig.is_first_run_hint_completed
+	_first_run_hints.completion_recorder = GameConfig.complete_first_run_hint
+	_first_run_hints.move_hint_provider = GameConfig.input_move_hint
+	_first_run_hints.key_label_provider = GameConfig.input_key
+	_first_run_hints.presentation_allowed = func() -> bool:
+		return not _world_entry_waiting and not get_tree().paused and _hud_root.visible and not player.dead \
+			and (_photo_mode == null or not _photo_mode.is_camera_active())
+	_first_run_hints.set_creative(_game_mode == GameMode.CREATIVE)
+	_first_run_hints.initialize(_hud_root)
+	add_child(_first_run_hints)
+
+
+## Present streaming feedback before the player can move. VoxelWorld owns all
+## worker scheduling and scene-node commits; Main only observes its main-thread
+## snapshots and unlocks input after the authoritative spawn collision ring.
+func _begin_world_entry(resumed: bool) -> void:
+	_world_entry_waiting = true
+	_world_entry_resumed = resumed
+	player.set_loading_locked(true)
+	_loading_overlay = LoadingOverlayScript.new() as LoadingOverlay
+	$HUD.add_child(_loading_overlay)
+	world.stream_progress_changed.connect(_on_stream_progress_changed)
+	world.initial_stream_ready.connect(_on_initial_stream_ready)
+	world.begin_initial_stream(player)
+
+
+func _on_stream_progress_changed(progress: Dictionary) -> void:
+	_streaming_progress = progress
+	if _loading_overlay != null and is_instance_valid(_loading_overlay):
+		_loading_overlay.set_progress(progress)
+
+
+func _on_initial_stream_ready() -> void:
+	if not _world_entry_waiting:
+		return
+	_world_entry_waiting = false
+	if _world_entry_resumed:
+		# Saves can capture a player after an interrupted stream. Validate only
+		# after async local terrain and collision are authoritative.
+		if not world.is_player_volume_clear(player.global_position):
+			player.global_position = world.find_safe_spawn(player.global_position)
+			player.velocity = Vector3.ZERO
+	else:
+		var spawn := world.find_safe_spawn(player.global_position)
+		player.global_position = spawn
+		player.spawn_position = spawn
+	world.setup_player(player)
+	player.set_loading_locked(false)
+	if _photo_mode != null:
+		_photo_mode.set_process_unhandled_input(true)
+	var progress := world.get_streaming_progress()
+	_on_stream_progress_changed(progress)
+	if not _pending_death_cause.is_empty():
+		if _loading_overlay != null and is_instance_valid(_loading_overlay):
+			_loading_overlay.queue_free()
+			_loading_overlay = null
+		var cause := _pending_death_cause
+		_pending_death_cause = ""
+		_on_player_died(cause)
+		return
+	if _loading_overlay != null and is_instance_valid(_loading_overlay):
+		_loading_overlay.complete()
+	if bool(progress.get("streaming", false)):
+		set_status("World ready · streaming %d / %d chunks" % [
+			int(progress.get("loaded", 0)), int(progress.get("total", 0))])
+	else:
+		set_status("World ready")
 
 
 func _update_camera_far(render_distance: int) -> void:
@@ -1120,8 +1204,18 @@ func _update_stats() -> void:
 		coords.x, coords.y, coords.z,
 		location_name,
 	]
-	_stats_label.text = "%d FPS\n%d chunks\n%s" % [
+	var stream := _streaming_progress
+	if stream.is_empty():
+		stream = world.get_streaming_progress()
+	var stream_line := ""
+	if bool(stream.get("streaming", false)):
+		var total := maxi(int(stream.get("total", 0)), 1)
+		var loaded := clampi(int(stream.get("loaded", 0)), 0, total)
+		stream_line = "\nStream %d/%d %d%%" % [
+			loaded, total, roundi(float(loaded) / float(total) * 100.0)]
+	_stats_label.text = "%d FPS · %d chunks\n%s%s" % [
 		Engine.get_frames_per_second(),
 		world.get_loaded_chunk_count(),
 		_day_night.get_clock_text(),
+		stream_line,
 	]

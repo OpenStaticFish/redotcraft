@@ -5,9 +5,18 @@ const SETTINGS_PATH := "user://settings.cfg"
 const DEFAULT_SETTINGS := {
 	"render_distance": 10,
 	"lod_mode": 0,
+	# Experimental render-only aggregation for compact Balanced LOD chunks. Keep
+	# this opt-in until representative target-GPU profiling clears it as a win.
+	"lod_batching": false,
 	"extreme_render_distance": false,
 	"fov": 76.0,
+	# Kept as the migration source for settings.cfg files written before camera
+	# sensitivity was split into independent axes.
 	"mouse_sensitivity": 0.0022,
+	"mouse_sensitivity_x": 0.0022,
+	"mouse_sensitivity_y": 0.0022,
+	"invert_y": false,
+	"reduced_motion": false,
 	"fullscreen": false,
 	"graphics_preset": 1,
 	"master_volume": 0.9,
@@ -18,6 +27,7 @@ const DEFAULT_SETTINGS := {
 	"dynamic_resolution": false,
 	"dynamic_resolution_target": 60,
 	"input_bindings": {},
+	"first_run_hints": {},
 	"ui_scale": 1.0,
 	"text_scale": 1.0,
 	"autosave_interval": 30,
@@ -51,6 +61,8 @@ const LOD_MODE_BALANCED := 1
 const LOD_MODE_NAMES := ["Full Detail", "Balanced LOD"]
 const AUTOSAVE_INTERVAL_VALUES := [0, 30, 60, 120, 300, 600]
 const AUTOSAVE_INTERVAL_NAMES := ["Off", "30 Seconds", "1 Minute", "2 Minutes", "5 Minutes", "10 Minutes"]
+const MOUSE_SENSITIVITY_MIN := 0.0005
+const MOUSE_SENSITIVITY_MAX := 0.005
 
 # Rebindable input actions in menu order. The InputMap's non-`ui_*` actions are
 # the source of truth: anything missing from this table still gets a row with a
@@ -461,6 +473,23 @@ func input_move_hint() -> String:
 	return compact
 
 
+## First-run control cues are account-level settings rather than world state:
+## controls are learned once, while a later Creative world can still introduce
+## its Creative-only flight cue independently.
+func is_first_run_hint_completed(hint: String) -> bool:
+	var completed: Dictionary = settings.get("first_run_hints", {})
+	return bool(completed.get(hint, false))
+
+
+func complete_first_run_hint(hint: String) -> void:
+	if hint.is_empty() or is_first_run_hint_completed(hint):
+		return
+	var completed: Dictionary = settings.get("first_run_hints", {})
+	completed[hint] = true
+	settings["first_run_hints"] = completed
+	save_settings()
+
+
 func reset_graphics_to_preset() -> void:
 	graphics = GRAPHICS_PRESETS[get_graphics_preset()].duplicate()
 
@@ -486,6 +515,10 @@ func get_lod_mode() -> int:
 	return clampi(int(settings.get("lod_mode", LOD_MODE_FULL)), LOD_MODE_FULL, LOD_MODE_BALANCED)
 
 
+func get_lod_batching_enabled() -> bool:
+	return bool(settings.get("lod_batching", DEFAULT_SETTINGS["lod_batching"]))
+
+
 func get_ui_scale() -> float:
 	return clampf(float(settings.get("ui_scale", DEFAULT_SETTINGS["ui_scale"])),
 		UI_SCALE_VALUES[0], UI_SCALE_VALUES[UI_SCALE_VALUES.size() - 1])
@@ -501,7 +534,27 @@ func get_fov() -> float:
 
 
 func get_mouse_sensitivity() -> float:
-	return float(settings.get("mouse_sensitivity", DEFAULT_SETTINGS["mouse_sensitivity"]))
+	return get_mouse_sensitivity_x()
+
+
+## Backwards-compatible name for callers outside the project. New camera input
+## should select the appropriate axis explicitly.
+func get_mouse_sensitivity_x() -> float:
+	return clampf(float(settings.get("mouse_sensitivity_x", DEFAULT_SETTINGS["mouse_sensitivity_x"])),
+		MOUSE_SENSITIVITY_MIN, MOUSE_SENSITIVITY_MAX)
+
+
+func get_mouse_sensitivity_y() -> float:
+	return clampf(float(settings.get("mouse_sensitivity_y", DEFAULT_SETTINGS["mouse_sensitivity_y"])),
+		MOUSE_SENSITIVITY_MIN, MOUSE_SENSITIVITY_MAX)
+
+
+func is_invert_y() -> bool:
+	return bool(settings.get("invert_y", DEFAULT_SETTINGS["invert_y"]))
+
+
+func is_reduced_motion() -> bool:
+	return bool(settings.get("reduced_motion", DEFAULT_SETTINGS["reduced_motion"]))
 
 
 func get_autosave_interval() -> float:
@@ -547,6 +600,7 @@ func load_settings() -> void:
 	if config.load(SETTINGS_PATH) == OK:
 		for key in DEFAULT_SETTINGS.keys():
 			settings[key] = config.get_value("settings", key, settings[key])
+		_migrate_camera_settings(config)
 		reset_graphics_to_preset()
 		var saved: Dictionary = config.get_value("graphics", "values", {})
 		for key in saved.keys():
@@ -558,10 +612,24 @@ func load_settings() -> void:
 	settings["text_scale"] = nearest_option(settings.get("text_scale", DEFAULT_SETTINGS["text_scale"]), TEXT_SCALE_VALUES)
 	settings["autosave_interval"] = nearest_option(settings.get("autosave_interval", DEFAULT_SETTINGS["autosave_interval"]), AUTOSAVE_INTERVAL_VALUES)
 	_sanitize_input_bindings()
+	if typeof(settings.get("first_run_hints")) != TYPE_DICTIONARY:
+		settings["first_run_hints"] = {}
 	apply_window_mode()
 	apply_frame_pacing()
 	apply_ui_scale()
 	apply_input_bindings()
+
+
+## Settings before the split only contain `mouse_sensitivity`. Copy the saved
+## value into each missing axis, so an existing player's look speed is kept
+## exactly rather than silently returning to the default. If a partially
+## written settings file has one new axis, retain it and migrate only the other.
+func _migrate_camera_settings(config: ConfigFile) -> void:
+	var legacy := float(config.get_value("settings", "mouse_sensitivity", DEFAULT_SETTINGS["mouse_sensitivity"]))
+	if not config.has_section_key("settings", "mouse_sensitivity_x"):
+		settings["mouse_sensitivity_x"] = legacy
+	if not config.has_section_key("settings", "mouse_sensitivity_y"):
+		settings["mouse_sensitivity_y"] = legacy
 
 
 ## Drops bindings for actions that no longer exist or keys that are not real,

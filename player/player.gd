@@ -61,6 +61,10 @@ var target_normal := Vector3i.UP
 var has_target := false
 var spawn_position := Vector3.ZERO
 var flying := false
+## World entry holds movement and gameplay shortcuts until nearby authoritative
+## collision has committed. Camera setup remains active so the loading overlay
+## can use the normal gameplay view without a second scene.
+var loading_locked := false
 var base_fov := 76.0
 var pitch_limit := deg_to_rad(85.0)
 var _last_jump_time := -10.0
@@ -98,6 +102,15 @@ func setup_world(world_node: VoxelWorld) -> void:
 	_create_highlight()
 	_create_held_block()
 	_update_held_block()
+
+
+func set_loading_locked(locked: bool) -> void:
+	loading_locked = locked
+	if locked:
+		_reset_survival_motion()
+		has_target = false
+		if _highlight != null:
+			_highlight.hide()
 
 
 func set_selected_block(block_id: int) -> void:
@@ -240,7 +253,7 @@ func set_photo_mode(enabled: bool) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if dead:
+	if dead or loading_locked:
 		return
 	if event.is_action_pressed("pick_block") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_pick_target()
@@ -250,9 +263,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		cancel_mining()
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		var sensitivity := GameConfig.get_mouse_sensitivity()
-		rotation.y -= event.relative.x * sensitivity
-		head.rotation.x = clampf(head.rotation.x - event.relative.y * sensitivity, -pitch_limit, pitch_limit)
+		_apply_mouse_look(event.relative)
 		return
 
 	if event is InputEventMouseButton and event.pressed:
@@ -291,8 +302,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			cancel_mining()
 
 
+## Kept separate from the event route so camera response stays testable without
+## requiring a captured desktop mouse in a headless harness.
+func _apply_mouse_look(relative: Vector2) -> void:
+	var horizontal_sensitivity := GameConfig.get_mouse_sensitivity_x()
+	var vertical_sensitivity := GameConfig.get_mouse_sensitivity_y()
+	var vertical_direction := 1.0 if GameConfig.is_invert_y() else -1.0
+	rotation.y -= relative.x * horizontal_sensitivity
+	head.rotation.x = clampf(head.rotation.x + relative.y * vertical_sensitivity * vertical_direction, -pitch_limit, pitch_limit)
+
+
 func _physics_process(delta: float) -> void:
-	if dead:
+	if dead or loading_locked:
 		return
 	if global_position.y < FALL_RESET_Y:
 		if game_mode == GameMode.CREATIVE:
