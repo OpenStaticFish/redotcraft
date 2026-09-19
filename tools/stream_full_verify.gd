@@ -24,26 +24,41 @@ func _run() -> void:
 	var world := VoxelWorld.new()
 	root.add_child(world)
 	world.configure(CONFIG, RENDER_DISTANCE)
+	# Optional local profiling override; CI exercises the production policy.
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--workers="):
+			world._max_active_jobs = clampi(argument.trim_prefix("--workers=").to_int(), 1, 16)
 	var player := Node3D.new()
 	root.add_child(player)
 	player.global_position = Vector3.ZERO
-	world.setup_player(player)
+	var asynchronous_entry := "--async-start" in OS.get_cmdline_user_args()
+	var entry_ready_usec: Array[int] = [-1]
+	if asynchronous_entry:
+		world.initial_stream_ready.connect(func() -> void: entry_ready_usec[0] = Time.get_ticks_usec())
+		world.begin_initial_stream(player)
+	else:
+		world.setup_player(player)
 
 	var expected := (RENDER_DISTANCE * 2 + 1) * (RENDER_DISTANCE * 2 + 1)
 	var waited := 0
 	var stream_start := Time.get_ticks_usec()
 	var visible_ms := -1.0
+	var entry_ms := -1.0
 	while (world._chunks.size() < expected or not world._pending.is_empty() \
 			or not world._gen_queue.is_empty() or not world._mesh_queue.is_empty() \
 			or not world._generated.is_empty() or not world._commit_queue.is_empty()) \
 			and waited < MAX_WAIT_TICKS:
 		await create_timer(WAIT_TICK).timeout
 		waited += 1
+		if asynchronous_entry and entry_ms < 0.0 and entry_ready_usec[0] >= 0:
+			entry_ms = float(entry_ready_usec[0] - stream_start) / 1000.0
 		if visible_ms < 0.0 and world._chunks.size() >= expected:
 			visible_ms = float(Time.get_ticks_usec() - stream_start) / 1000.0
 	print("STREAM FULL: chunks=%d/%d visible_ms=%.1f full_ms=%.1f wait_ticks=%d" % [
 		world._chunks.size(), expected, visible_ms,
 		float(Time.get_ticks_usec() - stream_start) / 1000.0, waited])
+	if asynchronous_entry:
+		print("STREAM ENTRY: safe_ring_ms=%.1f" % entry_ms)
 	if world._chunks.size() != expected:
 		_fail("stream timed out with %d/%d chunks" % [world._chunks.size(), expected])
 	if not world._pending.is_empty() or not world._gen_queue.is_empty() \
@@ -66,6 +81,7 @@ func _run() -> void:
 		elif chunk.shape != null or chunk.body != null:
 			_fail("distant chunk still holds collision nodes at %s" % pos)
 	print("STREAM FULL: near_shapes=%d" % near_shapes)
+	print("STREAM FULL METRICS: ", world.get_worldgen_stats())
 	var safe_position := world.find_safe_spawn(Vector3.ZERO)
 	if not world.is_player_volume_clear(safe_position):
 		_fail("safe spawn was rejected by player-volume validation")

@@ -244,7 +244,11 @@ func _verify_session_state_migration_fixtures() -> void:
 	var future_main: Variant = _new_session_main()
 	_expect(future_main._migrate_session_state({"state_version": session_version + 1,
 		"inventory": current["inventory"]}).is_empty(), "future session version was accepted")
+	_expect(future_main._session_state_read_only,
+		"future session version did not protect metadata from downgrade writes")
 	_expect(future_main._migrate_session_state([]).is_empty(), "non-dictionary session fixture was accepted")
+	_expect(not future_main._session_state_read_only,
+		"malformed unversioned session incorrectly made metadata read-only")
 	var malformed_main: Variant = _restore_session_fixture({
 		"state_version": session_version,
 		"inventory": "not an inventory array",

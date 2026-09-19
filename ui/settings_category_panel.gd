@@ -24,6 +24,7 @@ const EXTREME_WARNING := "Warning: extreme render distance can take minutes to l
 
 var _first_focus: Control
 var _scroll: ScrollContainer
+var _distance_timer: Timer
 
 
 func _ready() -> void:
@@ -65,6 +66,9 @@ func _resize_to_viewport() -> void:
 func close_panel() -> void:
 	if not visible:
 		return
+	if _distance_timer != null and not _distance_timer.is_stopped():
+		_distance_timer.stop()
+		setting_changed.emit("render_distance", GameConfig.get_setting("render_distance"))
 	visible = false
 	closed.emit()
 
@@ -117,6 +121,7 @@ func _category_definition() -> Dictionary:
 				"rows": [
 					{"type": "render_distance", "label": "Render Distance", "key": "render_distance", "min": 4.0, "max": RENDER_DISTANCE_MAX, "step": 1.0, "format": "%d chunks"},
 					{"type": "option", "label": "Terrain Detail", "key": "lod_mode", "options": GameConfig.LOD_MODE_NAMES, "tooltip": "Full Detail generates real chunks through the selected distance. Balanced uses compact terrain beyond 8 chunks."},
+					{"type": "check", "label": "Experimental LOD Batching", "key": "lod_batching", "tooltip": "Balanced LOD only: merges eligible 2x2 opaque distance meshes to reduce draw calls. Water and Full Detail are unchanged. Disable it if profiling or play feels slower on this GPU."},
 					{"type": "slider", "label": "Field of View", "key": "fov", "min": 60.0, "max": 100.0, "step": 1.0, "format": "%d"},
 					{"type": "check", "label": "Fullscreen", "key": "fullscreen", "window": true},
 					{"type": "option", "label": "UI Scale", "key": "ui_scale", "options": GameConfig.UI_SCALE_NAMES, "values": GameConfig.UI_SCALE_VALUES, "tooltip": "Scales the HUD and menus without changing the 3D render resolution."},
@@ -308,10 +313,17 @@ func _add_render_distance(entry: Dictionary) -> Control:
 	_rows_box.add_child(warning)
 	if _first_focus == null:
 		_first_focus = slider
+	_distance_timer = Timer.new()
+	_distance_timer.one_shot = true
+	_distance_timer.wait_time = 0.2
+	add_child(_distance_timer)
+	_distance_timer.timeout.connect(func() -> void:
+		setting_changed.emit(key, GameConfig.get_setting(key))
+	)
 	slider.value_changed.connect(func(value: float) -> void:
 		value_label.text = entry["format"] % roundi(value)
 		GameConfig.set_setting(key, value)
-		setting_changed.emit(key, value)
+		_distance_timer.start()
 	)
 	toggle.toggled.connect(func(pressed: bool) -> void:
 		GameConfig.set_setting("extreme_render_distance", pressed)

@@ -79,6 +79,7 @@ var _dynamic_resolution_active := false
 var _world_storage: WorldStorage
 var _autosave_time := 0.0
 var _storage_warning_shown := false
+var _session_state_read_only := false
 var _game_mode: int = GameMode.SURVIVAL
 var _loading_overlay: LoadingOverlay
 var _world_entry_waiting := false
@@ -364,6 +365,7 @@ func _update_frame_pacing(delta: float) -> void:
 func _apply_config() -> void:
 	var render_distance := GameConfig.get_render_distance()
 	world.configure(GameConfig.world, render_distance, GameConfig.get_lod_mode())
+	world.set_lod_batching_enabled(GameConfig.get_lod_batching_enabled())
 	_apply_graphics()
 	_update_camera_far(render_distance)
 
@@ -387,12 +389,14 @@ func _prepare_world_storage() -> Dictionary:
 
 
 func _migrate_session_state(value: Variant) -> Dictionary:
+	_session_state_read_only = false
 	if typeof(value) != TYPE_DICTIONARY:
 		return {}
 	var state: Dictionary = value.duplicate(true)
 	var version := int(state.get("state_version", 0))
 	if version > SESSION_STATE_VERSION:
 		push_warning("Save uses unsupported session state version %d" % version)
+		_session_state_read_only = true
 		return {}
 	# Keep the source version until inventory restoration has migrated its rows.
 	return state
@@ -447,10 +451,11 @@ func _flush_world_save() -> bool:
 	if _world_storage == null or player == null:
 		return false
 	var save_error := world.flush_edit_store()
-	if save_error == OK:
+	if save_error == OK and not _session_state_read_only:
 		save_error = _world_storage.flush(_build_persistent_state())
 	if save_error == OK:
-		GameConfig.active_world_metadata = _world_storage.metadata.duplicate(true)
+		if not _session_state_read_only:
+			GameConfig.active_world_metadata = _world_storage.metadata.duplicate(true)
 		if not _storage_warning_shown and _world_storage.unreadable_region_count() > 0:
 			_storage_warning_shown = true
 			set_status("A damaged world region is read-only; edits there cannot be saved")
@@ -871,6 +876,8 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 			_update_camera_far(render_distance)
 		"lod_mode":
 			world.set_lod_mode(int(value))
+		"lod_batching":
+			world.set_lod_batching_enabled(bool(value))
 		"fov":
 			player.set_fov(float(value))
 		"graphics_preset":

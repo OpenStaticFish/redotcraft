@@ -9,6 +9,7 @@ var _storage_root := "user://block_physics_verify_%d" % Time.get_ticks_usec()
 func _ready() -> void:
 	_check_registry()
 	_check_fall_and_support()
+	_check_cross_block_support()
 	_check_stacked_no_duplication_or_loss()
 	_check_chunk_edge_and_unloaded_cells()
 	_check_lod_safety()
@@ -76,6 +77,23 @@ func _check_stacked_no_duplication_or_loss() -> void:
 		"stacked fall duplicated or lost sand")
 	_expect(_count_id_in_column(world, 5, 5, BlockRegistry.BLOCK_GRAVEL) == 1,
 		"stacked fall duplicated or lost gravel")
+	world.free()
+
+
+func _check_cross_block_support() -> void:
+	var world := _make_world(4)
+	var torch := Vector3i(6, 5, 6)
+	var sand := torch + Vector3i.UP
+	_set_block(world._chunks[Vector2i.ZERO].data, torch, BlockRegistry.BLOCK_TORCH)
+	_set_block(world._chunks[Vector2i.ZERO].data, sand, BlockRegistry.BLOCK_SAND)
+	world._queue_gravity(sand)
+	world._gravity_tick()
+	_expect(world.get_block_world(torch) == BlockRegistry.BLOCK_TORCH,
+		"falling sand silently replaced a cross block")
+	_expect(world.get_block_world(sand) == BlockRegistry.BLOCK_SAND,
+		"falling sand moved through a cross block without a drop path")
+	_expect(world._edited_blocks.is_empty(),
+		"cross-block support created a persistent gravity edit")
 	world.free()
 
 

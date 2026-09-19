@@ -40,6 +40,8 @@ func _check_defaults(config: Node) -> void:
 	var defaults: Dictionary = config.DEFAULT_SETTINGS
 	for key in ["vsync", "fps_cap", "dynamic_resolution", "dynamic_resolution_target"]:
 		_expect(defaults.has(key), "DEFAULT_SETTINGS is missing %s" % key)
+	_expect(defaults.has("lod_batching"), "DEFAULT_SETTINGS is missing experimental LOD batching")
+	_expect(not bool(defaults["lod_batching"]), "experimental LOD batching should default off")
 	_expect(int(defaults["vsync"]) == 1, "vsync should default to On")
 	_expect(int(defaults["fps_cap"]) == 0, "fps_cap should default to Unlimited")
 	_expect(bool(defaults["dynamic_resolution"]) == false, "dynamic resolution should default off")
@@ -96,10 +98,16 @@ func _check_display_panel(config: Node) -> void:
 	var cap_option := _find_option(display, "FPS Cap")
 	var target_option := _find_option(display, "Dynamic Target")
 	var dynamic_check := _find_check(display, "Dynamic Resolution")
+	var lod_batching_check := _find_check(display, "Experimental LOD Batching")
 	_expect(vsync_option != null and vsync_option.item_count == 4, "Display is missing the four-mode V-Sync row")
 	_expect(cap_option != null and cap_option.item_count == (config.FPS_CAP_VALUES as Array).size(), "Display is missing the FPS Cap row")
 	_expect(target_option != null, "Display is missing the Dynamic Target row")
 	_expect(dynamic_check != null, "Display is missing the Dynamic Resolution row")
+	_expect(lod_batching_check != null, "Display is missing the experimental LOD batching row")
+	if lod_batching_check != null:
+		lod_batching_check.button_pressed = true
+		_expect(bool(config.get_setting("lod_batching")), "toggling LOD batching should store the setting")
+		lod_batching_check.button_pressed = false
 	if target_option != null:
 		_expect(not target_option.is_visible_in_tree(), "the dynamic target row should hide while dynamic resolution is off")
 	if cap_option != null:

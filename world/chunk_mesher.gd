@@ -11,6 +11,8 @@ const CROSS_UVS := [Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vec
 
 var _blocks: BlockRegistry
 var _face_ao_offsets: Array = []
+var _face_ao_steps: Array = []
+var _face_steps := PackedInt32Array()
 var _opacity: PackedByteArray = PackedByteArray()
 var _cross: PackedByteArray = PackedByteArray()
 var _leaves: PackedByteArray = PackedByteArray()
@@ -23,7 +25,8 @@ var _water_level: PackedByteArray = PackedByteArray()
 var _layer_top: PackedInt32Array = PackedInt32Array()
 var _layer_bottom: PackedInt32Array = PackedInt32Array()
 var _layer_side: PackedInt32Array = PackedInt32Array()
-var _emissive: PackedByteArray = PackedByteArray()
+var _emissive_ids := PackedByteArray()
+var _emissive := PackedByteArray()
 var _emission_r: PackedByteArray = PackedByteArray()
 var _emission_g: PackedByteArray = PackedByteArray()
 var _emission_b: PackedByteArray = PackedByteArray()
@@ -256,15 +259,18 @@ func build(data: PackedByteArray, data_max_y: int, heights: PackedInt32Array, fo
 					_append_custom_block(Vector3(local_x, y, local_z), id, _tint_for(id, column, foliage_tints), result)
 					continue
 				var is_opaque := _opacity[id] >= MAX_LEVEL
-				var tint := _tint_for(id, column, foliage_tints)
+				var tint := Color.WHITE
+				var tint_ready := false
 				for face in 6:
-					var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
-					var neighbor_index := pad_index + normal.x + normal.z * VoxelDefs.PAD_STRIDE_Z + normal.y * VoxelDefs.PAD_STRIDE_Y
+					var neighbor_index := pad_index + _face_steps[face]
 					var neighbor_id := padded[neighbor_index]
 					if _opacity[neighbor_id] >= MAX_LEVEL:
 						continue
 					if not is_opaque and neighbor_id == id and _leaves[id] == 0:
 						continue
+					if not tint_ready:
+						tint = _tint_for(id, column, foliage_tints)
+						tint_ready = true
 					_append_face(face, pad_index, local_x, y, local_z, id, padded, tint, result)
 	result.timings.face_emit_us = Time.get_ticks_usec() - phase_start
 	result.timings.total_us = Time.get_ticks_usec() - total_start
@@ -557,6 +563,7 @@ func _build_light_tables() -> void:
 	_layer_top.resize(256)
 	_layer_bottom.resize(256)
 	_layer_side.resize(256)
+	_emissive_ids.clear()
 	_emissive.resize(256)
 	_emission_r.resize(256)
 	_emission_g.resize(256)
@@ -580,6 +587,8 @@ func _build_light_tables() -> void:
 			_layer_bottom[id] = _blocks.layer_for(id, 1)
 			_layer_side[id] = _blocks.layer_for(id, 2)
 		_emissive[id] = 1 if BlockRegistry.EMISSIVE_COLORS.has(id) else 0
+		if _emissive[id] != 0:
+			_emissive_ids.append(id)
 		var color := _blocks.emission_color(id)
 		if color == Color.BLACK:
 			continue
@@ -848,7 +857,27 @@ func _compute_block_light(volume: LightVolume) -> void:
 	var volume_z := 0
 	var y := 0
 	var vx := 0
-	for emitter in size:
+	# Native byte searches avoid an interpreted scan of every light-volume cell.
+	# Sort the sparse hits to preserve the original spatial BFS seeding order.
+	# Dense emitter fields fall back to a spatial scan, bounding scratch to 16 KiB.
+	const MAX_SPARSE_EMITTERS := 4096
+	var emitters := PackedInt32Array()
+	var dense := false
+	for id in _emissive_ids:
+		var index := blocks.find(id)
+		while index >= 0:
+			emitters.append(index)
+			if emitters.size() >= MAX_SPARSE_EMITTERS:
+				dense = true
+				break
+			index = blocks.find(id, index + 1)
+		if dense:
+			break
+	if not dense:
+		emitters.sort()
+	var source_count := size if dense else emitters.size()
+	for source_index in source_count:
+		var emitter := source_index if dense else emitters[source_index]
 		var block_id := blocks[emitter]
 		if _emissive[block_id] == 0:
 			continue
@@ -973,19 +1002,33 @@ func _compute_block_light(volume: LightVolume) -> void:
 
 func _build_ao_offsets() -> void:
 	_face_ao_offsets = []
+	_face_ao_steps = []
+	_face_steps = PackedInt32Array()
+	var light_width := VoxelDefs.CHUNK_SIZE * 3
 	for face in VoxelDefs.FACE_NORMALS.size():
 		var normal: Vector3i = VoxelDefs.FACE_NORMALS[face]
+		_face_steps.append(normal.x + normal.z * VoxelDefs.PAD_STRIDE_Z + normal.y * VoxelDefs.PAD_STRIDE_Y)
 		var tangent_a: Vector3i = VoxelDefs.FACE_TANGENT_A[face]
 		var tangent_b: Vector3i = VoxelDefs.FACE_TANGENT_B[face]
 		var axis_a := 0 if tangent_a.x != 0 else 1
 		var axis_b := 0 if tangent_b.x != 0 else (1 if tangent_b.y != 0 else 2)
 		var corners: Array = []
+		var corner_steps: Array = []
 		for corner in 4:
 			var offset: Vector3i = VoxelDefs.FACE_VERTS[face][corner]
 			var a: Vector3i = tangent_a * (offset[axis_a] * 2 - 1)
 			var b: Vector3i = tangent_b * (offset[axis_b] * 2 - 1)
 			corners.append([normal + a, normal + b, normal + a + b])
+			var steps: Array[Vector3i] = []
+			for sample: Vector3i in corners.back():
+				# Immutable linear strides for padding, light volume, and vertical bounds.
+				steps.append(Vector3i(
+					sample.x + sample.z * VoxelDefs.PAD_STRIDE_Z + sample.y * VoxelDefs.PAD_STRIDE_Y,
+					sample.x + sample.z * light_width + sample.y * light_width * light_width,
+					sample.y))
+			corner_steps.append(steps)
 		_face_ao_offsets.append(corners)
+		_face_ao_steps.append(corner_steps)
 
 
 func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int, block_id: int, padded: PackedByteArray, tint: Color, result: MeshResult) -> void:
@@ -997,6 +1040,7 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 	var face_uvs: Array = VoxelDefs.FACE_UVS[face]
 	var volume: LightVolume = result.light_volume
 	var block_light_active := not volume.block_r.is_empty()
+	var light_origin := (y * volume.d + local_z + LIGHT_PAD) * volume.w + local_x + LIGHT_PAD
 	var front_x := local_x + LIGHT_PAD + normal.x
 	var front_y := y + normal.y
 	var front_z := local_z + LIGHT_PAD + normal.z
@@ -1023,19 +1067,17 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 				r_sum += int(volume.block_r[front_index])
 				g_sum += int(volume.block_g[front_index])
 				b_sum += int(volume.block_b[front_index])
-		var samples: Array = _face_ao_offsets[face][corner]
-		for sample in samples:
-			var sample_offset: Vector3i = sample
-			var sample_index := pad_index + sample_offset.x + sample_offset.z * VoxelDefs.PAD_STRIDE_Z + sample_offset.y * VoxelDefs.PAD_STRIDE_Y
+		var samples: Array[Vector3i] = _face_ao_steps[face][corner]
+		for step in samples:
+			var sample_index := pad_index + step.x
 			if _opacity[padded[sample_index]] >= MAX_LEVEL:
 				occlusion += 1
 				continue
-			var sample_x := local_x + LIGHT_PAD + sample_offset.x
-			var sample_y := y + sample_offset.y
-			var sample_z := local_z + LIGHT_PAD + sample_offset.z
-			if sample_x < 0 or sample_x >= volume.w or sample_z < 0 or sample_z >= volume.d or sample_y < 0 or sample_y >= volume.h:
+			# The center tile plus one-cell AO offsets is always inside the 3x3 footprint.
+			var sample_y := y + step.z
+			if sample_y < 0 or sample_y >= volume.h:
 				continue
-			var light_index := (sample_y * volume.d + sample_z) * volume.w + sample_x
+			var light_index := light_origin + step.y
 			sky_sum += int(volume.sky[light_index])
 			light_count += 1
 			if block_light_active:
@@ -1049,13 +1091,23 @@ func _append_face(face: int, pad_index: int, local_x: int, y: int, local_z: int,
 		result.light.push_back(float(g_sum) * inverse)
 		result.light.push_back(float(b_sum) * inverse)
 		result.light.push_back(float(sky_sum) * inverse)
-	var p0: Vector3 = result.verts[base]
-	var p1: Vector3 = result.verts[base + 1]
-	var p2: Vector3 = result.verts[base + 2]
-	var p3: Vector3 = result.verts[base + 3]
-	result.indices.append_array(PackedInt32Array([base, base + 2, base + 1, base, base + 3, base + 2]))
+	result.indices.push_back(base)
+	result.indices.push_back(base + 2)
+	result.indices.push_back(base + 1)
+	result.indices.push_back(base)
+	result.indices.push_back(base + 3)
+	result.indices.push_back(base + 2)
 	if result.build_collision:
-		result.collision.append_array(PackedVector3Array([p0, p2, p1, p0, p3, p2]))
+		var p0: Vector3 = result.verts[base]
+		var p1: Vector3 = result.verts[base + 1]
+		var p2: Vector3 = result.verts[base + 2]
+		var p3: Vector3 = result.verts[base + 3]
+		result.collision.push_back(p0)
+		result.collision.push_back(p2)
+		result.collision.push_back(p1)
+		result.collision.push_back(p0)
+		result.collision.push_back(p3)
+		result.collision.push_back(p2)
 
 
 ## Stateful blocks deliberately do not participate in cube face culling: their

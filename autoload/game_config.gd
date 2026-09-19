@@ -5,6 +5,9 @@ const SETTINGS_PATH := "user://settings.cfg"
 const DEFAULT_SETTINGS := {
 	"render_distance": 10,
 	"lod_mode": 0,
+	# Experimental render-only aggregation for compact Balanced LOD chunks. Keep
+	# this opt-in until representative target-GPU profiling clears it as a win.
+	"lod_batching": false,
 	"extreme_render_distance": false,
 	"fov": 76.0,
 	# Kept as the migration source for settings.cfg files written before camera
@@ -510,6 +513,10 @@ func get_render_distance() -> int:
 
 func get_lod_mode() -> int:
 	return clampi(int(settings.get("lod_mode", LOD_MODE_FULL)), LOD_MODE_FULL, LOD_MODE_BALANCED)
+
+
+func get_lod_batching_enabled() -> bool:
+	return bool(settings.get("lod_batching", DEFAULT_SETTINGS["lod_batching"]))
 
 
 func get_ui_scale() -> float:

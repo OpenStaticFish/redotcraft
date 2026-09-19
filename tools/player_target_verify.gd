@@ -20,6 +20,7 @@ func _ready() -> void:
 	far_collisionless.shape = CollisionShape3D.new()
 	world._chunks[Vector2i(5, 5)] = far_collisionless
 	world._stream_center = Vector2i.ZERO
+	world._desired = {Vector2i.ZERO: true, Vector2i(1, 0): true, Vector2i(5, 5): true}
 	world._ensure_near_collision()
 	if world._mesh_queue.is_empty() or world._mesh_queue[0] != Vector2i(1, 0):
 		push_error("player_target_verify: nearby collision remesh was not prioritized")
