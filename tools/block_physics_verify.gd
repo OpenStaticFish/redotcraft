@@ -13,6 +13,7 @@ func _ready() -> void:
 	_check_stacked_no_duplication_or_loss()
 	_check_chunk_edge_and_unloaded_cells()
 	_check_lod_safety()
+	_check_edit_seeding_once_per_residency()
 	_check_persistence()
 	if _failures == 0:
 		print("BLOCK PHYSICS VERIFY: PASS")
@@ -154,6 +155,25 @@ func _check_persistence() -> void:
 		"saved gravity destination did not replay as sand")
 	_expect(_count_id_in_column(world, 3, 3, BlockRegistry.BLOCK_SAND) == 1,
 		"persisted fall duplicated or lost sand before save")
+	world.free()
+
+
+func _check_edit_seeding_once_per_residency() -> void:
+	var world := _make_world(4)
+	var pos := Vector2i.ZERO
+	var sand := Vector3i(8, 5, 8)
+	_set_block(world._chunks[pos].data, sand, BlockRegistry.BLOCK_SAND)
+	world._edits_by_chunk[pos] = {sand: BlockRegistry.BLOCK_SAND}
+	world._seed_gravity_edits(pos)
+	world._gravity_tick()
+	_expect(world._gravity_queue.is_empty(), "supported gravity seed did not drain")
+	world._seed_gravity_edits(pos)
+	_expect(world._gravity_queue.is_empty(),
+		"full-detail remesh reseeded an already resident edit bucket")
+	world._gravity_seeded_chunks.erase(pos)
+	world._seed_gravity_edits(pos)
+	_expect(world._gravity_queue.size() == 1,
+		"residency reset did not permit gravity edit reseeding")
 	world.free()
 
 

@@ -137,7 +137,9 @@ func complete() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	focus_mode = Control.FOCUS_NONE
 	set_process_unhandled_input(false)
-	if GameConfig.is_reduced_motion():
+	var config := get_tree().root.get_node_or_null("GameConfig")
+	if config != null and config.has_method("is_reduced_motion") \
+			and bool(config.is_reduced_motion()):
 		queue_free()
 		return
 	var tween := create_tween()

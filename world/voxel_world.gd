@@ -145,6 +145,7 @@ var _water_head := 0
 var _water_accum := 0.0
 var _gravity_queue: Array[Vector3i] = []
 var _gravity_queued: Dictionary = {}
+var _gravity_seeded_chunks: Dictionary = {}
 var _gravity_head := 0
 var _gravity_accum := 0.0
 var _fire_queue: Array[Vector3i] = []
@@ -371,6 +372,7 @@ func configure(world_config: Dictionary, render_distance_chunks: int,
 func set_edit_store(store: WorldStorage) -> void:
 	_edit_store = store
 	_hydrated_edit_chunks.clear()
+	_gravity_seeded_chunks.clear()
 	_edited_blocks.clear()
 	_edits_by_chunk.clear()
 
@@ -1464,6 +1466,10 @@ func _commit_chunk(pos: Vector2i, res: ChunkMesher.MeshResult, lod: bool) -> voi
 	if not lod:
 		_seed_fire_edits(pos)
 		_seed_gravity_edits(pos)
+	else:
+		# A later transition back to Full Detail must retry candidates that were
+		# intentionally unavailable while this chunk held compact data.
+		_gravity_seeded_chunks.erase(pos)
 	chunk.mesh.mesh = ChunkMesher.arrays_to_mesh(res.verts, res.normals, res.uvs, res.colors, res.indices, _blocks.material, res.light, res.layers)
 	chunk.water.mesh = ChunkMesher.arrays_to_mesh(res.water_verts, res.water_normals, res.water_uvs, res.water_colors, res.water_indices, _blocks.water_material, res.water_light)
 	chunk.mesh.visible = true
@@ -1604,6 +1610,7 @@ func _free_chunk(pos: Vector2i) -> void:
 	chunk.mesh.queue_free()
 	chunk.water.queue_free()
 	_chunks.erase(pos)
+	_gravity_seeded_chunks.erase(pos)
 	_discard_unloaded_chunk_state(pos)
 
 
@@ -2404,6 +2411,9 @@ func _seed_gravity(block_position: Vector3i) -> void:
 ## Rechecking every edited cell and its upper neighbour resumes interrupted
 ## falls after reload without depending on dictionary or chunk load order.
 func _seed_gravity_edits(pos: Vector2i) -> void:
+	if _gravity_seeded_chunks.has(pos):
+		return
+	_gravity_seeded_chunks[pos] = true
 	var bucket: Dictionary = _edits_by_chunk.get(pos, {})
 	var positions: Array[Vector3i] = []
 	for key in bucket:
