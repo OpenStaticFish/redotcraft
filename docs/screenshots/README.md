@@ -6,7 +6,8 @@ These are rendered in-game frames, not editor views or concept art.
 
 ## Capture settings
 
-- World seed: **918273**, Normal terrain, current default generation configuration.
+- World seed: **918273**, Normal terrain, **WorldGenConfig v14** defaults
+  from source revision `e1d24df`.
 - Mode: Creative; no block edits or staged builds.
 - Terrain: Full Detail, render distance 10; the initial stream settled to 441/441 chunks.
 - Graphics: High preset with native render scale (100%) and volumetric fog
